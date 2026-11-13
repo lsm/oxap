@@ -17,6 +17,7 @@ use oxap_protocol::{
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::caller::Caller;
 use crate::client::{Client, ClientFactory};
 use crate::native::{
     ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
@@ -75,6 +76,10 @@ impl Adapter {
     }
 
     pub fn open(&self, request: OpenRequest) -> Result<Session, Error> {
+        self.open_as(request, &Caller::default())
+    }
+
+    pub(crate) fn open_as(&self, request: OpenRequest, caller: &Caller) -> Result<Session, Error> {
         refuse_unadvertised_tool_sources(&request, &[])?;
         refuse_unadvertised_tools(&request, &[])?;
         refuse_unadvertised_settings(&request, &self.describe().capabilities)?;
@@ -107,7 +112,8 @@ impl Adapter {
                 sandbox: self.config.sandbox.clone(),
                 config: settings,
             };
-            let response: ThreadStartResponse = call(&*client, METHOD_THREAD_START, &params)
+            let response: ThreadStartResponse = caller
+                .call(&client, || call(&*client, METHOD_THREAD_START, &params))
                 .map_err(|failure| {
                     fail(Error::Harness(format!("start Codex thread: {failure}")))
                 })?;
@@ -123,7 +129,8 @@ impl Adapter {
                 sandbox: self.config.sandbox.clone(),
                 config: settings,
             };
-            let response: ThreadResumeResponse = call(&*client, METHOD_THREAD_RESUME, &params)
+            let response: ThreadResumeResponse = caller
+                .call(&client, || call(&*client, METHOD_THREAD_RESUME, &params))
                 .map_err(|failure| {
                     fail(match failure.fault {
                         Fault::Remote { .. } if request.reopen => reopen_refused(&format!(

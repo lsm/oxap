@@ -18,6 +18,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test cancels)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test usage)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test settings)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test contract)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --all-features)
 ```
 
@@ -176,3 +177,13 @@ after it and the `turn/start` params of every later submit, and
 turn starts, send `off` as `off`, drop the previous level from the
 answer, or let a change through while a run is active: the replay test
 must fail.
+
+`tests/contract.rs` drives the session through the `oxap_adapter` contracts
+and drops futures at each point Go's printer cancelled a context over its
+real rpc client on a pipe: during `thread/start` and `turn/start`, while a
+submit waits for another, and while a cancel waits for another's interrupt.
+Go closed the client in the first two, and in the last two made no call,
+and the next submit's ids show the dropped one minted none. To see it bite,
+skip the close on a drop during a call, let a dropped operation still call,
+or check for the drop only after the submit's ids are minted: one test
+each must fail.

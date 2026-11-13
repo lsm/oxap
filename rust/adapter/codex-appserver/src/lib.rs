@@ -3,6 +3,7 @@
 mod actions;
 pub mod adapter;
 mod approvals;
+mod caller;
 mod cancel;
 pub mod client;
 mod contract;

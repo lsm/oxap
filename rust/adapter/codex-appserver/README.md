@@ -80,6 +80,14 @@ the submit and those messages land as Go's do, after the turn is known.
 Every other operation, including the reader's handling of a closed
 transport, waits for the submit, as Go's does.
 
+`Adapter` and `Session` also implement the `oxap_adapter` contracts, running
+each operation on its own thread, where dropping a future is Go's cancelled
+context. Dropped during a native call (`thread/start`, `thread/resume`,
+`turn/start` or `turn/interrupt`), it closes the client, so a submit leaves
+the session closed. Dropped while it waits for the session or for another
+cancel's interrupt, it makes no call and changes nothing. A result already
+returned wins over the drop.
+
 `permissions::confirm` is the check a resume runs on Codex's answer: the
 thread must keep the configured sandbox, by its policy `type`, the configured
 approval policy, and the configured working directory. The directories are

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use oxap_adapter::{
     Adapter as AdapterContract, BoxFuture, Descriptor, Error, EventStream, InteractionResolution,
     OpenRequest, Recovery, ResumeRequest, Session as SessionContract, SettingsUpdater,
@@ -9,17 +11,30 @@ use oxap_protocol::{
 };
 
 use crate::adapter::Adapter;
+use crate::caller::Caller;
 use crate::session::Session;
 
+struct Leave(Arc<Caller>);
+
+impl Drop for Leave {
+    fn drop(&mut self) {
+        self.0.leave();
+    }
+}
+
 fn background<T: Send + 'static>(
-    work: impl FnOnce() -> Result<T, Error> + Send + 'static,
+    work: impl FnOnce(&Caller) -> Result<T, Error> + Send + 'static,
 ) -> BoxFuture<'static, T> {
     Box::pin(async move {
+        let caller = Arc::new(Caller::default());
+        let leave = Leave(caller.clone());
         let (reply, replied) = futures_channel::oneshot::channel();
         std::thread::spawn(move || {
-            let _ = reply.send(work());
+            let _ = reply.send(work(&caller));
         });
-        replied.await.unwrap_or(Err(Error::SessionClosed))
+        let result = replied.await.unwrap_or(Err(Error::SessionClosed));
+        drop(leave);
+        result
     })
 }
 
@@ -31,9 +46,9 @@ impl AdapterContract for Adapter {
 
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {
         let adapter = self.clone();
-        background(move || {
+        background(move |caller| {
             adapter
-                .open(request)
+                .open_as(request, caller)
                 .map(|session| Box::new(session) as Box<dyn SessionContract>)
         })
     }
@@ -45,7 +60,7 @@ impl SessionContract for Session {
         request: SubmitRequest,
     ) -> BoxFuture<'_, (MessageSubmitResponse, EventStream)> {
         let shared = self.shared.clone();
-        background(move || shared.submit(request.request))
+        background(move |caller| shared.submit(request.request, caller))
     }
 
     fn state(&self) -> BoxFuture<'_, SessionState> {
@@ -60,7 +75,7 @@ impl SessionContract for Session {
 
     fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {
         let shared = self.shared.clone();
-        background(move || shared.cancel(&run_id))
+        background(move |caller| shared.cancel(&run_id, caller))
     }
 
     fn resume(&self, request: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
@@ -70,7 +85,7 @@ impl SessionContract for Session {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         let shared = self.shared.clone();
-        background(move || shared.close())
+        background(move |_| shared.close())
     }
 
     fn native_session_id(&self) -> Option<String> {

@@ -20,6 +20,7 @@ use oxap_validation::OutputSchema;
 use serde_json::value::RawValue;
 
 use crate::adapter::{call, native_protocol};
+use crate::caller::Caller;
 use crate::client::Client;
 use crate::native::{
     TokenUsageBreakdown, TurnStartParams, TurnStartResponse, UserInput, METHOD_TURN_START,
@@ -179,11 +180,13 @@ impl Shared {
         self.thread_id.clone()
     }
 
-    pub fn submit(
+    pub(crate) fn submit(
         &self,
         request: MessageSubmitRequest,
+        caller: &Caller,
     ) -> Result<(MessageSubmitResponse, EventStream), Error> {
         let mut operating = self.operate();
+        caller.here()?;
         refuse_unadvertised_controls(
             &request,
             &[FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT],
@@ -262,7 +265,9 @@ impl Shared {
         operating.starting = true;
         drop(operating);
         let starting = Starting(self);
-        let started = call::<TurnStartResponse>(&*self.client, METHOD_TURN_START, &params);
+        let started = caller.call(&self.client, || {
+            call::<TurnStartResponse>(&*self.client, METHOD_TURN_START, &params)
+        });
         let mut operating = hold(&self.operating);
         let outcome = (|| -> Result<(MessageSubmitResponse, EventStream), Error> {
             let mut inner = self.lock();
@@ -400,7 +405,7 @@ impl Session {
         &self,
         request: MessageSubmitRequest,
     ) -> Result<(MessageSubmitResponse, EventStream), Error> {
-        self.shared.submit(request)
+        self.shared.submit(request, &Caller::default())
     }
 
     pub fn resume(&self, request: ResumeRequest) -> Result<(Recovery, EventStream), Error> {
@@ -420,7 +425,7 @@ impl Session {
     }
 
     pub fn cancel(&self, run_id: &RunId) -> Result<RunCancelResponse, Error> {
-        self.shared.cancel(run_id)
+        self.shared.cancel(run_id, &Caller::default())
     }
 
     pub fn update_settings(
