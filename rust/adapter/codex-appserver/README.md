@@ -67,6 +67,11 @@ zero, on completion, cancellation, a failed turn and a structured result.
 An update for another turn still moves the thread total the next run
 starts from.
 
+`Session::update_settings` changes only the reasoning level, while no run
+is active, and refuses a setting Codex does not advertise live. The new
+effort rides the next `turn/start` alone (`off` is Codex's `none`), and a
+refused `turn/start` keeps it for the one after.
+
 A session reads what Codex sends on its own thread. It answers each reverse
 request it does not handle with `-32601` and the method as data. While
 `turn/start` is in flight, the reader sets aside what Codex sends and the

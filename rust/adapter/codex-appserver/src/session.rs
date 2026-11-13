@@ -74,6 +74,7 @@ pub(crate) struct Inner {
     pub(crate) interactions: HashMap<InteractionId, Interaction>,
     pub(crate) next_order: u64,
     pub(crate) thread_usage: TokenUsageBreakdown,
+    pub(crate) effort: String,
 }
 
 pub(crate) struct Shared {
@@ -152,6 +153,7 @@ impl Shared {
                 interactions: HashMap::new(),
                 next_order: 0,
                 thread_usage: TokenUsageBreakdown::default(),
+                effort: String::new(),
             }),
             stop: Mutex::new(Some(stop)),
             stopped,
@@ -244,7 +246,7 @@ impl Shared {
             thread_id: self.thread_id.clone(),
             input,
             model: model.clone(),
-            effort: String::new(),
+            effort: self.lock().effort.clone(),
             output_schema: request.output_schema.clone(),
         };
         let base = self.lock().thread_usage;
@@ -285,6 +287,7 @@ impl Shared {
                     return Err(error);
                 }
             };
+            inner.effort.clear();
             inner.turns.insert(turn.clone(), run_id.clone());
             inner.runs.insert(
                 run_id.clone(),
@@ -422,9 +425,9 @@ impl Session {
 
     pub fn update_settings(
         &self,
-        _request: SessionSettingsUpdateRequest,
+        request: SessionSettingsUpdateRequest,
     ) -> Result<(SessionSettingsUpdateResponse, SessionState), Error> {
-        Err(Error::RunNotFound)
+        self.shared.update_settings(request)
     }
 }
 
