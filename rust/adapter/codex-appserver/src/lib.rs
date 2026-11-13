@@ -5,6 +5,7 @@ pub mod adapter;
 mod approvals;
 mod cancel;
 pub mod client;
+mod contract;
 mod events;
 pub mod filepath;
 mod inputs;

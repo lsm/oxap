@@ -37,6 +37,7 @@ pub struct Fake {
     gate: Mutex<Option<Gate>>,
     panics: Mutex<Option<&'static str>>,
     fixed: Mutex<HashMap<String, Reply>>,
+    closing_fails: AtomicBool,
 }
 
 impl Fake {
@@ -57,6 +58,7 @@ impl Fake {
             gate: Mutex::default(),
             panics: Mutex::default(),
             fixed: Mutex::default(),
+            closing_fails: AtomicBool::new(false),
         })
     }
 
@@ -119,6 +121,10 @@ impl Fake {
         self.hold_calls("turn/interrupt")
     }
 
+    pub fn stop_holding(&self) {
+        self.gate.lock().unwrap().take();
+    }
+
     pub fn hold_calls(&self, method: &'static str) -> (Receiver<()>, Sender<()>) {
         let (entered, arrivals) = crossbeam_channel::unbounded();
         let (release, released) = crossbeam_channel::bounded(0);
@@ -161,6 +167,10 @@ impl Fake {
         }
     }
 
+    pub fn fail_calls_once_closed(&self) {
+        self.closing_fails.store(true, Ordering::SeqCst);
+    }
+
     pub fn closes(&self) -> usize {
         self.closes.load(Ordering::SeqCst)
     }
@@ -185,6 +195,9 @@ impl Client for Fake {
         if let Some((_, entered, released)) = gate.filter(|(held, ..)| *held == method) {
             entered.send(()).unwrap();
             let _ = released.recv();
+        }
+        if self.closing_fails.load(Ordering::SeqCst) && self.closes() > 0 {
+            return Err(error(Fault::Closed));
         }
         self.barrier()?;
         let fixed = self.fixed.lock().unwrap().get(method).copied();
@@ -217,6 +230,12 @@ impl Client for Fake {
 
     fn close(&self) -> Result<(), rpc::Error> {
         self.closes.fetch_add(1, Ordering::SeqCst);
+        if self.closing_fails.load(Ordering::SeqCst) {
+            self.failed
+                .lock()
+                .unwrap()
+                .get_or_insert_with(|| "client closed".into());
+        }
         Ok(())
     }
 }

@@ -98,7 +98,7 @@ pub(crate) struct Operating {
 }
 
 pub struct Session {
-    shared: Arc<Shared>,
+    pub(crate) shared: Arc<Shared>,
 }
 
 pub(crate) fn hold<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
