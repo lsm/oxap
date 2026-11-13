@@ -12,8 +12,9 @@ use oxap_adapter::{
 use oxap_protocol::{
     Admission, EffectiveDeliveryMode, InputQuestion, InteractionId, MessageId, MessageRole,
     MessageSubmitRequest, MessageSubmitResponse, ParticipantId, RequestedDeliveryMode,
-    RunCancelResponse, RunId, RunStatus, SessionState, SessionStatus, SubmissionId, ToolCallId,
-    Usage, FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT,
+    RunCancelResponse, RunId, RunStatus, SessionSettingsUpdateRequest,
+    SessionSettingsUpdateResponse, SessionState, SessionStatus, SubmissionId, ToolCallId, Usage,
+    FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT,
 };
 use oxap_validation::OutputSchema;
 use serde_json::value::RawValue;
@@ -417,6 +418,13 @@ impl Session {
 
     pub fn cancel(&self, run_id: &RunId) -> Result<RunCancelResponse, Error> {
         self.shared.cancel(run_id)
+    }
+
+    pub fn update_settings(
+        &self,
+        _request: SessionSettingsUpdateRequest,
+    ) -> Result<(SessionSettingsUpdateResponse, SessionState), Error> {
+        Err(Error::RunNotFound)
     }
 }
 

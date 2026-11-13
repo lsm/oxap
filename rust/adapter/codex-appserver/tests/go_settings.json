@@ -1,0 +1,680 @@
+[
+  {
+    "name": "a_live_reasoning_change_rides_the_next_turn_only",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "high"
+        }
+      },
+      {
+        "submit": true
+      },
+      {
+        "complete": true
+      },
+      {
+        "submit": true
+      },
+      {
+        "complete": true
+      }
+    ],
+    "results": [
+      {
+        "response": {
+          "session_id": "session-1",
+          "reasoning_level": "high"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "updated_at_ms": 2,
+          "reasoning_level": "high"
+        }
+      }
+    ],
+    "turn_starts": [
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test",
+        "effort": "high"
+      },
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test"
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 5
+        },
+        "sequence": 1,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-06",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 7,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-11",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-08",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 10
+        },
+        "sequence": 1,
+        "timestamp_ms": 11,
+        "session_id": "session-1",
+        "run_id": "run-08",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-12",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-08",
+          "final_response": {
+            "id": "message-09",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 12,
+        "session_id": "session-1",
+        "run_id": "run-08",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      }
+    ]
+  },
+  {
+    "name": "off_is_codex_none",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "off"
+        }
+      },
+      {
+        "submit": true
+      },
+      {
+        "complete": true
+      }
+    ],
+    "results": [
+      {
+        "response": {
+          "session_id": "session-1",
+          "reasoning_level": "off"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "updated_at_ms": 2,
+          "reasoning_level": "off"
+        }
+      }
+    ],
+    "turn_starts": [
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test",
+        "effort": "none"
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 5
+        },
+        "sequence": 1,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-06",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 7,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      }
+    ]
+  },
+  {
+    "name": "a_change_reports_the_level_it_replaced",
+    "reasoning": "medium",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "low"
+        }
+      },
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "max"
+        }
+      }
+    ],
+    "results": [
+      {
+        "response": {
+          "session_id": "session-1",
+          "reasoning_level": "low",
+          "previous_reasoning_level": "medium"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "updated_at_ms": 2,
+          "reasoning_level": "low"
+        }
+      },
+      {
+        "response": {
+          "session_id": "session-1",
+          "reasoning_level": "max",
+          "previous_reasoning_level": "low"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "updated_at_ms": 3,
+          "reasoning_level": "max"
+        }
+      }
+    ],
+    "turn_starts": [],
+    "events": []
+  },
+  {
+    "name": "an_empty_change_only_touches_the_clock",
+    "reasoning": "low",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-1"
+        }
+      },
+      {
+        "submit": true
+      },
+      {
+        "complete": true
+      }
+    ],
+    "results": [
+      {
+        "response": {
+          "session_id": "session-1"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "updated_at_ms": 2,
+          "reasoning_level": "low"
+        }
+      }
+    ],
+    "turn_starts": [
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test"
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 5
+        },
+        "sequence": 1,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-06",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 7,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      }
+    ]
+  },
+  {
+    "name": "another_session_id_is_refused",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-9",
+          "reasoning_level": "high"
+        }
+      },
+      {
+        "submit": true
+      },
+      {
+        "complete": true
+      }
+    ],
+    "results": [
+      {
+        "error": "run_not_found"
+      }
+    ],
+    "turn_starts": [
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test"
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 4
+        },
+        "sequence": 1,
+        "timestamp_ms": 5,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-06",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      }
+    ]
+  },
+  {
+    "name": "an_active_run_refuses_a_change_until_it_settles",
+    "steps": [
+      {
+        "submit": true
+      },
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "high"
+        }
+      },
+      {
+        "complete": true
+      },
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "high"
+        }
+      }
+    ],
+    "results": [
+      {
+        "error": "run_active"
+      },
+      {
+        "response": {
+          "session_id": "session-1",
+          "reasoning_level": "high"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "transcript_cursor": "2",
+          "updated_at_ms": 7,
+          "reasoning_level": "high"
+        }
+      }
+    ],
+    "turn_starts": [
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test"
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 4
+        },
+        "sequence": 1,
+        "timestamp_ms": 5,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-06",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      }
+    ]
+  },
+  {
+    "name": "a_closed_session_refuses_a_change",
+    "steps": [
+      {
+        "close": true
+      },
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "high"
+        }
+      }
+    ],
+    "results": [
+      {
+        "error": "session_closed"
+      }
+    ],
+    "turn_starts": [],
+    "events": []
+  },
+  {
+    "name": "a_compaction_policy_is_refused_as_unadvertised",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-1",
+          "compaction_policy": {
+            "kind": "auto"
+          }
+        }
+      }
+    ],
+    "results": [
+      {
+        "error": "unsupported_control session.compaction.policy unadvertised compaction_policy"
+      }
+    ],
+    "turn_starts": [],
+    "events": []
+  },
+  {
+    "name": "a_refused_turn_start_keeps_the_pending_effort",
+    "steps": [
+      {
+        "settings": {
+          "session_id": "session-1",
+          "reasoning_level": "xhigh"
+        }
+      },
+      {
+        "submit_fail": "busy"
+      },
+      {
+        "submit": true
+      },
+      {
+        "complete": true
+      }
+    ],
+    "results": [
+      {
+        "response": {
+          "session_id": "session-1",
+          "reasoning_level": "xhigh"
+        },
+        "state": {
+          "session_id": "session-1",
+          "status": "idle",
+          "current_model_id": "glm-test",
+          "updated_at_ms": 2,
+          "reasoning_level": "xhigh"
+        }
+      },
+      {
+        "error": "error: start Codex turn: busy"
+      }
+    ],
+    "turn_starts": [
+      {
+        "threadId": "native-thread",
+        "input": [
+          {
+            "type": "text",
+            "text": "hello"
+          }
+        ],
+        "model": "glm-test",
+        "effort": "xhigh"
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-08",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-05",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 6
+        },
+        "sequence": 1,
+        "timestamp_ms": 7,
+        "session_id": "session-1",
+        "run_id": "run-05",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-09",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-05",
+          "final_response": {
+            "id": "message-06",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 2,
+        "timestamp_ms": 8,
+        "session_id": "session-1",
+        "run_id": "run-05",
+        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+      }
+    ]
+  }
+]
