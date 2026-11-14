@@ -10,7 +10,10 @@ fn descriptor(adapter: &ClaudeAdapter) -> oxap_adapter::Descriptor {
 fn a_probe_describes_the_pinned_endpoint_the_features_and_the_process_memory_journal() {
     let adapter = ClaudeAdapter::new(Config::default()).unwrap();
     let described = descriptor(&adapter);
-    assert_eq!(described.capabilities.endpoint.id.as_str(), "claude-code.cli");
+    assert_eq!(
+        described.capabilities.endpoint.id.as_str(),
+        "claude-code.cli"
+    );
     assert_eq!(described.capabilities.endpoint.name, "Claude Code Adapter");
     assert_eq!(described.capabilities.endpoint.version, "v2.1.322");
     assert_eq!(
@@ -99,12 +102,16 @@ fn the_described_features_are_exactly_the_keys_go_advertises() {
 #[test]
 fn an_open_refuses_what_the_adapter_does_not_advertise() {
     let adapter = ClaudeAdapter::new(Config::default()).unwrap();
-    let mut request = oxap_adapter::OpenRequest::default();
-    request.tools = vec![oxap_protocol::ToolDefinition {
-        name: "x".into(),
-        ..Default::default()
-    }];
-    let refused = futures::executor::block_on(adapter.open(request)).unwrap_err();
+    let request = oxap_adapter::OpenRequest {
+        tools: vec![oxap_protocol::ToolDefinition {
+            name: "x".into(),
+            ..Default::default()
+        }],
+        ..oxap_adapter::OpenRequest::default()
+    };
+    let refused = futures::executor::block_on(adapter.open(request))
+        .err()
+        .unwrap();
     assert!(
         refused.to_string().contains("action.tools.provide"),
         "{refused}"
@@ -114,23 +121,34 @@ fn an_open_refuses_what_the_adapter_does_not_advertise() {
 #[test]
 fn an_open_refuses_a_level_and_a_policy_claude_code_cannot_take() {
     let adapter = ClaudeAdapter::new(Config::default()).unwrap();
-    let mut request = oxap_adapter::OpenRequest::default();
-    request.reasoning_level = ReasoningLevel::OFF;
-    let refused = futures::executor::block_on(adapter.open(request)).unwrap_err();
-    assert!(refused.to_string().contains("session.reasoning"), "{refused}");
+    let request = oxap_adapter::OpenRequest {
+        reasoning_level: ReasoningLevel::OFF,
+        ..oxap_adapter::OpenRequest::default()
+    };
+    let refused = futures::executor::block_on(adapter.open(request))
+        .err()
+        .unwrap();
+    assert!(
+        refused.to_string().contains("session.reasoning"),
+        "{refused}"
+    );
     assert!(
         refused
             .to_string()
             .contains("Claude Code's effort levels are low through max"),
         "{refused}"
     );
-    let mut request = oxap_adapter::OpenRequest::default();
-    request.compaction_policy = Some(CompactionPolicy {
-        kind: CompactionKind::SHARE,
-        share_percent: 50,
-        ..CompactionPolicy::default()
-    });
-    let refused = futures::executor::block_on(adapter.open(request)).unwrap_err();
+    let request = oxap_adapter::OpenRequest {
+        compaction_policy: Some(CompactionPolicy {
+            kind: CompactionKind::SHARE,
+            share_percent: 50,
+            ..CompactionPolicy::default()
+        }),
+        ..oxap_adapter::OpenRequest::default()
+    };
+    let refused = futures::executor::block_on(adapter.open(request))
+        .err()
+        .unwrap();
     assert!(
         refused.to_string().contains("session.compaction.policy"),
         "{refused}"
@@ -146,9 +164,13 @@ fn an_open_refuses_a_level_and_a_policy_claude_code_cannot_take() {
 #[test]
 fn an_open_that_reopens_without_a_bound_conversation_is_refused() {
     let adapter = ClaudeAdapter::new(Config::default()).unwrap();
-    let mut request = oxap_adapter::OpenRequest::default();
-    request.reopen = true;
-    let refused = futures::executor::block_on(adapter.open(request)).unwrap_err();
+    let request = oxap_adapter::OpenRequest {
+        reopen: true,
+        ..oxap_adapter::OpenRequest::default()
+    };
+    let refused = futures::executor::block_on(adapter.open(request))
+        .err()
+        .unwrap();
     assert!(
         refused.to_string().contains("session.open.reopen"),
         "{refused}"
