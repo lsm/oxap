@@ -262,17 +262,26 @@ impl EffectiveSettings {
     fn merge(&mut self, raw: &str) -> Result<(), serde_json::Error> {
         for (key, value) in super::source::members(raw)? {
             match key.as_str() {
-                "autoCompactEnabled" if value.get() != "null" => {
-                    self.auto_compact_enabled = super::source::decode(value.get())?;
+                "autoCompactEnabled" => {
+                    self.auto_compact_enabled = decode_pointer(value.get())?;
                 }
-                "autoCompactWindow" if value.get() != "null" => {
-                    self.auto_compact_window = super::source::decode(value.get())?;
+                "autoCompactWindow" => {
+                    self.auto_compact_window = decode_pointer(value.get())?;
                 }
                 _ => {}
             }
         }
         Ok(())
     }
+}
+
+fn decode_pointer<T: serde::de::DeserializeOwned>(
+    member: &str,
+) -> Result<Option<T>, serde_json::Error> {
+    if member == "null" {
+        return Ok(None);
+    }
+    super::source::decode(member)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -293,8 +302,8 @@ pub fn decode_settings(raw: &[u8]) -> Result<Settings, serde_json::Error> {
             continue;
         }
         match key.as_str() {
-            "applied" | "Applied" => settings.applied.merge(member)?,
-            "effective" | "Effective" => settings.effective.merge(member)?,
+            "applied" => settings.applied.merge(member)?,
+            "effective" => settings.effective.merge(member)?,
             _ => {}
         }
     }

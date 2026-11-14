@@ -105,7 +105,7 @@ fn a_null_settings_answer_or_member_reads_as_its_zero_value_and_a_mistyped_one_i
 }
 
 #[test]
-fn a_member_written_twice_merges_as_go_merges_it_and_a_later_null_leaves_it() {
+fn a_member_written_twice_merges_as_go_merges_it_and_a_null_clears_only_a_pointer() {
     let settings = decode_settings(br#"{"applied":{"model":"first","model":"second"}}"#).unwrap();
     assert_eq!(settings.applied.model, "second");
     let settings = decode_settings(
@@ -125,6 +125,20 @@ fn a_member_written_twice_merges_as_go_merges_it_and_a_later_null_leaves_it() {
     .unwrap();
     assert_eq!(settings.effective.auto_compact_enabled, Some(true));
     assert_eq!(settings.effective.auto_compact_window, Some(5000));
+    let settings =
+        decode_settings(br#"{"effective":{"autoCompactWindow":5000,"autoCompactWindow":null}}"#)
+            .unwrap();
+    assert_eq!(settings.effective.auto_compact_window, None);
+    let settings = decode_settings(
+        br#"{"effective":{"autoCompactEnabled":false},"effective":{"autoCompactEnabled":null}}"#,
+    )
+    .unwrap();
+    assert_eq!(settings.effective.auto_compact_enabled, None);
+    let settings =
+        decode_settings(br#"{"effective":{"autoCompactWindow":5000},"effective":null}"#).unwrap();
+    assert_eq!(settings.effective.auto_compact_window, Some(5000));
+    let settings = decode_settings(br#"{"Applied":{"Model":"t"},"EFFECTIVE":{}}"#).unwrap();
+    assert_eq!(settings.applied.model, "");
 }
 
 #[test]

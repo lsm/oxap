@@ -28,7 +28,8 @@ above them: it turns a reasoning level and a compaction policy into those flags,
 refusing a level below low and a share as Go refuses them. `decode_interrupt_result`
 and `decode_settings` read Claude Code's answers to an interrupt and to
 `get_settings` as Go reads them into its structs, a member written twice merged
-as Go merges it.
+as Go merges it: a later `null` leaves a string member as it was and clears a
+pointer one, which is nil either way.
 
 Three `encoding/json` behaviours are not followed, and nothing observes any of
 them. Go falls back to a case-insensitive key match, so `{"MESSAGE":{...}}`
