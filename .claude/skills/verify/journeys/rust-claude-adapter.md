@@ -154,7 +154,8 @@ it, a close waits for the closer and a second close waits behind the first,
 the reader's refusal or EOF is the client's error, and the closer runs once.
 A stuck writer is a `Write` that blocks on a channel, and a held closer blocks
 on one, so no case depends on timing beyond its five-second ceiling. To see it
-bite, drop either deadline arm in `write`: its deadline case must fail. Return
+bite, drop the deadline arm in `write`'s one wait loop, which stays armed after
+`done`: both deadline cases must fail. Return
 early from a second close: the two-close case must fail. Have the read
 loop drop its error and close with `Closed`: the refusal and EOF cases must
 fail.

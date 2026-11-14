@@ -197,24 +197,23 @@ impl Client {
             Err(TrySendError::Full(_)) => return Err(ClientError::WriteQueue),
             Err(TrySendError::Disconnected(_)) => return Err(self.close_error()),
         }
-        select! {
-            recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
-            recv(deadline_channel(deadline)) -> _ => {
-                self.close_with(ClientError::DeadlineExceeded);
-                Err(ClientError::DeadlineExceeded)
-            }
-            recv(self.0.done_rx) -> _ => {
-                let settles = settled.try_recv().is_ok() || self.0.unblocks_writes;
-                if began.try_recv().is_ok() && settles {
-                    return select! {
-                        recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
-                        recv(deadline_channel(deadline)) -> _ => {
-                            self.close_with(ClientError::DeadlineExceeded);
-                            Err(ClientError::DeadlineExceeded)
-                        }
-                    };
+        let mut done = self.0.done_rx.clone();
+        loop {
+            select! {
+                recv(written) -> outcome => {
+                    return outcome.unwrap_or_else(|_| Err(self.close_error()))
                 }
-                Err(self.close_error())
+                recv(deadline_channel(deadline)) -> _ => {
+                    self.close_with(ClientError::DeadlineExceeded);
+                    return Err(ClientError::DeadlineExceeded);
+                }
+                recv(done) -> _ => {
+                    let settles = settled.try_recv().is_ok() || self.0.unblocks_writes;
+                    if !(began.try_recv().is_ok() && settles) {
+                        return Err(self.close_error());
+                    }
+                    done = never();
+                }
             }
         }
     }
