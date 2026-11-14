@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use oxap_adapter::gojson::{go_marshal, strings};
+use oxap_adapter::gojson::{go_marshal, strings, zero};
 
+use super::source::structure;
 use super::{
-    Invalid, CONTROL_INITIALIZE, CONTROL_INTERRUPT, HOOK_PRE_TOOL_USE, TOOL_SELECTION_HOOK,
-    TYPE_USER,
+    Invalid, CONTROL_APPLY_FLAGS, CONTROL_INITIALIZE, CONTROL_INTERRUPT, HOOK_PRE_TOOL_USE,
+    TOOL_SELECTION_HOOK, TYPE_USER,
 };
 
 fn marshal(value: &impl Serialize) -> Result<String, serde_json::Error> {
@@ -134,12 +135,12 @@ pub fn initialize_request(sdk_mcp_servers: &[String]) -> Result<String, serde_js
 }
 
 #[derive(Serialize)]
-struct InterruptRequest {
+struct SubtypeRequest {
     subtype: &'static str,
 }
 
 pub fn interrupt_request() -> Result<String, serde_json::Error> {
-    marshal(&InterruptRequest {
+    marshal(&SubtypeRequest {
         subtype: CONTROL_INTERRUPT,
     })
 }
@@ -194,5 +195,64 @@ pub struct InterruptResult {
 }
 
 pub fn decode_interrupt_result(raw: &[u8]) -> Result<InterruptResult, serde_json::Error> {
+    super::source::decode_object(&String::from_utf8_lossy(raw))
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlagSettings<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_compact_enabled: Option<Option<bool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_compact_window: Option<Option<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort_level: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct ApplyFlagSettingsRequest<'a> {
+    subtype: &'static str,
+    settings: &'a FlagSettings<'a>,
+}
+
+pub fn apply_flag_settings_request(settings: &FlagSettings) -> Result<String, serde_json::Error> {
+    marshal(&ApplyFlagSettingsRequest {
+        subtype: CONTROL_APPLY_FLAGS,
+        settings,
+    })
+}
+
+pub fn get_settings_request() -> Result<String, serde_json::Error> {
+    marshal(&SubtypeRequest {
+        subtype: "get_settings",
+    })
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AppliedSettings {
+    #[serde(default, deserialize_with = "zero")]
+    pub model: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub effort: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveSettings {
+    #[serde(default)]
+    pub auto_compact_enabled: Option<bool>,
+    #[serde(default)]
+    pub auto_compact_window: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Settings {
+    #[serde(default, deserialize_with = "structure")]
+    pub applied: AppliedSettings,
+    #[serde(default, deserialize_with = "structure")]
+    pub effective: EffectiveSettings,
+}
+
+pub fn decode_settings(raw: &[u8]) -> Result<Settings, serde_json::Error> {
     super::source::decode_object(&String::from_utf8_lossy(raw))
 }
