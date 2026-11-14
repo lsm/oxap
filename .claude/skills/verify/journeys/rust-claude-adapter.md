@@ -13,6 +13,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test native_turns)
 (cd rust && cargo test -p oxap-adapter-claude --test native_raw_bytes)
 (cd rust && cargo test -p oxap-adapter-claude --test native_host_writes)
+(cd rust && cargo test -p oxap-adapter-claude --test native_settings)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_message)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_codec)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
@@ -110,6 +111,15 @@ its zero value and a non-object refused. To see it bite, drop the
 `skip_serializing_if` on `interrupt`: the deny test must fail. Skip
 `go_marshal`: the allow test must fail. Decode the result without
 `source::decode_object`: the null result case must fail.
+
+`tests/native_settings.rs` pins the `apply_flag_settings` and `get_settings`
+exchanges. Go writes the settings from a `map[string]any`, so the members go
+out sorted, a setting the session leaves alone is absent and one it clears
+live is `null`; it reads the `get_settings` answer into a struct, so a null
+answer or member is its zero value and a mistyped member is refused. To see
+it bite, drop the `skip_serializing_if` on `effort_level`: the cleared-live
+test must fail. Read `applied` without `source::structure`: the null-member
+case must fail.
 
 `tests/rpc_message.rs` and `tests/rpc_codec.rs` pin the control-plane codec
 against `go/adapter/claude/internal/rpc`: classification, every refusal and its
