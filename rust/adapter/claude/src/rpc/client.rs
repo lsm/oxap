@@ -164,17 +164,6 @@ impl Client {
             let _ = self.0.closed_rx.recv();
             return;
         }
-        self.finish_close(reason);
-    }
-
-    fn close_in_background(&self, reason: ClientError) {
-        if !self.0.closing.swap(true, Ordering::SeqCst) {
-            let client = self.clone();
-            std::thread::spawn(move || client.finish_close(reason));
-        }
-    }
-
-    fn finish_close(&self, reason: ClientError) {
         if let Some(closer) = lock(&self.0.closer).take() {
             closer();
         }
@@ -211,7 +200,7 @@ impl Client {
         select! {
             recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
             recv(deadline_channel(deadline)) -> _ => {
-                self.close_in_background(ClientError::DeadlineExceeded);
+                self.close_with(ClientError::DeadlineExceeded);
                 Err(ClientError::DeadlineExceeded)
             }
             recv(self.0.done_rx) -> _ => {
@@ -219,7 +208,10 @@ impl Client {
                 if began.try_recv().is_ok() && settles {
                     return select! {
                         recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
-                        recv(deadline_channel(deadline)) -> _ => Err(ClientError::DeadlineExceeded),
+                        recv(deadline_channel(deadline)) -> _ => {
+                            self.close_with(ClientError::DeadlineExceeded);
+                            Err(ClientError::DeadlineExceeded)
+                        }
                     };
                 }
                 Err(self.close_error())

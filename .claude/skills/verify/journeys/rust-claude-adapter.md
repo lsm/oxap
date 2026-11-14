@@ -147,13 +147,11 @@ in `go/adapter/claude/internal/rpc` that walks the corpus and writes
 retires the client, a write stuck in the writer returns once the reader
 retires without a closer and waits for its own result when a closer unblocks
 the writer and still returns at its deadline when the closer fails to unblock
-it, a write returns at its deadline while a held closer is still running,
-a close waits for the closer and a second close waits for the first, the
-reader's refusal or EOF is the client's error, and the closer runs once. A
-stuck writer is a `Write` that blocks on a channel, and a held closer blocks
+it, a close waits for the closer and a second close waits behind the first,
+the reader's refusal or EOF is the client's error, and the closer runs once.
+A stuck writer is a `Write` that blocks on a channel, and a held closer blocks
 on one, so no case depends on timing beyond its five-second ceiling. To see it
-bite, drop either deadline arm in `write`: its deadline case must fail. Close
-on the caller's thread at the deadline: the held-closer write case must fail.
-Return early from a second close: the two-close case must fail. Have the read
+bite, drop either deadline arm in `write`: its deadline case must fail. Return
+early from a second close: the two-close case must fail. Have the read
 loop drop its error and close with `Closed`: the refusal and EOF cases must
 fail.
