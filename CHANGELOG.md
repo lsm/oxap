@@ -27,27 +27,15 @@ names.
 
 - The Rust crates are renamed: `oap-protocol`, `oap-validation`, `oap-adapter`, `oap-adapter-acp`, `oap-adapter-claude`, `oap-adapter-codex-appserver`, `oap-adapter-copilot`, `oap-adapter-deepseek`, `oap-adapter-hermes`, `oap-adapter-opencode`, `oap-adapter-pi`, `oap-harness`, `oap-provider-catalog`, `oap-binding`, `oap-serve`, `oap-conformance` and `oap-sdk` are now `oxap-*`, imported as `oxap_*`. No Go package changes.
 
-Agent: claude-opus-5-5 (effort: medium) via Claude
-
 - **sdk/python: Rename to oxap-sdk / oxap_sdk at 0.1.0a33** ([#1802](https://github.com/lsm/oxap/pull/1802))
 
 `sdk/python`: the distribution `oap-sdk` is now `oxap-sdk` and the import `oap_sdk` is now `oxap_sdk`. No alias is kept.
-
-Verified: the wheel journey fails on main (`oap_sdk-0.1.0` wheel) and passes on this branch. The resolver and usage journeys pass through `oxap_sdk` (Go/Rust/Zig validators: 0 disagreements). `mypy --strict` and the README type-check are clean.
-
-Agent: claude-opus-5-5 (effort: medium) via Claude
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 
 - **go: Move the module to github.com/lsm/oxap** ([#1798](https://github.com/lsm/oxap/pull/1798))
 
 `go/adapter`, `go/adapter/acp`, `go/adapter/adaptertest`, `go/adapter/claude`, `go/adapter/codex/appserver`, `go/adapter/copilot`, `go/adapter/deepseek`, `go/adapter/hermes`, `go/adapter/opencode`, `go/adapter/pi`, `go/binding`, `go/client`, `go/sdk`, `go/serve`, `go/serve/serveendpoint`, `go/serve/servehttp`, `go/serve/servestdio`
 
 The module path itself changed from `github.com/lsm/open-agent-protocol` to `github.com/lsm/oxap`; new releases must be fetched via the new path.
-
-Verified: `go build ./...` and `go vet ./...` clean; `go test ./go/validation ./go/sdk` pass; the verify-skill `go-usage.py` consumer compiles and runs against the new module path.
-
-Agent: swe-2-high (effort: medium) via HyperNeo
 
 ### Merged pull requests
 
