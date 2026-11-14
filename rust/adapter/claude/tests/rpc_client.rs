@@ -137,6 +137,19 @@ fn a_write_stuck_in_the_writer_waits_for_its_own_result_when_a_closer_unblocks_t
 }
 
 #[test]
+fn a_deadline_write_stuck_in_the_writer_returns_at_its_deadline_when_the_closer_fails_to_unblock_it()
+{
+    let (client, mut to_client, inside, _release) = stuck(Some(Box::new(|| {})));
+    let deadline = Instant::now() + Duration::from_millis(200);
+    let pending = write_user(&client, Some(deadline));
+    inside.recv_timeout(WAIT).unwrap();
+    to_client.write_all(b"[]\n").unwrap();
+    assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
+    assert!(Instant::now() < deadline + Duration::from_secs(1));
+    assert!(ended(client.done()));
+}
+
+#[test]
 fn a_frame_the_reader_refuses_is_the_client_s_error() {
     let mut peer = peer();
     peer.to_client.write_all(b"[]\n").unwrap();
