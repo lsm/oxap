@@ -23,9 +23,12 @@ are written as Go's `json.Marshal` writes them, with a raw member compacted and
 escaped as Go marshals a `json.RawMessage`. So are the `apply_flag_settings`
 request, whose settings Go writes from a map, so `FlagSettings` keeps its
 members in sorted order and writes a setting cleared live as `null`, and the
-`get_settings` request the reopen path sends. `decode_interrupt_result` and
-`decode_settings` read Claude Code's answers to an interrupt and to
-`get_settings` as Go reads them into its structs.
+`get_settings` request the reopen path sends. `settings_flags` is the step
+above them: it turns a reasoning level and a compaction policy into those flags,
+refusing a level below low and a share as Go refuses them. `decode_interrupt_result`
+and `decode_settings` read Claude Code's answers to an interrupt and to
+`get_settings` as Go reads them into its structs, a member written twice merged
+as Go merges it.
 
 Three `encoding/json` behaviours are not followed, and nothing observes any of
 them. Go falls back to a case-insensitive key match, so `{"MESSAGE":{...}}`
