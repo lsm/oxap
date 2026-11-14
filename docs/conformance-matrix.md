@@ -25,12 +25,12 @@ records where each tree stands against it. Rule-level validator coverage is in
 | Adapter: copilot | done | missing | missing |
 | Memory reference adapter | done | done | done: `oxap_adapter::memory`, which `oap-rust-hub serve agent` serves through every `goap conformance` check and the memory parity fixture |
 | Hub, stdio | done | done | done |
-| Hub, HTTP and SSE | done | done | partial: the gates, the read-only routes, tools, models, open with its held subscription, submit, resolve, cancel, settings, close, SSE events, transcript, the work routes and shutdown; `oap-rust-hub serve --addr` serves them on a loopback allowlist; `TestHubHTTPAnswersGoapAndRustTheSame` holds 27 requests to goap's answers; the hub's signals pending |
+| Hub, HTTP and SSE | done | done | partial: the gates, the read-only routes, tools, models, open with its held subscription, submit, resolve, cancel, settings, close, SSE events, transcript, the work routes and shutdown; `oap-rust-hub serve --addr` serves them on a loopback allowlist; `TestHubHTTPAnswersGoapAndRustTheSame` holds 27 requests to goap's answers; SIGINT and SIGTERM map as in Go |
 | `serve agent` endpoint | done | done | done: `oxap_serve::endpoint`, served by `oap-rust-hub serve agent`, passes every `goap conformance` check in CI and maps SIGINT and SIGTERM as Go does |
 | Conformance runner | partial: asks no `session.list` | done | missing |
 | Binding and run stores | done | done | done: `oxap-binding`'s file and memory session histories and run store (#1473); the hub records opens, closes and refusals (#1489) |
 | `transcript.load` (Decision 0051) | done | partial: hub route pending | partial: the stdio op and the HTTP route; no Rust adapter has a reader yet |
-| Shutdown (Decision 0050) | partial: signals and restart recovery pending | partial: same | partial: the stdio op, `POST /shutdown`, the endpoint's request and its signals, the stdio hub's signals; the HTTP hub's signals and restart recovery pending |
+| Shutdown (Decision 0050) | partial: signals and restart recovery pending | partial: same | partial: the stdio op, `POST /shutdown`, the endpoint's request and its signals, the stdio and HTTP hubs' signals; restart recovery pending |
 | Client SDK | n/a (oapx is the runtime) | done | done (delegates to oapx) |
 | Agent loop and provider runtime | done | done | missing |
 
@@ -70,8 +70,8 @@ Correctness and proof before features, smallest verifiable slice first.
 5. **Decision 0050 is unfinished in both trees**, and no validator judges it.
 6. **Rust ports beyond the validator.** The harness catalog, memory adapter,
    stdio hub and endpoint are done, in Decision 0052's order; what is left is
-   each harness adapter against the shared corpora, the HTTP hub's signals,
-   the conformance runner, and the agent loop.
+   each harness adapter against the shared corpora, the conformance runner,
+   and the agent loop.
 
 ## Owners
 

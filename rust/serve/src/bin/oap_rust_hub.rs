@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use oxap_binding::FileStore;
 use oxap_serve::endpoint::{Endpoint, EndpointOptions};
-use oxap_serve::http::{serve_http, HttpOptions};
+use oxap_serve::http::{self, HttpOptions};
 use oxap_serve::stdio::{serve_signalled, Signals, StdioOptions};
 use oxap_serve::{Hub, HubOptions, Registry};
 
@@ -104,7 +104,14 @@ fn main() -> ExitCode {
         serve_signalled(&signals, input, std::io::stdout(), &StdioOptions::default())
             .map_err(|err| err.to_string())
     } else {
-        serve_on(&hub, &addr.unwrap_or_else(|| DEFAULT_ADDR.to_owned()))
+        let signals = http::Signals::new(&hub);
+        let signalled = signals.clone();
+        relay(move |count| signalled.signal(count), &pending);
+        serve_on(
+            &signals,
+            &hub,
+            &addr.unwrap_or_else(|| DEFAULT_ADDR.to_owned()),
+        )
     };
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     while pending.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < deadline {
@@ -150,7 +157,7 @@ fn relay(
 
 const DEFAULT_ADDR: &str = "127.0.0.1:6270";
 
-fn serve_on(hub: &Hub, addr: &str) -> Result<(), String> {
+fn serve_on(signals: &http::Signals, hub: &Hub, addr: &str) -> Result<(), String> {
     let listener =
         std::net::TcpListener::bind(addr).map_err(|err| format!("listen on {addr}: {err}"))?;
     let bound = listener.local_addr().map_err(|err| err.to_string())?;
@@ -166,8 +173,8 @@ fn serve_on(hub: &Hub, addr: &str) -> Result<(), String> {
             .to_vec(),
         _ => Vec::new(),
     };
-    serve_http(
-        hub,
+    http::serve_http_signalled(
+        signals,
         listener,
         &HttpOptions {
             host_allowlist,
