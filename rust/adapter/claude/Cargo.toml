@@ -13,5 +13,8 @@ oxap-protocol = { path = "../../protocol", version = "=0.1.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 
+[dev-dependencies]
+futures = "0.3"
+
 [lints.rust]
 unsafe_code = "forbid"
