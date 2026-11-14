@@ -116,10 +116,12 @@ its zero value and a non-object refused. To see it bite, drop the
 exchanges. Go writes the settings from a `map[string]any`, so the members go
 out sorted, a setting the session leaves alone is absent and one it clears
 live is `null`; it reads the `get_settings` answer into a struct, so a null
-answer or member is its zero value and a mistyped member is refused. To see
-it bite, drop the `skip_serializing_if` on `effort_level`: the cleared-live
-test must fail. Read `applied` without `source::structure`: the null-member
-case must fail.
+answer is its zero value, a member written twice merges in order, a null member
+clears Go's pointer fields and leaves its string ones, and a mistyped member is
+refused. To see it bite, drop the `skip_serializing_if` on `effort_level`: the
+cleared-live test must fail. Skip the `decode_pointer` null branch: the cleared
+compaction cases must fail. Skip the member loop and read `applied` directly:
+the repeated-member case must fail.
 
 `tests/rpc_message.rs` and `tests/rpc_codec.rs` pin the control-plane codec
 against `go/adapter/claude/internal/rpc`: classification, every refusal and its
