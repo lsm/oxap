@@ -175,6 +175,9 @@ pub fn serve_http_signalled(
     });
     let (held, hold_for) = (Arc::downgrade(&served.held), served.hold_for);
     std::thread::spawn(move || reap(&held, hold_for));
+    if served.done.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     for stream in listener.incoming() {
         if served.done.load(Ordering::SeqCst) {
             return Ok(());
