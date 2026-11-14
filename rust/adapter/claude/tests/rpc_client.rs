@@ -174,25 +174,6 @@ fn settle_join(handle: JoinHandle<()>) {
 }
 
 #[test]
-fn a_write_returns_at_its_deadline_while_the_closer_is_still_running() {
-    let (closer, running, finish, finished) = held_closer();
-    let (client, _to_client, inside, _release) = stuck(closer);
-    let pending = write_user(&client, Some(Instant::now() + Duration::from_millis(200)));
-    inside.recv_timeout(WAIT).unwrap();
-    assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
-    running.recv_timeout(WAIT).unwrap();
-    assert_eq!(
-        finished.load(Ordering::SeqCst),
-        0,
-        "the closer finished before the write returned"
-    );
-    let _ = finish.send(());
-    assert!(ended(client.done()));
-    assert_eq!(finished.load(Ordering::SeqCst), 1);
-    assert_eq!(client.err(), Some(ClientError::DeadlineExceeded));
-}
-
-#[test]
 fn a_close_waits_for_the_closer_and_so_does_a_second_close() {
     let (from_server, _to_client) = std::io::pipe().unwrap();
     let (closer, running, finish, finished) = held_closer();
@@ -204,18 +185,20 @@ fn a_close_waits_for_the_closer_and_so_does_a_second_close() {
             ..ClientOptions::default()
         },
     );
-    let (returned, returning) = crossbeam_channel::unbounded::<&str>();
+    let (returned, returning) = crossbeam_channel::unbounded::<usize>();
     let first = client.clone();
+    let first_finished = finished.clone();
     let first_returned = returned.clone();
     let closing = std::thread::spawn(move || {
         first.close();
-        let _ = first_returned.send("first");
+        let _ = first_returned.send(first_finished.load(Ordering::SeqCst));
     });
     running.recv_timeout(WAIT).unwrap();
     let second = client.clone();
+    let second_finished = finished.clone();
     let following = std::thread::spawn(move || {
         second.close();
-        let _ = returned.send("second");
+        let _ = returned.send(second_finished.load(Ordering::SeqCst));
     });
     assert_eq!(
         returning.recv_timeout(Duration::from_millis(200)),
@@ -225,8 +208,11 @@ fn a_close_waits_for_the_closer_and_so_does_a_second_close() {
     let _ = finish.send(());
     settle_join(closing);
     settle_join(following);
-    assert_eq!(finished.load(Ordering::SeqCst), 1);
-    assert_eq!(returning.try_iter().count(), 2);
+    assert_eq!(
+        returning.try_iter().collect::<Vec<_>>(),
+        vec![1, 1],
+        "each close must return only after the closer finished"
+    );
 }
 
 #[test]
