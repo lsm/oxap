@@ -1,9 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use oxap_adapter::gojson::{go_marshal, strings, zero};
+use oxap_adapter::gojson::{go_marshal, strings};
+use oxap_adapter::{Error, UnsupportedControl, CONTROL_UNSATISFIABLE};
+use oxap_protocol::{CompactionPolicy, ReasoningLevel};
+use oxap_protocol::{FEATURE_COMPACTION_POLICY, FEATURE_SESSION_REASONING};
 
-use super::source::structure;
 use super::{
     Invalid, CONTROL_APPLY_FLAGS, CONTROL_INITIALIZE, CONTROL_INTERRUPT, HOOK_PRE_TOOL_USE,
     TOOL_SELECTION_HOOK, TYPE_USER,
@@ -198,7 +200,7 @@ pub fn decode_interrupt_result(raw: &[u8]) -> Result<InterruptResult, serde_json
     super::source::decode_object(&String::from_utf8_lossy(raw))
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FlagSettings<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -228,31 +230,141 @@ pub fn get_settings_request() -> Result<String, serde_json::Error> {
     })
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AppliedSettings {
-    #[serde(default, deserialize_with = "zero")]
     pub model: String,
-    #[serde(default, deserialize_with = "zero")]
     pub effort: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+impl AppliedSettings {
+    fn merge(&mut self, raw: &str) -> Result<(), serde_json::Error> {
+        for (key, value) in super::source::members(raw)? {
+            let slot = match key.as_str() {
+                "model" => &mut self.model,
+                "effort" => &mut self.effort,
+                _ => continue,
+            };
+            if value.get() == "null" {
+                continue;
+            }
+            *slot = super::source::decode(value.get())?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EffectiveSettings {
-    #[serde(default)]
     pub auto_compact_enabled: Option<bool>,
-    #[serde(default)]
     pub auto_compact_window: Option<i64>,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+impl EffectiveSettings {
+    fn merge(&mut self, raw: &str) -> Result<(), serde_json::Error> {
+        for (key, value) in super::source::members(raw)? {
+            match key.as_str() {
+                "autoCompactEnabled" => {
+                    self.auto_compact_enabled = decode_pointer(value.get())?;
+                }
+                "autoCompactWindow" => {
+                    self.auto_compact_window = decode_pointer(value.get())?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+fn decode_pointer<T: serde::de::DeserializeOwned>(
+    member: &str,
+) -> Result<Option<T>, serde_json::Error> {
+    if member == "null" {
+        return Ok(None);
+    }
+    super::source::decode(member)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
-    #[serde(default, deserialize_with = "structure")]
     pub applied: AppliedSettings,
-    #[serde(default, deserialize_with = "structure")]
     pub effective: EffectiveSettings,
 }
 
 pub fn decode_settings(raw: &[u8]) -> Result<Settings, serde_json::Error> {
-    super::source::decode_object(&String::from_utf8_lossy(raw))
+    let mut settings = Settings::default();
+    if std::str::from_utf8(raw).ok().map(str::trim) == Some("null") {
+        return Ok(settings);
+    }
+    let text = String::from_utf8_lossy(raw);
+    for (key, value) in super::source::members(&text)? {
+        let member = value.get();
+        if member == "null" {
+            continue;
+        }
+        match key.as_str() {
+            "applied" => settings.applied.merge(member)?,
+            "effective" => settings.effective.merge(member)?,
+            _ => {}
+        }
+    }
+    Ok(settings)
+}
+
+pub fn settings_flags(
+    level: ReasoningLevel,
+    compaction: Option<&CompactionPolicy>,
+    live: bool,
+) -> Result<FlagSettings<'static>, Error> {
+    let effort_level = match level.as_str() {
+        "" => None,
+        "low" => Some("low"),
+        "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        _ => {
+            return Err(Error::UnsupportedControl(Box::new(UnsupportedControl {
+                feature: FEATURE_SESSION_REASONING.to_owned(),
+                reason: CONTROL_UNSATISFIABLE,
+                field: "reasoning_level".into(),
+                detail: "Claude Code's effort levels are low through max".into(),
+                ..UnsupportedControl::default()
+            })))
+        }
+    };
+    let mut flags = FlagSettings {
+        effort_level,
+        ..FlagSettings::default()
+    };
+    if let Some(policy) = compaction {
+        match policy.kind.as_str() {
+            "auto" => {
+                if live {
+                    flags.auto_compact_enabled = Some(None);
+                    flags.auto_compact_window = Some(None);
+                }
+            }
+            "off" => {
+                flags.auto_compact_enabled = Some(Some(false));
+                if live {
+                    flags.auto_compact_window = Some(None);
+                }
+            }
+            "tokens" => {
+                flags.auto_compact_enabled = Some(Some(true));
+                flags.auto_compact_window = Some(Some(policy.tokens));
+            }
+            _ => {
+                return Err(Error::UnsupportedControl(Box::new(UnsupportedControl {
+                    feature: FEATURE_COMPACTION_POLICY.to_owned(),
+                    reason: CONTROL_UNSATISFIABLE,
+                    field: "compaction_policy".into(),
+                    detail: "Claude Code takes a token window, not a share".into(),
+                    ..UnsupportedControl::default()
+                })))
+            }
+        }
+    }
+    Ok(flags)
 }

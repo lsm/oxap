@@ -1041,6 +1041,7 @@ name = "oxap-adapter-claude"
 version = "0.1.0"
 dependencies = [
  "oxap-adapter",
+ "oxap-protocol",
  "serde",
  "serde_json",
 ]

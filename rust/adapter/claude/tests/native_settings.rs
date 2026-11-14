@@ -1,6 +1,8 @@
 use oxap_adapter_claude::native::{
-    apply_flag_settings_request, decode_settings, get_settings_request, FlagSettings,
+    apply_flag_settings_request, decode_settings, get_settings_request, settings_flags,
+    FlagSettings,
 };
+use oxap_protocol::{CompactionKind, CompactionPolicy, ReasoningLevel};
 
 #[test]
 fn an_apply_flag_settings_request_writes_its_settings_with_their_keys_sorted_as_a_go_map() {
@@ -100,4 +102,125 @@ fn a_null_settings_answer_or_member_reads_as_its_zero_value_and_a_mistyped_one_i
             String::from_utf8_lossy(refused)
         );
     }
+}
+
+#[test]
+fn a_member_written_twice_merges_as_go_merges_it_and_a_null_clears_only_a_pointer() {
+    let settings = decode_settings(br#"{"applied":{"model":"first","model":"second"}}"#).unwrap();
+    assert_eq!(settings.applied.model, "second");
+    let settings = decode_settings(
+        br#"{"applied":{"model":"first","effort":"high"},"applied":{"effort":"max"}}"#,
+    )
+    .unwrap();
+    assert_eq!(settings.applied.model, "first");
+    assert_eq!(settings.applied.effort, "max");
+    let settings = decode_settings(br#"{"applied":{"model":"first"},"applied":null}"#).unwrap();
+    assert_eq!(settings.applied.model, "first");
+    let settings =
+        decode_settings(br#"{"applied":{"model":"x"},"applied":{"model":null}}"#).unwrap();
+    assert_eq!(settings.applied.model, "x");
+    let settings =
+        decode_settings(br#"{"effective":{"autoCompactEnabled":true,"autoCompactEnabled":null}}"#)
+            .unwrap();
+    assert_eq!(settings.effective.auto_compact_enabled, None);
+    let settings =
+        decode_settings(br#"{"effective":{"autoCompactWindow":5000,"autoCompactWindow":null}}"#)
+            .unwrap();
+    assert_eq!(settings.effective.auto_compact_window, None);
+    let settings = decode_settings(
+        br#"{"effective":{"autoCompactWindow":5000},"effective":{"autoCompactEnabled":false}}"#,
+    )
+    .unwrap();
+    assert_eq!(settings.effective.auto_compact_window, Some(5000));
+    assert_eq!(settings.effective.auto_compact_enabled, Some(false));
+}
+
+#[test]
+fn open_settings_flags_carry_the_level_and_the_window_go_sends() {
+    assert_eq!(
+        settings_flags(ReasoningLevel::HIGH, None, false).unwrap(),
+        FlagSettings {
+            effort_level: Some("high"),
+            ..FlagSettings::default()
+        }
+    );
+    let tokens = CompactionPolicy {
+        kind: CompactionKind::TOKENS,
+        tokens: 150000,
+        ..CompactionPolicy::default()
+    };
+    assert_eq!(
+        settings_flags(ReasoningLevel::MAX, Some(&tokens), true).unwrap(),
+        FlagSettings {
+            effort_level: Some("max"),
+            auto_compact_enabled: Some(Some(true)),
+            auto_compact_window: Some(Some(150000)),
+        }
+    );
+    let auto = CompactionPolicy {
+        kind: CompactionKind::AUTO,
+        ..CompactionPolicy::default()
+    };
+    assert_eq!(
+        settings_flags(ReasoningLevel::default(), Some(&auto), false).unwrap(),
+        FlagSettings::default()
+    );
+    assert_eq!(
+        settings_flags(ReasoningLevel::default(), Some(&auto), true).unwrap(),
+        FlagSettings {
+            auto_compact_enabled: Some(None),
+            auto_compact_window: Some(None),
+            ..FlagSettings::default()
+        }
+    );
+    let off = CompactionPolicy {
+        kind: CompactionKind::OFF,
+        ..CompactionPolicy::default()
+    };
+    assert_eq!(
+        settings_flags(ReasoningLevel::default(), Some(&off), false).unwrap(),
+        FlagSettings {
+            auto_compact_enabled: Some(Some(false)),
+            ..FlagSettings::default()
+        }
+    );
+    assert_eq!(
+        settings_flags(ReasoningLevel::default(), Some(&off), true).unwrap(),
+        FlagSettings {
+            auto_compact_enabled: Some(Some(false)),
+            auto_compact_window: Some(None),
+            ..FlagSettings::default()
+        }
+    );
+}
+
+#[test]
+fn a_level_or_compaction_claude_code_cannot_take_is_refused_as_go_refuses_it() {
+    for level in [ReasoningLevel::OFF, ReasoningLevel::MINIMAL] {
+        let refused = settings_flags(level, None, false).unwrap_err().to_string();
+        assert!(
+            refused.contains("session.reasoning") && refused.contains("unsatisfiable"),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("Claude Code's effort levels are low through max"),
+            "{refused}"
+        );
+    }
+    let share = CompactionPolicy {
+        kind: CompactionKind::SHARE,
+        share_percent: 50,
+        ..CompactionPolicy::default()
+    };
+    let refused = settings_flags(ReasoningLevel::default(), Some(&share), false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("session.compaction.policy") && refused.contains("unsatisfiable"),
+        "{refused}"
+    );
+    assert!(
+        refused.contains("Claude Code takes a token window, not a share"),
+        "{refused}"
+    );
 }
