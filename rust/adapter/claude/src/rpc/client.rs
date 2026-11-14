@@ -199,7 +199,13 @@ impl Client {
             recv(self.0.done_rx) -> _ => {
                 let settles = settled.try_recv().is_ok() || self.0.unblocks_writes;
                 if began.try_recv().is_ok() && settles {
-                    return written.recv().unwrap_or_else(|_| Err(self.close_error()));
+                    return select! {
+                        recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
+                        recv(deadline_channel(deadline)) -> _ => {
+                            self.close_with(ClientError::DeadlineExceeded);
+                            Err(ClientError::DeadlineExceeded)
+                        }
+                    };
                 }
                 Err(self.close_error())
             }
