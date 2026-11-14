@@ -139,13 +139,94 @@ fn a_write_stuck_in_the_writer_waits_for_its_own_result_when_a_closer_unblocks_t
 #[test]
 fn a_deadline_write_stuck_in_the_writer_returns_when_the_closer_fails_to_unblock_it() {
     let (client, mut to_client, inside, _release) = stuck(Some(Box::new(|| {})));
-    let deadline = Instant::now() + Duration::from_millis(200);
+    let deadline = Instant::now() + Duration::from_secs(1);
     let pending = write_user(&client, Some(deadline));
     inside.recv_timeout(WAIT).unwrap();
     to_client.write_all(b"[]\n").unwrap();
-    assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
-    assert!(Instant::now() < deadline + Duration::from_secs(1));
     assert!(ended(client.done()));
+    assert!(
+        Instant::now() < deadline,
+        "the client ended after the deadline, so the write never waited past done"
+    );
+    assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
+}
+
+fn held_closer() -> (Closer, Receiver<()>, Sender<()>, Arc<AtomicUsize>) {
+    let (began, running) = crossbeam_channel::bounded::<()>(1);
+    let (finish, finishing) = crossbeam_channel::bounded::<()>(1);
+    let finished = Arc::new(AtomicUsize::new(0));
+    let counted = finished.clone();
+    let closer: Closer = Some(Box::new(move || {
+        let _ = began.send(());
+        let _ = finishing.recv();
+        counted.fetch_add(1, Ordering::SeqCst);
+    }));
+    (closer, running, finish, finished)
+}
+
+fn settle_join(handle: JoinHandle<()>) {
+    let (sent, received) = crossbeam_channel::bounded(1);
+    std::thread::spawn(move || {
+        let _ = handle.join();
+        let _ = sent.send(());
+    });
+    received.recv_timeout(WAIT).expect("the thread never ended");
+}
+
+#[test]
+fn a_write_returns_at_its_deadline_while_the_closer_is_still_running() {
+    let (closer, running, finish, finished) = held_closer();
+    let (client, _to_client, inside, _release) = stuck(closer);
+    let pending = write_user(&client, Some(Instant::now() + Duration::from_millis(200)));
+    inside.recv_timeout(WAIT).unwrap();
+    assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
+    running.recv_timeout(WAIT).unwrap();
+    assert_eq!(
+        finished.load(Ordering::SeqCst),
+        0,
+        "the closer finished before the write returned"
+    );
+    let _ = finish.send(());
+    assert!(ended(client.done()));
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
+    assert_eq!(client.err(), Some(ClientError::DeadlineExceeded));
+}
+
+#[test]
+fn a_close_waits_for_the_closer_and_so_does_a_second_close() {
+    let (from_server, _to_client) = std::io::pipe().unwrap();
+    let (closer, running, finish, finished) = held_closer();
+    let client = Client::new(
+        from_server,
+        std::io::sink(),
+        ClientOptions {
+            closer,
+            ..ClientOptions::default()
+        },
+    );
+    let (returned, returning) = crossbeam_channel::unbounded::<&str>();
+    let first = client.clone();
+    let first_returned = returned.clone();
+    let closing = std::thread::spawn(move || {
+        first.close();
+        let _ = first_returned.send("first");
+    });
+    running.recv_timeout(WAIT).unwrap();
+    let second = client.clone();
+    let following = std::thread::spawn(move || {
+        second.close();
+        let _ = returned.send("second");
+    });
+    assert_eq!(
+        returning.recv_timeout(Duration::from_millis(200)),
+        Err(RecvTimeoutError::Timeout),
+        "a close returned while the closer was still running"
+    );
+    let _ = finish.send(());
+    settle_join(closing);
+    settle_join(following);
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
+    assert_eq!(returning.try_iter().count(), 2);
 }
 
 #[test]
