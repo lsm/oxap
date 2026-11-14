@@ -14,6 +14,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test native_raw_bytes)
 (cd rust && cargo test -p oxap-adapter-claude --test native_host_writes)
 (cd rust && cargo test -p oxap-adapter-claude --test native_settings)
+(cd rust && cargo test -p oxap-adapter-claude --test adapter_open)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_message)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_codec)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
@@ -142,3 +143,18 @@ holds against `tests/fixtures/go-rpc-writes.jsonl`, which Go's own
 `MarshalJSON` produced for those frames. Regenerate it with a throwaway Go test
 in `go/adapter/claude/internal/rpc` that walks the corpus and writes
 `frame`/`written` pairs; never hand-edit the file.
+
+`tests/adapter_open.rs` pins the adapter surface above the codec: the
+descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the
+twenty-four feature keys and their levels, modes and scopes, the one native
+tool source, the process-memory journal of 256, one active run, interactive
+gates, the `session` cancel target), the four refusals `open` prints before it
+would spawn (provided tools, an effort below low, a share policy, a reopen
+naming no CLI session UUID), the `ToolPosture` validation and the argv
+`spawn_plan` assembles. Expectations come from Go's `adapter.go` and
+`reopen.go` at the merged head; probe the descriptor from a merged-head
+worktree, not a stale checkout. To see it bite, drop a feature key from the
+descriptor: the key-set test must fail. Accept an `off` level in
+`settings_flags`: the level-refusal test must fail. Accept any reopen id: the
+reopen test must fail. Reorder `--allowedTools` before `--tools` in
+`spawn_plan`: the argv test must fail.
