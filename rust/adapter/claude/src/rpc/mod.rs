@@ -1,8 +1,10 @@
+mod client;
 mod codec;
 mod message;
 
 use std::fmt;
 
+pub use client::{Client, ClientError, ClientOptions, Closer, DEFAULT_QUEUE_CAPACITY};
 pub use codec::{Decoder, Encoder, DEFAULT_FRAME_LIMIT};
 pub use message::{
     control_request_message, control_response_message, parse_message, user_turn_message,
