@@ -11,13 +11,19 @@ records the names and the compatibility rules.
 | What | How |
 | --- | --- |
 | The `oxap` binary (CLI, terminal UI and endpoint) | Download the `oxap-<version>-<os>-<arch>` archive from the [releases page](https://github.com/lsm/oxap/releases) and check it against `SHA256SUMS.txt`. |
-| The binary through npm | `npm install -g @oxap/cli`, or `npx @oxap/cli --version`. |
+| The binary through npm | `npm install -g @oxap/cli@next`, or `npx @oxap/cli@next --version`. |
 | The binary from source | Zig 0.17.0, then `make install` in a checkout. |
-| TypeScript SDK | `npm install @oxap/sdk` |
+| TypeScript SDK | `npm install @oxap/sdk@next` |
 | Go library and Go SDK | `go get github.com/lsm/oxap@v0.1.0-alpha.33` |
-| TypeScript hub client | `npm install @oxap/client` |
-| Python SDK | `pip install oxap-sdk`, then `import oxap_sdk` |
-| Rust SDK | `cargo add oxap-sdk` |
+| TypeScript hub client | `npm install @oxap/client@next` |
+| Python SDK | `pip install oxap-sdk==0.1.0a33`, then `import oxap_sdk` |
+| Rust SDK | `cargo add oxap-sdk@0.1.0-alpha.33` |
+
+Alpha releases are pre-releases, so each command names one. npm publishes them
+under the `next` tag rather than `latest`, Cargo picks a pre-release only when
+you name its version, and pip prefers final releases, so naming the version
+gets the alpha either way. To pin npm exactly, use the
+version instead of `@next`, for example `npm install @oxap/sdk@0.1.0-alpha.33`.
 
 The registry packages appear with the `v0.1.0-alpha.33` release; until then,
 each SDK's README says how to use it from a checkout. Of the Rust crates only

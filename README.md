@@ -65,7 +65,7 @@ SDKs internally.
 `oxap` is a single binary. Get it one of these ways:
 
 - Download it from the [latest release](https://github.com/lsm/oxap/releases). Builds are published for macOS, Linux and Windows on arm64 and x64, with a `SHA256SUMS.txt`.
-- Or install it from npm: `npm install -g @oxap/cli`.
+- Or install it from npm: `npm install -g @oxap/cli@next` (alpha releases are published under `next`).
 - Or build it from this checkout with Zig 0.17.0. `make install` puts it in `~/.local/bin`.
 
 ```sh
