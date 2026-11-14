@@ -63,6 +63,8 @@ struct Inner {
     read_done: Receiver<()>,
     closer: Mutex<Option<Closer>>,
     closing: AtomicBool,
+    closed_tx: Mutex<Option<Sender<()>>>,
+    closed_rx: Receiver<()>,
     unblocks_writes: bool,
 }
 
@@ -99,6 +101,7 @@ impl Client {
             crossbeam_channel::bounded(or_default(options.write_queue_capacity, capacity));
         let (done_tx, done_rx) = crossbeam_channel::bounded(0);
         let (reading, read_done) = crossbeam_channel::bounded::<()>(0);
+        let (closed_tx, closed_rx) = crossbeam_channel::bounded::<()>(0);
         let unblocks_writes = options.closer.is_some();
         let client = Self(Arc::new(Inner {
             state: Mutex::new(State {
@@ -112,6 +115,8 @@ impl Client {
             read_done,
             closer: Mutex::new(options.closer.take()),
             closing: AtomicBool::new(false),
+            closed_tx: Mutex::new(Some(closed_tx)),
+            closed_rx,
             unblocks_writes,
         }));
         let limit = or_default(options.frame_limit, DEFAULT_FRAME_LIMIT);
@@ -156,8 +161,20 @@ impl Client {
 
     fn close_with(&self, reason: ClientError) {
         if self.0.closing.swap(true, Ordering::SeqCst) {
+            let _ = self.0.closed_rx.recv();
             return;
         }
+        self.finish_close(reason);
+    }
+
+    fn close_in_background(&self, reason: ClientError) {
+        if !self.0.closing.swap(true, Ordering::SeqCst) {
+            let client = self.clone();
+            std::thread::spawn(move || client.finish_close(reason));
+        }
+    }
+
+    fn finish_close(&self, reason: ClientError) {
         if let Some(closer) = lock(&self.0.closer).take() {
             closer();
         }
@@ -167,6 +184,7 @@ impl Client {
             state.err.get_or_insert(reason);
         }
         lock(&self.0.done_tx).take();
+        lock(&self.0.closed_tx).take();
     }
 
     fn write(&self, message: Message, deadline: Option<Instant>) -> Result<(), ClientError> {
@@ -193,7 +211,7 @@ impl Client {
         select! {
             recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
             recv(deadline_channel(deadline)) -> _ => {
-                self.close_with(ClientError::DeadlineExceeded);
+                self.close_in_background(ClientError::DeadlineExceeded);
                 Err(ClientError::DeadlineExceeded)
             }
             recv(self.0.done_rx) -> _ => {
@@ -201,10 +219,7 @@ impl Client {
                 if began.try_recv().is_ok() && settles {
                     return select! {
                         recv(written) -> outcome => outcome.unwrap_or_else(|_| Err(self.close_error())),
-                        recv(deadline_channel(deadline)) -> _ => {
-                            self.close_with(ClientError::DeadlineExceeded);
-                            Err(ClientError::DeadlineExceeded)
-                        }
+                        recv(deadline_channel(deadline)) -> _ => Err(ClientError::DeadlineExceeded),
                     };
                 }
                 Err(self.close_error())
