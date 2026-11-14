@@ -20,8 +20,8 @@ const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 
 #[derive(Clone, Debug, Default)]
 pub enum ToolPosture {
-    Unstated,
     #[default]
+    Unstated,
     Unrestricted,
     Allow(Vec<String>),
 }

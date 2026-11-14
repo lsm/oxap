@@ -6,9 +6,17 @@ fn descriptor(adapter: &ClaudeAdapter) -> oxap_adapter::Descriptor {
     futures::executor::block_on(adapter.probe()).unwrap()
 }
 
+fn adapter() -> ClaudeAdapter {
+    ClaudeAdapter::new(Config {
+        tools: ToolPosture::Unrestricted,
+        ..Config::default()
+    })
+    .unwrap()
+}
+
 #[test]
 fn a_probe_describes_the_pinned_endpoint_the_features_and_the_process_memory_journal() {
-    let adapter = ClaudeAdapter::new(Config::default()).unwrap();
+    let adapter = adapter();
     let described = descriptor(&adapter);
     assert_eq!(
         described.capabilities.endpoint.id.as_str(),
@@ -50,7 +58,7 @@ fn a_probe_describes_the_pinned_endpoint_the_features_and_the_process_memory_jou
 
 #[test]
 fn the_described_features_are_exactly_the_keys_go_advertises() {
-    let adapter = ClaudeAdapter::new(Config::default()).unwrap();
+    let adapter = adapter();
     let described = descriptor(&adapter);
     let mut keys = described
         .capabilities
@@ -101,7 +109,7 @@ fn the_described_features_are_exactly_the_keys_go_advertises() {
 
 #[test]
 fn an_open_refuses_what_the_adapter_does_not_advertise() {
-    let adapter = ClaudeAdapter::new(Config::default()).unwrap();
+    let adapter = adapter();
     let request = oxap_adapter::OpenRequest {
         tools: vec![oxap_protocol::ToolDefinition {
             name: "x".into(),
@@ -120,7 +128,7 @@ fn an_open_refuses_what_the_adapter_does_not_advertise() {
 
 #[test]
 fn an_open_refuses_a_level_and_a_policy_claude_code_cannot_take() {
-    let adapter = ClaudeAdapter::new(Config::default()).unwrap();
+    let adapter = adapter();
     let request = oxap_adapter::OpenRequest {
         reasoning_level: ReasoningLevel::OFF,
         ..oxap_adapter::OpenRequest::default()
@@ -163,7 +171,7 @@ fn an_open_refuses_a_level_and_a_policy_claude_code_cannot_take() {
 
 #[test]
 fn an_open_that_reopens_without_a_bound_conversation_is_refused() {
-    let adapter = ClaudeAdapter::new(Config::default()).unwrap();
+    let adapter = adapter();
     let request = oxap_adapter::OpenRequest {
         reopen: true,
         ..oxap_adapter::OpenRequest::default()
@@ -185,6 +193,7 @@ fn an_open_that_reopens_without_a_bound_conversation_is_refused() {
 
 #[test]
 fn a_tool_posture_is_required_and_names_at_least_one_tool() {
+    assert!(ClaudeAdapter::new(Config::default()).is_err());
     assert!(ClaudeAdapter::new(Config {
         tools: ToolPosture::Unstated,
         ..Config::default()
@@ -269,7 +278,7 @@ fn an_unrestricted_posture_names_no_tool_arguments() {
 
 #[test]
 fn two_probes_of_one_adapter_describe_the_same_endpoint() {
-    let adapter = ClaudeAdapter::new(Config::default()).unwrap();
+    let adapter = adapter();
     let first = descriptor(&adapter);
     let second = descriptor(&adapter);
     assert_eq!(first.capability_revision, second.capability_revision);
