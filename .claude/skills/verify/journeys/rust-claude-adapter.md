@@ -13,6 +13,9 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test native_turns)
 (cd rust && cargo test -p oxap-adapter-claude --test native_raw_bytes)
 (cd rust && cargo test -p oxap-adapter-claude --test native_host_writes)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_message)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_codec)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
 (cd rust && cargo test -p oxap-adapter-claude --all-features)
 ```
 
@@ -107,3 +110,23 @@ its zero value and a non-object refused. To see it bite, drop the
 `skip_serializing_if` on `interrupt`: the deny test must fail. Skip
 `go_marshal`: the allow test must fail. Decode the result without
 `source::decode_object`: the null result case must fail.
+
+`tests/rpc_message.rs` and `tests/rpc_codec.rs` pin the control-plane codec
+against `go/adapter/claude/internal/rpc`: classification, every refusal and its
+fault class, the exact bytes `json.Marshal` gives a rewritten frame, and the LF
+framing rules with the 8 MiB limit. Expectations come from a throwaway Go test
+that printed `ParseMessage` and `MarshalJSON` for each frame; regenerate one by
+reviving that probe rather than guessing. To see it bite, skip the member sort
+in `write_sorted_object`: the control-request byte test must fail. Drop the
+`<` escape in `go_string`: the key test must fail. Write a parsed control
+request by re-parsing the string members instead of the frame's own bytes: the
+"invalid control-plane message: control request requires a subtype" case must
+fail. Decode a line with `serde_json` directly instead of through
+`source::members`: the lone-surrogate raw-member test must fail.
+
+`tests/rpc_corpus.rs` decodes every frame the pinned corpus in
+`fixtures/adapters/claude-code-2.1.322` records, and compares each host write it
+holds against `tests/fixtures/go-rpc-writes.jsonl`, which Go's own
+`MarshalJSON` produced for those frames. Regenerate it with a throwaway Go test
+in `go/adapter/claude/internal/rpc` that walks the corpus and writes
+`frame`/`written` pairs; never hand-edit the file.

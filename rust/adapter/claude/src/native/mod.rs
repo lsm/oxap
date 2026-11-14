@@ -1,5 +1,5 @@
 mod decode;
-mod source;
+pub(crate) mod source;
 mod write;
 
 use oxap_adapter::gojson::{strings, zero};
