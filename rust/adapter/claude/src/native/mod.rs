@@ -13,8 +13,8 @@ pub use decode::{
 pub use write::{
     apply_flag_settings_request, decode_interrupt_result, decode_settings, deny_tool,
     get_settings_request, hook_continue, initialize_request, interrupt_request, mcp_response,
-    new_user_turn, permission_allow, permission_deny, validate_turn_uuid, AppliedSettings,
-    EffectiveSettings, FlagSettings, InterruptResult, Settings,
+    new_user_turn, permission_allow, permission_deny, settings_flags, validate_turn_uuid,
+    AppliedSettings, EffectiveSettings, FlagSettings, InterruptResult, Settings,
 };
 
 pub type Raw = Option<Box<RawValue>>;

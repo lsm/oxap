@@ -14,6 +14,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test native_raw_bytes)
 (cd rust && cargo test -p oxap-adapter-claude --test native_host_writes)
 (cd rust && cargo test -p oxap-adapter-claude --test native_settings)
+(cd rust && cargo test -p oxap-adapter-claude --test adapter_open)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_message)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_codec)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
@@ -117,10 +118,12 @@ its zero value and a non-object refused. To see it bite, drop the
 exchanges. Go writes the settings from a `map[string]any`, so the members go
 out sorted, a setting the session leaves alone is absent and one it clears
 live is `null`; it reads the `get_settings` answer into a struct, so a null
-answer or member is its zero value and a mistyped member is refused. To see
-it bite, drop the `skip_serializing_if` on `effort_level`: the cleared-live
-test must fail. Read `applied` without `source::structure`: the null-member
-case must fail.
+answer is its zero value, a member written twice merges in order, a null member
+clears Go's pointer fields and leaves its string ones, and a mistyped member is
+refused. To see it bite, drop the `skip_serializing_if` on `effort_level`: the
+cleared-live test must fail. Skip the `decode_pointer` null branch: the cleared
+compaction cases must fail. Skip the member loop and read `applied` directly:
+the repeated-member case must fail.
 
 `tests/rpc_message.rs` and `tests/rpc_codec.rs` pin the control-plane codec
 against `go/adapter/claude/internal/rpc`: classification, every refusal and its
@@ -155,3 +158,18 @@ bite, drop either deadline arm in `write`: its deadline case must fail. Return
 early from a second close: the two-close case must fail. Have the read
 loop drop its error and close with `Closed`: the refusal and EOF cases must
 fail.
+
+`tests/adapter_open.rs` pins the adapter surface above the codec: the
+descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the
+twenty-four feature keys and their levels, modes and scopes, the one native
+tool source, the process-memory journal of 256, one active run, interactive
+gates, the `session` cancel target), the four refusals `open` prints before it
+would spawn (provided tools, an effort below low, a share policy, a reopen
+naming no CLI session UUID), the `ToolPosture` validation and the argv
+`spawn_plan` assembles. Expectations come from Go's `adapter.go` and
+`reopen.go` at the merged head; probe the descriptor from a merged-head
+worktree, not a stale checkout. To see it bite, drop a feature key from the
+descriptor: the key-set test must fail. Accept an `off` level in
+`settings_flags`: the level-refusal test must fail. Accept any reopen id: the
+reopen test must fail. Reorder `--allowedTools` before `--tools` in
+`spawn_plan`: the argv test must fail.
