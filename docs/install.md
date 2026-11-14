@@ -15,14 +15,15 @@ records the names and the compatibility rules.
 | The binary from source | Zig 0.17.0, then `make install` in a checkout. |
 | TypeScript SDK | `npm install @oxap/sdk` |
 | Go library and Go SDK | `go get github.com/lsm/oxap@v0.1.0-alpha.33` |
-| TypeScript hub client | From a checkout, as a `file:` dependency on `clients/ts` ([its README](../clients/ts/README.md)). |
-| Python SDK | From a checkout: `pip install ./sdk/python`, then `import oxap_sdk`. |
-| Rust SDK | From the repository: `oxap-sdk = { git = "https://github.com/lsm/oxap" }`. |
+| TypeScript hub client | `npm install @oxap/client` |
+| Python SDK | `pip install oxap-sdk`, then `import oxap_sdk` |
+| Rust SDK | `cargo add oxap-sdk` |
 
-A release publishes the GitHub archives and the npm packages `@oxap/cli` and
-`@oxap/sdk`. The hub client, the Python SDK and the Rust crates already carry
-their OXAP names, but no release publishes them to npm, PyPI or crates.io yet,
-so they are used from the repository.
+The registry packages appear with the `v0.1.0-alpha.33` release; until then,
+each SDK's README says how to use it from a checkout. Of the Rust crates only
+`oxap-sdk` is published. The others (`oxap-protocol`, `oxap-validation`,
+`oxap-adapter` and the rest) carry their OXAP names but stay
+`publish = false`, so depend on them from this repository.
 
 Release archives cover macOS, Linux and Windows on arm64 and x64. The npm
 package `@oxap/cli` picks the matching `@oxap/cli-<os>-<arch>` package through
@@ -40,9 +41,9 @@ SDK finds a runtime without a separate download.
 | Go module `github.com/lsm/open-agent-protocol` | `github.com/lsm/oxap` |
 | npm `oap-sdk` | `@oxap/sdk` |
 | npm `@oap-sdk/cli-<os>-<arch>` | `@oxap/cli`, over `@oxap/cli-<os>-<arch>` |
-| `oap-client` | `@oxap/client` |
-| Python `oap-sdk` / `oap_sdk` | `oxap-sdk` / `oxap_sdk` |
-| Rust crates `oap-*` | `oxap-*`, for example `oxap-sdk` and `oxap-protocol` |
+| `oap-client` (checkout only) | `@oxap/client` on npm |
+| Python `oap-sdk` / `oap_sdk` (checkout only) | `oxap-sdk` / `oxap_sdk` on PyPI |
+| Rust crates `oap-*` (path only) | `oxap-*`, with `oxap-sdk` on crates.io |
 
 None of the old npm, PyPI or crates.io names was ever published by this
 project, so there is no old registry package to replace. The `oap-sdk` already
@@ -67,7 +68,7 @@ new path.
 `@oxap/client` instead of `oap-client`. Exported names such as `MakaiClient`
 and the `Oap*` types do not change.
 
-**Python.** Reinstall from `sdk/python` and change `import oap_sdk` to
+**Python.** Install `oxap-sdk` and change `import oap_sdk` to
 `import oxap_sdk`. There is no `oap_sdk` compatibility module, because that
 name would collide with the unrelated PyPI package. Class names such as
 `MakaiClient` do not change.

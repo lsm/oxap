@@ -1,10 +1,21 @@
 mod decode;
+pub(crate) mod source;
+mod write;
 
-use oap_adapter::gojson::{raw, slice, strings, structure, zero};
+use oxap_adapter::gojson::{strings, zero};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use source::{raw, slice, structure, structures};
 
-pub use decode::{decode_observation, Invalid, Observation};
+pub use decode::{
+    decode_control_request, decode_observation, ControlRequest, Invalid, Observation,
+};
+pub use write::{
+    apply_flag_settings_request, decode_interrupt_result, decode_settings, deny_tool,
+    get_settings_request, hook_continue, initialize_request, interrupt_request, mcp_response,
+    new_user_turn, permission_allow, permission_deny, settings_flags, validate_turn_uuid,
+    AppliedSettings, EffectiveSettings, FlagSettings, InterruptResult, Settings,
+};
 
 pub type Raw = Option<Box<RawValue>>;
 
@@ -73,11 +84,19 @@ fn optional_blocks<'de, D>(deserializer: D) -> Result<Option<Vec<ContentBlock>>,
 where
     D: serde::Deserializer<'de>,
 {
-    let raw = Box::<RawValue>::deserialize(deserializer)?;
-    if raw.get() == "null" {
+    let value = <&'de RawValue>::deserialize(deserializer)?;
+    if value.get() == "null" {
         return Ok(None);
     }
-    slice(&raw).map(Some)
+    slice(value).map(Some).map_err(serde::de::Error::custom)
+}
+
+fn optional_strings<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let items = Option::<Vec<Option<String>>>::deserialize(deserializer)?;
+    Ok(items.map(|items| items.into_iter().map(Option::unwrap_or_default).collect()))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -160,12 +179,12 @@ pub struct UserFrame {
 
 impl UserFrame {
     pub fn blocks(&self) -> Option<Vec<ContentBlock>> {
-        slice::<ContentBlock, serde_json::Error>(self.message.content.as_deref()?).ok()
+        source::decode_slice(self.message.content.as_deref()?.get()).ok()
     }
 
     pub fn text_content(&self) -> Option<String> {
         let raw = self.message.content.as_deref()?;
-        serde_json::from_str::<Option<String>>(raw.get())
+        source::decode::<Option<String>>(raw.get())
             .ok()
             .map(Option::unwrap_or_default)
     }
@@ -203,4 +222,387 @@ pub struct AssistantFrame {
     pub uuid: String,
     #[serde(default, deserialize_with = "zero")]
     pub session_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens: Option<i64>,
+    #[serde(default)]
+    pub output_tokens: Option<i64>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<i64>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ResultFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub subtype: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub duration_ms: i64,
+    #[serde(default, deserialize_with = "zero")]
+    pub duration_api_ms: i64,
+    #[serde(default, deserialize_with = "zero")]
+    pub is_error: bool,
+    #[serde(default)]
+    pub num_turns: Option<i64>,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+    #[serde(default)]
+    pub total_cost_usd: Option<f64>,
+    #[serde(default, deserialize_with = "raw")]
+    pub structured_output: Raw,
+    #[serde(default, deserialize_with = "structure")]
+    pub usage: Usage,
+    #[serde(default, rename = "modelUsage", deserialize_with = "raw")]
+    pub model_usage: Raw,
+    #[serde(default, deserialize_with = "raw")]
+    pub permission_denials: Raw,
+    #[serde(default)]
+    pub queued_turn_count: Option<i64>,
+    #[serde(default, deserialize_with = "strings")]
+    pub errors: Vec<String>,
+    #[serde(default)]
+    pub api_error_status: Option<i64>,
+    #[serde(default, deserialize_with = "zero")]
+    pub user_message_uuid: String,
+    #[serde(default, deserialize_with = "strings")]
+    pub user_message_uuids: Vec<String>,
+    #[serde(default, deserialize_with = "zero")]
+    pub terminal_reason: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub result: String,
+    #[serde(default)]
+    pub origin: Option<Origin>,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+}
+
+impl ResultFrame {
+    pub fn cancelled(&self) -> bool {
+        matches!(
+            self.terminal_reason.as_str(),
+            TERMINAL_ABORTED_STREAMING | TERMINAL_ABORTED_TOOLS
+        )
+    }
+
+    pub fn max_turns(&self) -> bool {
+        self.subtype == RESULT_ERROR_MAX_TURNS || self.terminal_reason == TERMINAL_MAX_TURNS
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StreamEventFrame {
+    #[serde(default, deserialize_with = "raw")]
+    pub event: Raw,
+    #[serde(default)]
+    pub parent_tool_use_id: Option<String>,
+    #[serde(default, deserialize_with = "zero")]
+    pub user_message_uuid: String,
+    #[serde(default, deserialize_with = "strings")]
+    pub user_message_uuids: Vec<String>,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+}
+
+#[derive(Default, Deserialize)]
+struct StreamDelta {
+    #[serde(default, rename = "type", deserialize_with = "zero")]
+    kind: String,
+    #[serde(default, deserialize_with = "zero")]
+    text: String,
+    #[serde(default, deserialize_with = "zero")]
+    thinking: String,
+}
+
+#[derive(Default, Deserialize)]
+struct StreamEvent {
+    #[serde(default, rename = "type", deserialize_with = "zero")]
+    kind: String,
+    #[serde(default, deserialize_with = "structure")]
+    delta: StreamDelta,
+}
+
+impl StreamEventFrame {
+    pub fn stream_delta(&self) -> Option<(&'static str, String)> {
+        let event: StreamEvent = source::decode(self.event.as_deref()?.get()).ok()?;
+        if event.kind != "content_block_delta" {
+            return None;
+        }
+        match event.delta.kind.as_str() {
+            "text_delta" => Some(("text", event.delta.text)),
+            "thinking_delta" => Some(("thinking", event.delta.thinking)),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CommandLifecycleFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub command_uuid: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub state: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ToolProgressFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_name: String,
+    #[serde(default)]
+    pub parent_tool_use_id: Option<String>,
+    #[serde(default, deserialize_with = "zero")]
+    pub elapsed_time_seconds: f64,
+    #[serde(default, deserialize_with = "zero")]
+    pub task_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct ConversationResetFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub new_conversation_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct McpServer {
+    #[serde(default, deserialize_with = "zero")]
+    pub name: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub status: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct InitFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub model: String,
+    #[serde(default, deserialize_with = "optional_strings")]
+    pub tools: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "structures")]
+    pub mcp_servers: Vec<McpServer>,
+    #[serde(default, rename = "permissionMode", deserialize_with = "zero")]
+    pub permission_mode: String,
+    #[serde(default, deserialize_with = "strings")]
+    pub capabilities: Vec<String>,
+    #[serde(default, deserialize_with = "zero")]
+    pub claude_code_version: String,
+    #[serde(default, rename = "apiKeySource", deserialize_with = "zero")]
+    pub api_key_source: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub cwd: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct StatusFrame {
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub compact_result: Option<String>,
+    #[serde(default)]
+    pub compact_error: Option<String>,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+}
+
+impl StatusFrame {
+    pub fn compacting(&self) -> bool {
+        self.status.as_deref() == Some(STATUS_COMPACTING)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SessionStateFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub state: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct SystemNotice {
+    #[serde(default, deserialize_with = "zero")]
+    pub subtype: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(skip)]
+    pub raw: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TaskUsage {
+    #[serde(default, deserialize_with = "zero")]
+    pub total_tokens: i64,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_uses: i64,
+    #[serde(default, deserialize_with = "zero")]
+    pub duration_ms: i64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TaskStartedFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub task_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub description: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub task_type: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub subagent_type: String,
+    #[serde(default)]
+    pub is_backgrounded: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TaskProgressFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub task_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub description: String,
+    #[serde(default, deserialize_with = "structure")]
+    pub usage: TaskUsage,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TaskNotificationFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub task_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub status: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub output_file: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub summary: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+    #[serde(default)]
+    pub usage: Option<TaskUsage>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TaskPatch {
+    #[serde(default, deserialize_with = "zero")]
+    pub status: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub description: String,
+    #[serde(default)]
+    pub end_time: Option<i64>,
+    #[serde(default, deserialize_with = "zero")]
+    pub error: String,
+    #[serde(default)]
+    pub is_backgrounded: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct TaskUpdatedFrame {
+    #[serde(default, deserialize_with = "zero")]
+    pub task_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub session_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub uuid: String,
+    #[serde(default, deserialize_with = "structure")]
+    pub patch: TaskPatch,
+}
+
+impl TaskUpdatedFrame {
+    pub fn terminal(&self) -> bool {
+        terminal_task_status(&self.patch.status)
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct CanUseToolRequest {
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_name: String,
+    #[serde(default, deserialize_with = "raw")]
+    pub input: Raw,
+    #[serde(default, deserialize_with = "raw")]
+    pub permission_suggestions: Raw,
+    #[serde(default, deserialize_with = "zero")]
+    pub blocked_path: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub decision_reason: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub title: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub display_name: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub description: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub agent_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HookInput {
+    #[serde(default, deserialize_with = "zero")]
+    pub hook_event_name: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_name: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct HookCallbackRequest {
+    #[serde(default, deserialize_with = "zero")]
+    pub callback_id: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_use_id: String,
+    #[serde(default, deserialize_with = "structure")]
+    pub input: HookInput,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct McpMessageRequest {
+    #[serde(default, deserialize_with = "zero")]
+    pub server_name: String,
+    #[serde(default, deserialize_with = "raw")]
+    pub message: Raw,
 }

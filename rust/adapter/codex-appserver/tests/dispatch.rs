@@ -3,9 +3,9 @@ mod support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use oap_adapter::testkit::drain;
-use oap_adapter_codex_appserver::session::Session;
-use oap_protocol::{Message, MessageContent, MessageRole, MessageSubmitRequest};
+use oxap_adapter::testkit::drain;
+use oxap_adapter_codex_appserver::session::Session;
+use oxap_protocol::{Message, MessageContent, MessageRole, MessageSubmitRequest};
 use support::{adapter, request, Fake};
 
 fn open() -> (Arc<Fake>, Session) {
@@ -174,7 +174,7 @@ fn a_cancel_during_turn_start_waits_for_the_turn_as_go_does() {
     let next = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let session = Arc::new(
         adapter(&fake, |config| {
-            config.runtime = oap_adapter::runtime::Runtime::new(
+            config.runtime = oxap_adapter::runtime::Runtime::new(
                 || 1,
                 move |kind| {
                     format!(
@@ -205,14 +205,25 @@ fn a_cancel_during_turn_start_waits_for_the_turn_as_go_does() {
         })
     };
     arrivals.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (entered, started) = crossbeam_channel::bounded(0);
+    let (answered, settled) = crossbeam_channel::bounded(1);
     let cancelling = {
         let session = session.clone();
-        std::thread::spawn(move || session.cancel(&"run-2".into()))
+        std::thread::spawn(move || {
+            let _ = entered.send(());
+            let _ = answered.send(session.cancel(&"run-2".into()));
+        })
     };
-    std::thread::sleep(Duration::from_millis(200));
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    let early = settled.recv_timeout(Duration::from_millis(500));
+    assert!(
+        matches!(early, Err(crossbeam_channel::RecvTimeoutError::Timeout)),
+        "the cancel answered while turn/start was still in flight: {early:?}"
+    );
     release.send(()).unwrap();
     let run = submitting.join().unwrap().unwrap();
-    let answer = cancelling.join().unwrap();
+    let answer = settled.recv_timeout(Duration::from_secs(5)).unwrap();
+    cancelling.join().unwrap();
     assert_eq!(run.as_ref().map(|run| run.as_str()), Some("run-2"));
     assert_eq!(
         answer

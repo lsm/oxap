@@ -1,6 +1,6 @@
 {
   "name": "@oxap/sdk",
-  "version": "0.1.0-alpha.32",
+  "version": "0.1.0-alpha.33",
   "description": "TypeScript SDK for the Open Agent Protocol project's runtime, over its stdio protocol",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
@@ -39,8 +39,5 @@
     "lossless-json": "4.3.2",
     "nanoid": "^5.1.5",
     "ulid": "^3.0.2"
-  },
-  "optionalDependencies": {
-    "@oxap/cli": "0.1.0-alpha.32"
   }
 }

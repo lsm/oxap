@@ -18,9 +18,9 @@ import (
 	"os"
 	"time"
 
-	base "github.com/lsm/open-agent-protocol/go/adapter"
-	"github.com/lsm/open-agent-protocol/go/adapter/acp"
-	"github.com/lsm/open-agent-protocol/go/protocol"
+	base "github.com/lsm/oxap/go/adapter"
+	"github.com/lsm/oxap/go/adapter/acp"
+	"github.com/lsm/oxap/go/protocol"
 )
 
 type input struct {
@@ -132,7 +132,7 @@ def main():
     parser.add_argument('--output-dir', required=True, type=Path)
     output = parser.parse_args().output_dir.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    run(['cargo', 'build', '--manifest-path', 'rust/Cargo.toml', '-p', 'oap-adapter-acp',
+    run(['cargo', 'build', '--manifest-path', 'rust/Cargo.toml', '-p', 'oxap-adapter-acp',
          '--example', 'foundation'], output / 'rust-build.log')
     reference = output / 'reference.go'
     reference.write_text(GO)
@@ -256,7 +256,7 @@ for index, line in enumerate(sys.stdin):
     ]
     trace_path = output / 'model-switch.trace.json'
     trace_path.write_text(json.dumps(trace))
-    run(['cargo', 'build', '--manifest-path', 'rust/Cargo.toml', '-p', 'oap-validation',
+    run(['cargo', 'build', '--manifest-path', 'rust/Cargo.toml', '-p', 'oxap-validation',
          '--example', 'validate'], output / 'validator-build.log')
     run(['go', 'build', '-o', str(output / 'goap'), './go/cmd/goap'], output / 'goap-build.log')
     for name, command in [('go', [str(output / 'goap'), 'validate']),

@@ -127,6 +127,6 @@ The follow-up changes landed for `v0.1.0-alpha.33`: the `oxap` binary with its
 `@oxap/sdk`, `@oxap/client` and `oxap-sdk` package names.
 [docs/install.md](../docs/install.md) lists them and how to move.
 
-Still open after that release: the Zig package is still named `.makai`, and no
-release job publishes the hub client to npm, the Python SDK to PyPI or the
-Rust crates to crates.io.
+The release publishes those packages to npm, PyPI and crates.io. Of the Rust
+crates only `oxap-sdk` is published; the other sixteen keep `publish = false`.
+The Zig package is still named `.makai`.

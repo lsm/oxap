@@ -1,4 +1,4 @@
-# oap-adapter-hermes
+# oxap-adapter-hermes
 
 The Rust port of `go/adapter/hermes`: an OAP adapter over the Hermes TUI
 gateway's JSON-RPC on stdio, pinned by `harnesses/hermes.json` and judged by
@@ -7,9 +7,15 @@ the corpus in `fixtures/adapters/hermes-v0.23.1`.
 So far it holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's
 `DecodeServerRequest` and `RequestSessionID`, and `rpc::DIALECT`, the
-gateway's JSON-RPC over `oap_adapter::jsonrpc`: strict framing, params only as
+gateway's JSON-RPC over `oxap_adapter::jsonrpc`: strict framing, params only as
 an object or null, and an empty string id that parses but never marshals, as in
-Go's `internal/rpc`. `decode_notification` is Go's `DecodeNotification`: it
+Go's `internal/rpc`. `process::Process` starts the gateway as Go's `Start`
+does: its client checks every notification with `decode_notification`,
+refuses a response to no pending call, and takes only `gateway.ready` as the
+first observation; `close` releases stdin, then interrupts and finally kills a
+gateway that outlives the exit timeout. Go also runs `ValidateReady` on the
+ready payload; `decode_notification` has already refused every payload it
+would. `decode_notification` is Go's `DecodeNotification`: it
 takes only the `event` method, then checks the envelope's sequencing, the
 event type against Go's typed and observed vocabularies, and each typed
 payload, with Go's text for every refusal of its own. An approval request and
@@ -25,7 +31,7 @@ UTF-8 inside a string read as U+FFFD. Three of Go's `encoding/json` rules differ
   `SessionID`; these types match keys exactly.
 - Go's `json.Marshal` escapes `<`, `>`, `&`, U+2028 and U+2029, and serializing
   an `Event` here does not. The rpc layer writes every frame through
-  `oap_adapter::gojson::go_marshal`.
+  `oxap_adapter::gojson::go_marshal`.
 
 The gateway writes each member once, in its exact case, and the pinned corpus
 spells them so, so nothing on the wire observes the first two.

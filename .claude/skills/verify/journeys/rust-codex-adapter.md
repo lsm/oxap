@@ -4,19 +4,20 @@ Follow shared setup and the verification mutex in SKILL.md. Run from the
 repository root.
 
 ```sh
-(cd rust && cargo test -p oap-adapter-codex-appserver --test adapter)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test permissions)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test filepath)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test open)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test submit)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test dispatch)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test events)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test structured)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test items)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test approvals)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test inputs)
-(cd rust && cargo test -p oap-adapter-codex-appserver --test cancels)
-(cd rust && cargo test -p oap-adapter-codex-appserver --all-features)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test adapter)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test permissions)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test filepath)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test open)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test submit)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test dispatch)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test events)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test structured)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test items)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test approvals)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test inputs)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test cancels)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test usage)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --all-features)
 ```
 
 `tests/go_capabilities.json` is Go's `Probe` capabilities for the catalog
@@ -159,3 +160,10 @@ must fail. A cancel sent while `turn/start` is held at a gate waits for
 the turn and interrupts it, as Go printed: let the cancel take the lock
 without waiting, and the cancel-during-start test in `tests/dispatch.rs`
 must fail.
+
+`tests/go_usage.json` is printed by the same cancel generator, with an
+optional output schema per scenario, and `tests/usage.rs` replays it
+through the runner it shares with `tests/cancels.rs`. To see it bite,
+measure a run's usage from zero instead of the thread total at submit, or
+let an update for another turn leave the thread total alone: the replay
+test must fail.

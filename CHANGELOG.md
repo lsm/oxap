@@ -7,22 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
-## [0.1.0-alpha.33] - 2026-11-13
+## [0.1.0-alpha.33] - 2026-11-14
 
 ### Renamed to OXAP
 
 The first release under the OXAP names. The command is `oxap`, and `oapx`
 still works as an alias with the same arguments, exit codes and stdout. The
 repository is `lsm/oxap` and the Go module `github.com/lsm/oxap`. npm carries
-`@oxap/cli` and `@oxap/sdk`; the hub client `@oxap/client`, the Python SDK
-`oxap-sdk` and the `oxap-*` Rust crates are renamed but still used from the
-repository. New state goes to `~/.oxap`, an existing `~/.oapx` keeps working,
+`@oxap/cli`, `@oxap/sdk` and `@oxap/client`, PyPI carries `oxap-sdk`, and
+crates.io carries the Rust `oxap-sdk`; the other `oxap-*` crates are renamed
+but not published. New state goes to `~/.oxap`, an existing `~/.oapx` keeps working,
 and the runtime reads `OXAP_*` variables before `OAPX_*`. The v0.1 wire is
 unchanged. [docs/install.md](docs/install.md) says how to move from the old
 names.
 
+### Breaking changes
+
+- **rust: Rename the public crates oap-* to oxap-*** ([#1809](https://github.com/lsm/oxap/pull/1809))
+
+- The Rust crates are renamed: `oap-protocol`, `oap-validation`, `oap-adapter`, `oap-adapter-acp`, `oap-adapter-claude`, `oap-adapter-codex-appserver`, `oap-adapter-copilot`, `oap-adapter-deepseek`, `oap-adapter-hermes`, `oap-adapter-opencode`, `oap-adapter-pi`, `oap-harness`, `oap-provider-catalog`, `oap-binding`, `oap-serve`, `oap-conformance` and `oap-sdk` are now `oxap-*`, imported as `oxap_*`. No Go package changes.
+
+Agent: claude-opus-5-5 (effort: medium) via Claude
+
+- **sdk/python: Rename to oxap-sdk / oxap_sdk at 0.1.0a33** ([#1802](https://github.com/lsm/oxap/pull/1802))
+
+`sdk/python`: the distribution `oap-sdk` is now `oxap-sdk` and the import `oap_sdk` is now `oxap_sdk`. No alias is kept.
+
+Verified: the wheel journey fails on main (`oap_sdk-0.1.0` wheel) and passes on this branch. The resolver and usage journeys pass through `oxap_sdk` (Go/Rust/Zig validators: 0 disagreements). `mypy --strict` and the README type-check are clean.
+
+Agent: claude-opus-5-5 (effort: medium) via Claude
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+
+- **go: Move the module to github.com/lsm/oxap** ([#1798](https://github.com/lsm/oxap/pull/1798))
+
+`go/adapter`, `go/adapter/acp`, `go/adapter/adaptertest`, `go/adapter/claude`, `go/adapter/codex/appserver`, `go/adapter/copilot`, `go/adapter/deepseek`, `go/adapter/hermes`, `go/adapter/opencode`, `go/adapter/pi`, `go/binding`, `go/client`, `go/sdk`, `go/serve`, `go/serve/serveendpoint`, `go/serve/servehttp`, `go/serve/servestdio`
+
+The module path itself changed from `github.com/lsm/open-agent-protocol` to `github.com/lsm/oxap`; new releases must be fetched via the new path.
+
+Verified: `go build ./...` and `go vet ./...` clean; `go test ./go/validation ./go/sdk` pass; the verify-skill `go-usage.py` consumer compiles and runs against the new module path.
+
+Agent: swe-2-high (effort: medium) via HyperNeo
+
 ### Merged pull requests
 
+- **claude: Map an OAP level and compaction policy to Go's settings flags** ([#1826](https://github.com/lsm/oxap/pull/1826)): Follow-up to lsm/oxap#1824, which added the `apply_flag_settings` and `get_settings` requests.
+- **claude: Write the Rust flag-settings and get_settings requests as Go does** ([#1824](https://github.com/lsm/oxap/pull/1824)): The Rust Claude adapter now writes the last two host requests Go's session sends: `apply_flag_settings` and `get_settings`.
+- **claude: Port the Rust rpc codec so it reads and writes Go's frames** ([#1823](https://github.com/lsm/oxap/pull/1823)): Fifth C5 slice of the Rust Claude adapter port (#1439).
+- **claude: Write the Rust host's control answers and requests as Go marshals them** ([#1822](https://github.com/lsm/oxap/pull/1822)): The Rust Claude adapter now writes the control answers and requests Go's session sends to Claude Code, byte for byte as Go's `json.Marshal` writes them.
+- **claude: Keep the bytes of Rust observation frames' raw members as Go does** ([#1821](https://github.com/lsm/oxap/pull/1821)): The Rust Claude adapter's observation frames now keep every raw member's bytes as Go's `json.RawMessage` does.
+- **claude: Decode Rust control requests and write the user turn as Go does** ([#1820](https://github.com/lsm/oxap/pull/1820)): Fourth C5 slice of the Rust adapter port (#1439).
+- **claude: Decode Rust task frames as Go does** ([#1819](https://github.com/lsm/oxap/pull/1819)): Third C5 slice of the Rust adapter port (#1439).
+- **claude: Decode Rust lifecycle, tool progress, reset and system frames as Go does** ([#1818](https://github.com/lsm/oxap/pull/1818)): Second C5 slice of the Rust adapter port (#1439).
+- **release: Pack every channel on a dry run and publish each through OIDC** ([#1817](https://github.com/lsm/oxap/pull/1817)): Feature.
+- **codex: Assert a Rust cancel waits for turn/start, not a sleep** ([#1816](https://github.com/lsm/oxap/pull/1816)): Follow-up to #1806.
+- **hermes: Start and close the Rust Hermes gateway as Go does** ([#1815](https://github.com/lsm/oxap/pull/1815)): Third slice of the Rust Hermes adapter (C4 of #1439): start the Hermes gateway process and close it the way Go's `internal/rpc` does, so a session only begins after `gateway.ready` and a teardown never leaves a child or a pending call…
+- **claude: Decode Rust result and stream_event frames as Go does** ([#1813](https://github.com/lsm/oxap/pull/1813)): First C5 slice of the Rust adapter port (#1439).
+- **sdk/typescript: Keep the @oxap/cli pin in packaging only** ([#1812](https://github.com/lsm/oxap/pull/1812)): Bug fix: the next version bump would have turned root `npm ci` red.
+- **codex: Report a Rust Codex run's token usage as Go does** ([#1811](https://github.com/lsm/oxap/pull/1811)): The Rust Codex adapter now reports a run's token usage the way Go's session does.
+- **clients/ts: Ship the CC0 licence and say how an alpha publishes** ([#1810](https://github.com/lsm/oxap/pull/1810)): Follow-up to #1801, fixing three points from its cross-model review that landed after it merged.
+- **rust: Rename the public crates oap-* to oxap-*** ([#1809](https://github.com/lsm/oxap/pull/1809)): Cleanup for the OXAP rename: the 17 public Rust crates move from `oap-*` to `oxap-*`.
+- **serve: map SIGINT and SIGTERM on the Rust stdio hub as Go does** ([#1808](https://github.com/lsm/oxap/pull/1808)): Bug fix: `oap-rust-hub serve --stdio` ignored the shutdown protocol on SIGINT and SIGTERM.
+- **codex: Cancel a Rust Codex run as Go does** ([#1806](https://github.com/lsm/oxap/pull/1806)): The Rust Codex adapter now cancels a run the way Go's session does.
+- **hermes: Validate Rust Hermes events as Go's DecodeNotification does** ([#1805](https://github.com/lsm/oxap/pull/1805)): Second slice of the Rust Hermes adapter (C4 of #1439): validate each gateway event the way Go's `DecodeNotification` does, so a frame Go refuses never reaches the Rust session, and the refusal text matches Go's.
+- **npm: Publish the CLI as @oxap/cli over six @oxap/cli-<target> packages** ([#1803](https://github.com/lsm/oxap/pull/1803)): Feature: the npm CLI becomes `@oxap/cli`, so `npx @oxap/cli` and the SDK's optional `@oxap/cli` dependency both get a runtime.
+- **sdk/python: Rename to oxap-sdk / oxap_sdk at 0.1.0a33** ([#1802](https://github.com/lsm/oxap/pull/1802)): Renames the Python SDK to the OXAP name from Decision 0067.
+- **clients/ts: Rename the daemon client to @oxap/client and make it publishable** ([#1801](https://github.com/lsm/oxap/pull/1801)): Moves the TypeScript daemon client onto the OXAP release line as `@oxap/client`, version `0.1.0-alpha.33`, so it can be published next to the SDK and CLI.
+- **apidiffcheck: Load each side under the module path its own go.mod declares** ([#1800](https://github.com/lsm/oxap/pull/1800)): Bug fix.
+- **zig, go: Let an empty OXAP_* fall through and refuse disagreeing settings at open** ([#1799](https://github.com/lsm/oxap/pull/1799)): Follow-up to #1795 from cross-model review.
+- **go: Move the module to github.com/lsm/oxap** ([#1798](https://github.com/lsm/oxap/pull/1798)): The repository has been renamed to `lsm/oxap`; the Go module path and every import move to `github.com/lsm/oxap` in one atomic change so no intermediate tree is unbuildable.
+- **sdk/typescript: Publish the SDK as @oxap/sdk with the CLI as its runtime** ([#1797](https://github.com/lsm/oxap/pull/1797)): The TypeScript SDK now publishes as `@oxap/sdk`, keeping every public symbol, and takes its default runtime from the same-version `@oxap/cli`.
 - **hermes: Read Rust Hermes JSON-RPC frames by Go's rules** ([#1796](https://github.com/lsm/oxap/pull/1796)): First slice of the Rust Hermes adapter (C4 of #1439): the gateway's JSON-RPC dialect.
 - **zig: Keep state in .oxap and read OXAP_* first, still honouring the old names** ([#1795](https://github.com/lsm/oxap/pull/1795)): Feature, step 3 of the OXAP rename (Decision 0067).
 - **codex: Resolve a Rust Codex session's user input as Go does** ([#1794](https://github.com/lsm/oxap/pull/1794)): The Rust Codex adapter now resolves a pending user input request the way Go's session does.
