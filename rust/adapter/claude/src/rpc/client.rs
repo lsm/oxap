@@ -3,7 +3,7 @@ use std::fmt;
 use std::hash::{BuildHasher, RandomState};
 use std::io::{BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{after, never, select, Receiver, Sender, TrySendError};
@@ -93,7 +93,7 @@ pub struct IncomingControl {
     pub subtype: String,
     pub raw: Vec<u8>,
     pub value: ControlRequest,
-    client: Client,
+    client: Weak<Inner>,
     done: Mutex<bool>,
 }
 
@@ -135,10 +135,10 @@ impl IncomingControl {
         }
         let id = serde_json::Value::from(self.id.as_str());
         let envelope = format!(r#"{head},"request_id":{id}}}"#);
-        self.client
-            .write(control_response_message(envelope.as_bytes()), deadline)?;
+        let client = Client(self.client.upgrade().ok_or(ClientError::Closed)?);
+        client.write(control_response_message(envelope.as_bytes()), deadline)?;
         *done = true;
-        let mut state = lock(&self.client.0.state);
+        let mut state = lock(&client.0.state);
         if state
             .incoming
             .get(&self.id)
@@ -536,7 +536,7 @@ impl Client {
                     subtype: message.subtype,
                     raw: message.raw,
                     value,
-                    client: self.clone(),
+                    client: Arc::downgrade(&self.0),
                     done: Mutex::new(false),
                 });
                 let duplicate = {
@@ -602,3 +602,7 @@ impl Client {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/rpc_ownership.rs"]
+mod ownership;

@@ -30,7 +30,9 @@ stall bound fails the client. A reverse request from Claude Code arrives as
 that takes exactly one answer, success or error, written as Go writes it. A
 control cancel retires it, so a later answer is refused, and reaches the
 consumer as `Inbound::Cancel`. Reusing an id still awaiting its answer
-retires the client, as Go's does.
+retires the client, as Go's does. A request holds its client weakly, so one
+left unread in the queue does not keep a finished client alive; answering it
+after the client is gone fails with `Closed`.
 
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
