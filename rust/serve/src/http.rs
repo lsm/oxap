@@ -731,6 +731,7 @@ impl Served {
             ["sessions", id, "submit"] => ("POST", "submit", *id, ""),
             ["sessions", id, "resolve"] => ("POST", "resolve", *id, ""),
             ["sessions", id, "cancel"] => ("POST", "cancel", *id, ""),
+            ["sessions", id, "task-output"] => ("POST", "task_output", *id, ""),
             ["sessions", id, "settings"] => ("POST", "settings", *id, ""),
             ["sessions", id, "close"] => ("POST", "close", *id, ""),
             _ => return plain(404, "404 page not found\n"),
@@ -792,7 +793,10 @@ impl Served {
                 .collect();
         }
         let mut body = Vec::new();
-        if matches!(op, "submit" | "resolve" | "cancel" | "settings" | "open") {
+        if matches!(
+            op,
+            "submit" | "resolve" | "cancel" | "task_output" | "settings" | "open"
+        ) {
             body = match self.body(asked, stream, consumed) {
                 Ok(body) => body,
                 Err((status, error)) => return self.refused(status, error, session, None),
