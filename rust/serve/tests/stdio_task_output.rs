@@ -1,7 +1,16 @@
 mod support;
 
+use std::sync::Arc;
+
 use futures::executor::block_on;
-use oxap_adapter::OpenRequest;
+use oxap_adapter::memory::{Config as MemoryConfig, Memory};
+use oxap_adapter::{
+    Adapter, BoxFuture, Descriptor, EventStream, InteractionResolution, OpenRequest, Recovery,
+    ResumeRequest, Session, SubmitRequest, TaskOutputReader,
+};
+use oxap_protocol::{
+    MessageSubmitResponse, RunCancelResponse, RunId, SessionState, SessionTaskOutputResponse,
+};
 use oxap_serve::stdio::{serve, StdioOptions};
 use oxap_serve::{Hub, Registry};
 use serde_json::Value;
@@ -64,4 +73,95 @@ fn a_payload_or_envelope_naming_another_session_is_a_scope_mismatch() {
             "request session does not match the addressed session"
         );
     }
+}
+
+struct Reading(Box<dyn Session>);
+
+impl Session for Reading {
+    fn submit(
+        &self,
+        request: SubmitRequest,
+    ) -> BoxFuture<'_, (MessageSubmitResponse, EventStream)> {
+        self.0.submit(request)
+    }
+    fn state(&self) -> BoxFuture<'_, SessionState> {
+        self.0.state()
+    }
+    fn resolve(&self, resolution: InteractionResolution) -> BoxFuture<'_, ()> {
+        self.0.resolve(resolution)
+    }
+    fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {
+        self.0.cancel(run_id)
+    }
+    fn resume(&self, request: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
+        self.0.resume(request)
+    }
+    fn close(&self) -> BoxFuture<'_, ()> {
+        self.0.close()
+    }
+    fn task_output_reader(&self) -> Option<&dyn TaskOutputReader> {
+        Some(self)
+    }
+}
+
+impl TaskOutputReader for Reading {
+    fn task_output(
+        &self,
+        task_id: String,
+        from: Option<u64>,
+    ) -> BoxFuture<'_, SessionTaskOutputResponse> {
+        Box::pin(async move {
+            Ok(SessionTaskOutputResponse {
+                output: format!("{task_id} from {}", from.unwrap_or_default()),
+                next: 4,
+                truncated: false,
+                ended: true,
+            })
+        })
+    }
+}
+
+struct Readers(Arc<dyn Adapter>);
+
+impl Adapter for Readers {
+    fn probe(&self) -> BoxFuture<'_, Descriptor> {
+        self.0.probe()
+    }
+    fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn Session>> {
+        Box::pin(async move {
+            let inner = self.0.open(request).await?;
+            Ok(Box::new(Reading(inner)) as Box<dyn Session>)
+        })
+    }
+}
+
+#[test]
+fn a_session_that_reads_task_output_answers_with_its_output_in_reply_to_the_request() {
+    let mut registry = Registry::new();
+    registry
+        .register(
+            "memory",
+            Arc::new(Readers(Arc::new(Memory::new(MemoryConfig::default())))),
+        )
+        .unwrap();
+    let hub = Hub::new(registry);
+    block_on(hub.open(
+        "memory",
+        OpenRequest {
+            session_id: "s".into(),
+            ..OpenRequest::default()
+        },
+    ))
+    .unwrap();
+    let answered = answer(&hub, &request("s", "s"));
+    assert_eq!(answered["ok"], true, "{answered}");
+    let result = &answered["result"];
+    assert_eq!(result["type"], "session.task.output.response");
+    assert_eq!(result["in_reply_to"], "req-1");
+    assert_eq!(result["session_id"], "s");
+    assert_eq!(result["capability_revision"], "rev-cited");
+    assert_eq!(
+        result["payload"],
+        serde_json::json!({"output": "task-1 from 3", "next": 4, "truncated": false, "ended": true})
+    );
 }

@@ -38,6 +38,8 @@ vocabulary!(EnvelopeType {
     SESSION_MESSAGE_SUBMIT_RESPONSE = "session.message.submit.response",
     SESSION_COMPACT_REQUEST = "session.compact.request",
     SESSION_COMPACT_RESPONSE = "session.compact.response",
+    SESSION_TASK_OUTPUT_REQUEST = "session.task.output.request",
+    SESSION_TASK_OUTPUT_RESPONSE = "session.task.output.response",
     RUN_CANCEL_REQUEST = "run.cancel.request",
     RUN_CANCEL_RESPONSE = "run.cancel.response",
     RUN_STEER_APPLIED = "run.steer.applied",

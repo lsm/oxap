@@ -9,7 +9,8 @@ use oxap_adapter::{
 use oxap_binding::{Action, Entry, Record, Store};
 use oxap_protocol::{
     Admission, MessageSubmitResponse, RunCancelResponse, RunId, SessionCompactResponse, SessionId,
-    SessionState, SessionStatus, FEATURE_OPEN_REOPEN, FEATURE_SESSION_COMPACT,
+    SessionState, SessionStatus, SessionTaskOutputResponse, FEATURE_OPEN_REOPEN,
+    FEATURE_SESSION_COMPACT,
 };
 
 use crate::live::{self, Live, Subscription, DEFAULT_STREAM_QUEUE};
@@ -912,6 +913,28 @@ impl HubSession {
         Ok(self
             .session
             .cancel(run)
+            .await
+            .inspect_err(|err| self.closed_by(err))?)
+    }
+
+    pub async fn task_output(
+        &self,
+        task_id: String,
+        from: Option<u64>,
+    ) -> Result<SessionTaskOutputResponse, HubError> {
+        if self.is_closed() {
+            return Err(Error::SessionClosed.into());
+        }
+        if task_id.is_empty() {
+            return Err(Error::InvalidSubmission.into());
+        }
+        let reader = self.session.task_output_reader().ok_or_else(|| {
+            Error::UnsupportedControl(Box::new(UnsupportedControl::unadvertised(
+                "session.task.output",
+            )))
+        })?;
+        Ok(reader
+            .task_output(task_id, from)
             .await
             .inspect_err(|err| self.closed_by(err))?)
     }
