@@ -180,7 +180,9 @@ closes or its write fails after delivery, a barrier that cannot be queued
 fails its call with the queue overflow, and a consumer stalled past the bound
 fails the client. To see it bite, deliver a response before queueing its
 barrier: the ordering case must fail. Drop the stall arm in `enqueue`: the
-stalled-consumer case must fail.
+stalled-consumer case must fail. Keep the inbound sender in `Inner` instead of
+the read loop: the queue-ends case must fail, since Go closes the channel when
+its reader exits.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the

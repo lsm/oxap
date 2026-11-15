@@ -99,7 +99,6 @@ struct Inner {
     entropy: RandomState,
     writes: Sender<WriteRequest>,
     stall: Duration,
-    inbound_tx: Sender<Inbound>,
     inbound_rx: Receiver<Inbound>,
     done_rx: Receiver<()>,
     done_tx: Mutex<Option<Sender<()>>>,
@@ -163,7 +162,6 @@ impl Client {
                 .queue_stall
                 .filter(|stall| !stall.is_zero())
                 .unwrap_or(DEFAULT_QUEUE_STALL),
-            inbound_tx,
             inbound_rx,
             done_rx,
             done_tx: Mutex::new(Some(done_tx)),
@@ -180,7 +178,7 @@ impl Client {
         let reader_client = client.clone();
         std::thread::spawn(move || {
             let _reading = reading;
-            reader_client.read_loop(Decoder::new(BufReader::new(reader), limit))
+            reader_client.read_loop(Decoder::new(BufReader::new(reader), limit), inbound_tx)
         });
         client
     }
@@ -365,7 +363,7 @@ impl Client {
         }
     }
 
-    fn read_loop<R: std::io::BufRead>(&self, mut decoder: Decoder<R>) {
+    fn read_loop<R: std::io::BufRead>(&self, mut decoder: Decoder<R>, inbound: Sender<Inbound>) {
         let error = loop {
             lock(&self.0.state).decoding = true;
             let decoded = decoder.decode();
@@ -378,7 +376,7 @@ impl Client {
                 Ok(message) => message,
                 Err(error) => break error,
             };
-            let stop = self.route(message);
+            let stop = self.route(message, &inbound);
             self.settle_reader();
             if stop {
                 return;
@@ -403,7 +401,7 @@ impl Client {
         self.fail_pending(pending);
     }
 
-    fn route(&self, message: Message) -> bool {
+    fn route(&self, message: Message, inbound: &Sender<Inbound>) -> bool {
         match message.kind {
             Kind::ControlResponse => {
                 let Some(envelope) = message.response else {
@@ -412,7 +410,7 @@ impl Client {
                 let pending = lock(&self.0.state)
                     .pending
                     .contains_key(&envelope.request_id);
-                if pending && !self.barrier() {
+                if pending && !self.barrier(inbound) {
                     return true;
                 }
                 let outcome = if envelope.success {
@@ -430,12 +428,15 @@ impl Client {
             }
             Kind::Observation => {
                 match decode_observation(&message.message_type, &message.subtype, &message.raw) {
-                    Ok(value) => !self.enqueue(Inbound::Observation(ObservationMessage {
-                        message_type: message.message_type,
-                        subtype: message.subtype,
-                        raw: message.raw,
-                        value,
-                    })),
+                    Ok(value) => !self.enqueue(
+                        inbound,
+                        Inbound::Observation(ObservationMessage {
+                            message_type: message.message_type,
+                            subtype: message.subtype,
+                            raw: message.raw,
+                            value,
+                        }),
+                    ),
                     Err(error) => {
                         self.close_with(ClientError::Transport(error.to_string()));
                         true
@@ -446,14 +447,14 @@ impl Client {
         }
     }
 
-    fn enqueue(&self, message: Inbound) -> bool {
-        let message = match self.0.inbound_tx.try_send(message) {
+    fn enqueue(&self, inbound: &Sender<Inbound>, message: Inbound) -> bool {
+        let message = match inbound.try_send(message) {
             Ok(()) => return true,
             Err(TrySendError::Full(message)) => message,
             Err(TrySendError::Disconnected(_)) => return false,
         };
         select! {
-            send(self.0.inbound_tx, message) -> sent => sent.is_ok(),
+            send(inbound, message) -> sent => sent.is_ok(),
             recv(self.0.done_rx) -> _ => false,
             recv(after(self.0.stall)) -> _ => {
                 self.close_with(ClientError::ObservationQueue);
@@ -462,9 +463,9 @@ impl Client {
         }
     }
 
-    fn barrier(&self) -> bool {
+    fn barrier(&self, inbound: &Sender<Inbound>) -> bool {
         let (ack, acked) = crossbeam_channel::bounded::<()>(0);
-        if !self.enqueue(Inbound::Barrier(ack)) {
+        if !self.enqueue(inbound, Inbound::Barrier(ack)) {
             return false;
         }
         select! {
