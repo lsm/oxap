@@ -212,3 +212,17 @@ fn an_unconfigured_reverse_request_arrives_as_unknown() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_reverse_request_read_after_close_is_delivered_without_a_table_entry() {
+    let mut peer = peer();
+    peer.client.close();
+    peer.send(ASK);
+    let control = peer.control();
+    assert_eq!(
+        Arc::strong_count(&control),
+        1,
+        "the closed client kept the request in its table, so nothing will remove it"
+    );
+    assert_eq!(control.respond(None, None), Err(ClientError::Closed));
+}
