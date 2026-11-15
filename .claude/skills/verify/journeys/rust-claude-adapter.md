@@ -167,8 +167,8 @@ response bytes or remote error, responses out of order reach their own calls,
 an unmatched response is ignored, a deadline retires the client and fails
 every other pending call, and a hang-up or a malformed frame fails what is
 still pending while a response already read still settles its call. To see
-it bite, skip `fail_pending` in `close_with`: the case where one call's deadline
-fails the other must hang. Deliver a response to the oldest pending call instead of its id:
+it bite, leave the pending map in place in `close_with` instead of taking and failing
+it: the case where one call's deadline fails the other must hang. Deliver a response to the oldest pending call instead of its id:
 the out-of-order case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the

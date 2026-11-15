@@ -13,8 +13,26 @@ type Call = JoinHandle<Result<Option<Vec<u8>>, ClientError>>;
 
 struct Peer {
     client: Client,
-    from_client: BufReader<PipeReader>,
+    frames: Receiver<Message>,
     to_client: PipeWriter,
+}
+
+fn frames(from_client: PipeReader) -> Receiver<Message> {
+    let (sent, frames) = crossbeam_channel::unbounded();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(from_client);
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let Ok(message) = parse_message(line.trim_end_matches('\n').as_bytes()) else {
+                return;
+            };
+            if sent.send(message).is_err() {
+                return;
+            }
+            line.clear();
+        }
+    });
+    frames
 }
 
 fn peer() -> Peer {
@@ -22,20 +40,16 @@ fn peer() -> Peer {
     let (from_client, to_server) = std::io::pipe().unwrap();
     Peer {
         client: Client::new(from_server, to_server, ClientOptions::default()),
-        from_client: BufReader::new(from_client),
+        frames: frames(from_client),
         to_client,
     }
 }
 
-fn read_line(reader: &mut impl BufRead) -> Message {
-    let mut line = String::new();
-    reader.read_line(&mut line).unwrap();
-    parse_message(line.trim_end_matches('\n').as_bytes()).unwrap()
-}
-
 impl Peer {
     fn read(&mut self) -> Message {
-        read_line(&mut self.from_client)
+        self.frames
+            .recv_timeout(WAIT)
+            .expect("the client never wrote a frame")
     }
 
     fn send(&mut self, line: &str) {
@@ -158,13 +172,12 @@ fn an_error_response_settles_the_call_with_the_remote_detail() {
 
 #[test]
 fn a_call_past_its_deadline_retires_the_client() {
-    let mut peer = peer();
+    let peer = peer();
     let pending = call(
         &peer.client,
         INTERRUPT,
         Some(Instant::now() + Duration::from_millis(100)),
     );
-    peer.read();
     assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
     assert!(ended(peer.client.done()));
     assert_eq!(peer.client.err(), Some(ClientError::DeadlineExceeded));
@@ -172,15 +185,13 @@ fn a_call_past_its_deadline_retires_the_client() {
 
 #[test]
 fn a_deadline_on_one_call_fails_every_other_pending_call_without_a_closer() {
-    let mut peer = peer();
+    let peer = peer();
     let expiring = call(
         &peer.client,
         INITIALIZE,
         Some(Instant::now() + Duration::from_millis(200)),
     );
     let other = call(&peer.client, INTERRUPT, None);
-    peer.read();
-    peer.read();
     assert_eq!(settled(expiring), Err(ClientError::DeadlineExceeded));
     assert_eq!(settled(other), Err(ClientError::DeadlineExceeded));
 }
@@ -215,7 +226,9 @@ fn a_response_followed_by_a_malformed_frame_still_settles_its_call() {
         let (from_client, to_server) = std::io::pipe().unwrap();
         let client = Client::new(from_server, to_server, ClientOptions::default());
         std::thread::spawn(move || {
-            let request = read_line(&mut BufReader::new(from_client));
+            let Ok(request) = frames(from_client).recv_timeout(WAIT) else {
+                return;
+            };
             let lines = format!("{}\n[]\n", success(&request.request_id, "{}"));
             let _ = to_client.write_all(lines.as_bytes());
         });
