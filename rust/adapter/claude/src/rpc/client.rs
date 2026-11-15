@@ -67,6 +67,7 @@ type CallResult = Result<Option<Vec<u8>>, ClientError>;
 struct State {
     pending: HashMap<String, Sender<CallResult>>,
     decoding: bool,
+    routing: bool,
     closed: bool,
     err: Option<ClientError>,
     reader_err: Option<ClientError>,
@@ -126,6 +127,7 @@ impl Client {
             state: Mutex::new(State {
                 pending: HashMap::new(),
                 decoding: false,
+                routing: false,
                 closed: false,
                 err: None,
                 reader_err: None,
@@ -237,7 +239,7 @@ impl Client {
             let mut state = lock(&self.0.state);
             state.closed = true;
             state.err.get_or_insert(reason);
-            if state.decoding && self.0.unblocks_writes {
+            if state.routing || (state.decoding && self.0.unblocks_writes) {
                 HashMap::new()
             } else {
                 std::mem::take(&mut state.pending)
@@ -333,7 +335,11 @@ impl Client {
         let error = loop {
             lock(&self.0.state).decoding = true;
             let decoded = decoder.decode();
-            lock(&self.0.state).decoding = false;
+            {
+                let mut state = lock(&self.0.state);
+                state.decoding = false;
+                state.routing = decoded.is_ok();
+            }
             match decoded {
                 Ok(message) => self.route(message),
                 Err(error) => break error,
@@ -349,6 +355,7 @@ impl Client {
     fn settle_reader(&self) {
         let pending = {
             let mut state = lock(&self.0.state);
+            state.routing = false;
             if state.closed {
                 std::mem::take(&mut state.pending)
             } else {
