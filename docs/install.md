@@ -86,9 +86,10 @@ name would collide with the unrelated PyPI package. Class names such as
 ## Environment variables
 
 The runtime's own settings read an `OXAP_*` name first and fall back to the
-old `OAPX_*` name when the new one is unset: for example `OXAP_BASE_URL`,
-`OXAP_PROVIDER_SERVICE_URL`, `OXAP_PROVIDER_SERVICE_SECURITY`,
-`OXAP_PROVIDER_SERVICE_TOKEN` and `OXAP_KEYCHAIN_SERVICE`. The SDKs read
+old `OAPX_*` name when the new one is unset or empty: for example
+`OXAP_BASE_URL`, `OXAP_PROVIDER_SERVICE_URL`, `OXAP_PROVIDER_SERVICE_SECURITY`
+and `OXAP_KEYCHAIN_SERVICE`. `OXAP_PROVIDER_SERVICE_TOKEN` is the exception:
+once it is set it wins even when empty, and an empty token is refused. The SDKs read
 `OXAP_SDK_BINARY_PATH`, `OXAP_SDK_BINARY_URL` and `OXAP_SDK_BINARY_SHA256`
 first, and fall back to the old `OAP_SDK_BINARY_*` names. The old names are
 still read, so nothing breaks today; move to the new ones when convenient.
