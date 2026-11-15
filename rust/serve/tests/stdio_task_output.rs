@@ -111,6 +111,9 @@ impl TaskOutputReader for Reading {
         from: Option<u64>,
     ) -> BoxFuture<'_, SessionTaskOutputResponse> {
         Box::pin(async move {
+            if task_id == "gone" {
+                return Err(oxap_adapter::Error::SessionClosed);
+            }
             if from.is_some_and(|offset| offset > 4) {
                 return Err(oxap_adapter::Error::InvalidRequest);
             }
@@ -171,4 +174,34 @@ fn a_reader_answers_its_output_in_reply_and_its_refused_offset_as_invalid_reques
     assert_eq!(past_end["ok"], false);
     assert_eq!(past_end["error"]["code"], "invalid_request");
     assert_eq!(past_end["error"]["message"], "adapter: invalid request");
+}
+
+#[test]
+fn a_reader_reporting_its_session_closed_leaves_the_session_addressable_for_the_next_read() {
+    let mut registry = Registry::new();
+    registry
+        .register(
+            "memory",
+            Arc::new(Readers(Arc::new(Memory::new(MemoryConfig::default())))),
+        )
+        .unwrap();
+    let hub = Hub::new(registry);
+    block_on(hub.open(
+        "memory",
+        OpenRequest {
+            session_id: "s".into(),
+            ..OpenRequest::default()
+        },
+    ))
+    .unwrap();
+    let gone = request("s", "s").replace("\"task_id\":\"task-1\"", "\"task_id\":\"gone\"");
+    for attempt in 1..=2 {
+        let refused = answer(&hub, &gone);
+        assert_eq!(
+            refused["error"]["code"], "session_closed",
+            "read {attempt}: {refused}"
+        );
+        assert_eq!(refused["error"]["message"], "adapter: session closed");
+    }
+    assert!(hub.session(&"s".into()).is_ok());
 }
