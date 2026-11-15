@@ -799,15 +799,13 @@ impl Served {
         ) {
             body = match self.body(asked, stream, consumed) {
                 Ok(body) => body,
-                Err((status, error)) => return self.refused(status, error, session, None),
+                Err((status, error)) => return self.refused(status, error, "", None),
             };
             match serde_json::value::RawValue::from_string(
                 String::from_utf8_lossy(&body).into_owned(),
             ) {
                 Ok(raw) => request.request = Some(raw),
-                Err(err) => {
-                    return self.refused(400, stdio::wire("malformed_json", err), session, None)
-                }
+                Err(err) => return self.refused(400, stdio::wire("malformed_json", err), "", None),
             }
         }
         if op == "transcript" {
