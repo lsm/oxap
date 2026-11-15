@@ -187,11 +187,13 @@ fn an_error_response_settles_the_call_with_the_remote_detail() {
 
 #[test]
 fn a_call_past_its_deadline_retires_the_client() {
-    let peer = peer();
-    let pending = call(
-        &peer.client,
-        INTERRUPT,
-        Some(Instant::now() + Duration::from_millis(100)),
+    let mut peer = peer();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let pending = call(&peer.client, INTERRUPT, Some(deadline));
+    peer.read();
+    assert!(
+        Instant::now() < deadline,
+        "the request left after its deadline, so the call never waited on a reply"
     );
     assert_eq!(settled(pending), Err(ClientError::DeadlineExceeded));
     assert!(ended(peer.client.done()));
@@ -200,13 +202,16 @@ fn a_call_past_its_deadline_retires_the_client() {
 
 #[test]
 fn a_deadline_on_one_call_fails_every_other_pending_call_without_a_closer() {
-    let peer = peer();
-    let expiring = call(
-        &peer.client,
-        INITIALIZE,
-        Some(Instant::now() + Duration::from_millis(200)),
-    );
+    let mut peer = peer();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let expiring = call(&peer.client, INITIALIZE, Some(deadline));
+    peer.read();
     let other = call(&peer.client, INTERRUPT, None);
+    peer.read();
+    assert!(
+        Instant::now() < deadline,
+        "both requests must be pending before the first deadline passes"
+    );
     assert_eq!(settled(expiring), Err(ClientError::DeadlineExceeded));
     assert_eq!(settled(other), Err(ClientError::DeadlineExceeded));
 }
