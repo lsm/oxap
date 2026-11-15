@@ -21,6 +21,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_client)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_calls)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_observations)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_reverse)
 (cd rust && cargo test -p oxap-adapter-claude --all-features)
 ```
 
@@ -183,6 +184,18 @@ barrier: the ordering case must fail. Drop the stall arm in `enqueue`: the
 stalled-consumer case must fail. Keep the inbound sender in `Inner` instead of
 the read loop: the queue-ends case must fail, since Go closes the channel when
 its reader exits.
+
+`tests/rpc_reverse.rs` ports Go's reverse-control cases: a request from
+Claude Code arrives decoded and takes exactly one answer, an answer without a
+body goes back as `{}` and an error answer as Go's error envelope, byte for
+byte, a cancel retires the request and reaches the consumer, an answered id
+may arrive again, an id still awaiting its answer retires the client when
+reused, a request read after close is delivered but kept out of the table,
+and a request its subtype refuses retires the client. To see it bite,
+skip setting `done` after an answer: the one-answer case must fail. Skip the
+cancel's retirement: the cancel case must fail. Insert a duplicate id
+instead of refusing it: the reuse case must fail. Insert a request read after
+close into the table: the after-close case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the
