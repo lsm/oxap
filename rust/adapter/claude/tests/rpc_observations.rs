@@ -261,3 +261,25 @@ fn a_call_settles_on_its_response_when_its_write_fails_after_delivery() {
     release_write.send(()).unwrap();
     assert_eq!(settled(pending), Ok(Some(b"{}".to_vec())));
 }
+
+#[test]
+fn the_inbound_queue_ends_after_its_last_observation_once_the_reader_retires() {
+    let Peer {
+        client,
+        mut to_client,
+        ..
+    } = peer(ClientOptions::default());
+    to_client
+        .write_all(format!("{LIFECYCLE}\n").as_bytes())
+        .unwrap();
+    drop(to_client);
+    let inbound = client.inbound();
+    assert!(matches!(
+        inbound.recv_timeout(WAIT),
+        Ok(Inbound::Observation(_))
+    ));
+    assert_eq!(
+        inbound.recv_timeout(WAIT).map(|_| ()),
+        Err(RecvTimeoutError::Disconnected)
+    );
+}
