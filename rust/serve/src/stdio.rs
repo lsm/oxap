@@ -1956,11 +1956,13 @@ fn cancel(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
     )
 }
 
+const TASK_OUTPUT_REQUEST: oxap_protocol::EnvelopeType =
+    oxap_protocol::EnvelopeType::from_static("session.task.output.request");
+const TASK_OUTPUT_RESPONSE: oxap_protocol::EnvelopeType =
+    oxap_protocol::EnvelopeType::from_static("session.task.output.response");
+
 fn task_output(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
-    let envelope = gate_request(
-        request.request.as_deref(),
-        &[oxap_protocol::EnvelopeType::SESSION_TASK_OUTPUT_REQUEST],
-    )?;
+    let envelope = gate_request(request.request.as_deref(), &[TASK_OUTPUT_REQUEST])?;
     let asked: oxap_protocol::SessionTaskOutputRequest = payload(&envelope)?;
     let entry = session(hub, &request.session_id)?;
     if &asked.session_id != entry.id()
@@ -1991,7 +1993,7 @@ fn task_output(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
         )
     })?;
     let mut response = oxap_protocol::Envelope::new(
-        oxap_protocol::EnvelopeType::SESSION_TASK_OUTPUT_RESPONSE,
+        TASK_OUTPUT_RESPONSE,
         next_id(ids, "response"),
         &output,
     )
