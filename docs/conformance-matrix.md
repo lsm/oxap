@@ -46,7 +46,7 @@ missing; Rust 9 done, 4 partial, 6 missing.
 | Adapter corpora, byte for byte | yes | yes | no |
 | Hub differential (`goap` vs `oapx` stdio) | yes | yes | yes, against `oap-rust-hub`, every scenario |
 | HTTP hub differential (`goap serve --addr` vs Rust) | no | yes | yes, `TestHubHTTPAnswersGoapAndRustTheSame` against `oap-rust-hub serve --addr` |
-| Served backend parity (`TestBackendsMatchOapx`) | yes | yes | memory fixture only: `TestBackendsMatchRustHub` against `oap-rust-hub serve agent`; no Rust harness adapter yet |
+| Served backend parity (`TestBackendsMatchOapx`) | yes | yes | partial: `TestBackendsMatchRustHub` holds `oap-rust-hub serve agent` to goap on the memory, acp and deepseek fixtures; the other harness types are not served yet |
 
 The Zig semantic gate skips any code Zig has not implemented, so a green Zig
 gate does not mean Zig agrees with Go on every trace. No check compares all

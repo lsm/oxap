@@ -68,6 +68,9 @@ struct AdapterEntry {
     working_directory: String,
     journal_capacity: i64,
     any_directory: bool,
+    provider: String,
+    model: String,
+    max_tokens: Option<i64>,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -160,6 +163,25 @@ impl Registry {
                         .map_err(|err| refuse(err.to_string()))?,
                     )
                 }
+                "deepseek" => Arc::new(
+                    oxap_adapter_deepseek::adapter::Adapter::new(
+                        oxap_adapter_deepseek::adapter::Config {
+                            process: oxap_adapter_deepseek::process::ProcessConfig {
+                                path: entry.executable,
+                                args: entry.args,
+                                dir: entry.working_directory.clone(),
+                                env: Some(environment),
+                                ..Default::default()
+                            },
+                            provider: entry.provider,
+                            model: entry.model,
+                            max_tokens: entry.max_tokens,
+                            journal_capacity: entry.journal_capacity as usize,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|err| refuse(err.to_string()))?,
+                ),
                 harness if HARNESS_TYPES.contains(&harness) => {
                     return Err(refuse(format!(
                         "type {harness:?} is not built in the Rust tree yet"
