@@ -68,18 +68,18 @@ of the last release tag**, which is where the notes start.
 **1. Collect the pull requests merged since the last tag.**
 
 ```sh
-gh api repos/lsm/oxap/commits/v0.1.0-alpha.4 \
+gh api repos/lsm/oxap/commits/v0.1.0-alpha.32 \
   --jq .commit.committer.date
-# 2026-09-27T13:02:38Z
+# 2026-11-11T00:09:11Z
 
 gh pr list --repo lsm/oxap --state merged \
-  --search "merged:>2026-09-27T13:02:38Z" \
+  --search "merged:>2026-11-11T00:09:11Z" \
   --json number,title,body,mergedAt,url > prs.json
 ```
 
 **Use the full timestamp, not a date.** A calendar day is not a boundary: this
 release merges its changelog pull request and tags on the same day, so a bare
-`merged:>=2026-09-27` would re-collect everything merged earlier that day,
+`merged:>=2026-11-11` would re-collect everything merged earlier that day,
 including the pull requests the section you are about to write already listed.
 Use `>` and the tag's commit time to the second.
 
@@ -92,7 +92,7 @@ point.
 **2. Write the section.**
 
 ```sh
-node scripts/changelog-release.mjs --version 0.1.0-alpha.5 --date 2026-09-29 \
+node scripts/changelog-release.mjs --version 0.1.0-alpha.33 --date <YYYY-MM-DD> \
   --input prs.json --write
 ```
 
@@ -171,13 +171,13 @@ there.
 **4. Tag.**
 
 ```sh
-git tag v0.1.0-alpha.5 && git push origin v0.1.0-alpha.5
+git tag v0.1.0-alpha.33 && git push origin v0.1.0-alpha.33
 ```
 
 To check step 2 landed before you tag:
 
 ```sh
-node scripts/changelog-release.mjs --version 0.1.0-alpha.5 --check
+node scripts/changelog-release.mjs --version 0.1.0-alpha.33 --check
 ```
 
 That is the same check the release workflow runs, and it is what holds back
