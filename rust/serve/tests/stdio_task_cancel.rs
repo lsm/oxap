@@ -92,6 +92,9 @@ impl Session for Cancelling {
 impl TaskCanceller for Cancelling {
     fn cancel_task(&self, task_id: String) -> BoxFuture<'_, SessionTaskCancelResponse> {
         Box::pin(async move {
+            if task_id == "gone" {
+                return Err(oxap_adapter::Error::SessionClosed);
+            }
             Ok(SessionTaskCancelResponse {
                 outcome: if task_id == "done" {
                     "already_ended".into()
@@ -137,4 +140,25 @@ fn a_canceller_answers_its_outcome_in_reply_to_the_task_cancel_request() {
         assert_eq!(result["capability_revision"], "rev-cited");
         assert_eq!(result["payload"], serde_json::json!({ "outcome": outcome }));
     }
+}
+
+#[test]
+fn a_canceller_reporting_its_session_closed_leaves_the_session_addressable_for_the_next_cancel() {
+    let mut registry = Registry::new();
+    registry
+        .register(
+            "memory",
+            Arc::new(Cancellers(Arc::new(Memory::new(MemoryConfig::default())))),
+        )
+        .unwrap();
+    let hub = opened(registry);
+    for attempt in 1..=2 {
+        let refused = answer(&hub, &request("gone"));
+        assert_eq!(
+            refused["error"]["code"], "session_closed",
+            "cancel {attempt}: {refused}"
+        );
+        assert_eq!(refused["error"]["message"], "adapter: session closed");
+    }
+    assert!(hub.session(&"s".into()).is_ok());
 }

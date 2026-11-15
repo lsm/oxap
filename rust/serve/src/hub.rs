@@ -933,10 +933,7 @@ impl HubSession {
                 "session.task.output",
             )))
         })?;
-        Ok(reader
-            .task_output(task_id, from)
-            .await
-            .inspect_err(|err| self.closed_by(err))?)
+        Ok(reader.task_output(task_id, from).await?)
     }
 
     pub async fn cancel_task(
@@ -954,10 +951,7 @@ impl HubSession {
                 "session.task.cancel",
             )))
         })?;
-        Ok(canceller
-            .cancel_task(task_id)
-            .await
-            .inspect_err(|err| self.closed_by(err))?)
+        Ok(canceller.cancel_task(task_id).await?)
     }
 
     pub async fn close(&self) -> Result<(), HubError> {
