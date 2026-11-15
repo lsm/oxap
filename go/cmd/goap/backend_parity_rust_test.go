@@ -23,7 +23,7 @@ func TestBackendsMatchRustHub(t *testing.T) {
 	}
 	compared := 0
 	for _, dir := range cases {
-		if !servesOnlyMemory(t, dir) {
+		if !rustHubServes(t, dir) {
 			continue
 		}
 		compared++
@@ -44,11 +44,11 @@ func TestBackendsMatchRustHub(t *testing.T) {
 		})
 	}
 	if compared == 0 {
-		t.Fatal("no parity fixture serves only the memory adapter, so nothing was compared")
+		t.Fatal("no parity fixture serves only adapters oap-rust-hub has, so nothing was compared")
 	}
 }
 
-func servesOnlyMemory(t *testing.T, dir string) bool {
+func rustHubServes(t *testing.T, dir string) bool {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "registry.json"))
 	if err != nil {
@@ -67,7 +67,7 @@ func servesOnlyMemory(t *testing.T, dir string) bool {
 		if kind == "" {
 			kind = name
 		}
-		if kind != "memory" {
+		if kind != "memory" && kind != "acp" {
 			return false
 		}
 	}
