@@ -30,8 +30,8 @@ func TestBackendsMatchRustHub(t *testing.T) {
 		backend := fixtureBackend(t, dir)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			scenario := readLines(t, filepath.Join(dir, "scenario.jsonl"))
-			wantOut, _ := exchangeWithChild(t, dir, backend, scenario, goap, "serve", "agent")
-			gotOut, _ := exchangeWithChild(t, dir, backend, scenario, rust, "serve", "agent")
+			wantOut, wantChild := exchangeWithChild(t, dir, backend, scenario, goap, "serve", "agent")
+			gotOut, gotChild := exchangeWithChild(t, dir, backend, scenario, rust, "serve", "agent")
 			if len(wantOut) < len(scenario) {
 				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(wantOut), len(scenario))
 			}
@@ -40,6 +40,9 @@ func TestBackendsMatchRustHub(t *testing.T) {
 			}
 			if where := runOrderDifference(t, wantOut, gotOut); where != "" {
 				t.Errorf("oap-rust-hub orders a run differently: %s", where)
+			}
+			if missing, extra := childLineDifference(t, wantChild, gotChild); len(missing)+len(extra) > 0 {
+				t.Errorf("oap-rust-hub writes different data to its child\n--- only goap\n%s\n--- only oap-rust-hub\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
 			}
 		})
 	}
