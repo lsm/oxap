@@ -5,8 +5,8 @@ mod message;
 use std::fmt;
 
 pub use client::{
-    Client, ClientError, ClientOptions, Closer, Inbound, ObservationMessage,
-    DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_STALL,
+    CancelNotice, Client, ClientError, ClientOptions, Closer, Inbound, IncomingControl,
+    ObservationMessage, DEFAULT_QUEUE_CAPACITY, DEFAULT_QUEUE_STALL,
 };
 pub use codec::{Decoder, Encoder, DEFAULT_FRAME_LIMIT};
 pub use message::{

@@ -7,12 +7,13 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{after, never, select, Receiver, Sender, TrySendError};
+use serde_json::value::RawValue;
 
-use crate::native::{decode_observation, Observation};
+use crate::native::{decode_control_request, decode_observation, ControlRequest, Observation};
 
 use super::{
-    control_request_message, user_turn_message, Decoder, Encoder, Kind, Message,
-    DEFAULT_FRAME_LIMIT,
+    control_request_message, control_response_message, user_turn_message, Decoder, Encoder, Kind,
+    Message, DEFAULT_FRAME_LIMIT,
 };
 
 pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
@@ -23,8 +24,10 @@ pub type Closer = Box<dyn FnOnce() + Send>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientError {
     Closed,
+    ControlQueue,
     ObservationQueue,
     WriteQueue,
+    ReverseResolved,
     DeadlineExceeded,
     DuplicateRequestId(String),
     Remote { id: String, detail: String },
@@ -35,8 +38,12 @@ impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Closed => f.write_str("claude rpc: client closed"),
+            Self::ControlQueue => f.write_str("claude rpc: reverse control queue is full"),
             Self::ObservationQueue => f.write_str("claude rpc: observation queue is full"),
             Self::WriteQueue => f.write_str("claude rpc: write queue is full"),
+            Self::ReverseResolved => {
+                f.write_str("claude rpc: reverse control request already resolved")
+            }
             Self::DeadlineExceeded => f.write_str("context deadline exceeded"),
             Self::DuplicateRequestId(id) => {
                 write!(f, "claude rpc: request id is already active: {id}")
@@ -71,7 +78,76 @@ pub struct ObservationMessage {
 #[derive(Debug)]
 pub enum Inbound {
     Observation(ObservationMessage),
+    Control(Arc<IncomingControl>),
+    Cancel(CancelNotice),
     Barrier(Sender<()>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CancelNotice {
+    pub request_id: String,
+}
+
+pub struct IncomingControl {
+    pub id: String,
+    pub subtype: String,
+    pub raw: Vec<u8>,
+    pub value: ControlRequest,
+    client: Client,
+    done: Mutex<bool>,
+}
+
+impl fmt::Debug for IncomingControl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IncomingControl")
+            .field("id", &self.id)
+            .field("subtype", &self.subtype)
+            .finish_non_exhaustive()
+    }
+}
+
+impl IncomingControl {
+    pub fn respond(
+        &self,
+        response: Option<&RawValue>,
+        deadline: Option<Instant>,
+    ) -> Result<(), ClientError> {
+        let body = response.map_or("{}", RawValue::get);
+        self.answer(
+            &format!(r#"{{"response":{body},"subtype":"success""#),
+            deadline,
+        )
+    }
+
+    pub fn respond_error(
+        &self,
+        message: &str,
+        deadline: Option<Instant>,
+    ) -> Result<(), ClientError> {
+        let error = serde_json::Value::from(message);
+        self.answer(&format!(r#"{{"error":{error},"subtype":"error""#), deadline)
+    }
+
+    fn answer(&self, head: &str, deadline: Option<Instant>) -> Result<(), ClientError> {
+        let mut done = lock(&self.done);
+        if *done {
+            return Err(ClientError::ReverseResolved);
+        }
+        let id = serde_json::Value::from(self.id.as_str());
+        let envelope = format!(r#"{head},"request_id":{id}}}"#);
+        self.client
+            .write(control_response_message(envelope.as_bytes()), deadline)?;
+        *done = true;
+        let mut state = lock(&self.client.0.state);
+        if state
+            .incoming
+            .get(&self.id)
+            .is_some_and(|current| std::ptr::eq(Arc::as_ptr(current), self))
+        {
+            state.incoming.remove(&self.id);
+        }
+        Ok(())
+    }
 }
 
 struct WriteRequest {
@@ -86,6 +162,7 @@ type CallResult = Result<Option<Vec<u8>>, ClientError>;
 
 struct State {
     pending: HashMap<String, Sender<CallResult>>,
+    incoming: HashMap<String, Arc<IncomingControl>>,
     decoding: bool,
     routing: bool,
     closed: bool,
@@ -149,6 +226,7 @@ impl Client {
         let client = Self(Arc::new(Inner {
             state: Mutex::new(State {
                 pending: HashMap::new(),
+                incoming: HashMap::new(),
                 decoding: false,
                 routing: false,
                 closed: false,
@@ -271,6 +349,7 @@ impl Client {
             let mut state = lock(&self.0.state);
             state.closed = true;
             state.err.get_or_insert(reason);
+            state.incoming.clear();
             if state.routing || (state.decoding && self.0.unblocks_writes) {
                 HashMap::new()
             } else {
@@ -430,6 +509,7 @@ impl Client {
                 match decode_observation(&message.message_type, &message.subtype, &message.raw) {
                     Ok(value) => !self.enqueue(
                         inbound,
+                        ClientError::ObservationQueue,
                         Inbound::Observation(ObservationMessage {
                             message_type: message.message_type,
                             subtype: message.subtype,
@@ -443,11 +523,54 @@ impl Client {
                     }
                 }
             }
-            Kind::ControlRequest | Kind::ControlCancel => false,
+            Kind::ControlRequest => {
+                let value = match decode_control_request(&message.subtype, &message.raw) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.close_with(ClientError::Transport(error.to_string()));
+                        return true;
+                    }
+                };
+                let control = Arc::new(IncomingControl {
+                    id: message.request_id,
+                    subtype: message.subtype,
+                    raw: message.raw,
+                    value,
+                    client: self.clone(),
+                    done: Mutex::new(false),
+                });
+                let duplicate = {
+                    let mut state = lock(&self.0.state);
+                    let duplicate = state.incoming.contains_key(&control.id);
+                    if !duplicate {
+                        state.incoming.insert(control.id.clone(), control.clone());
+                    }
+                    duplicate
+                };
+                if duplicate {
+                    self.close_with(ClientError::DuplicateRequestId(control.id.clone()));
+                    return true;
+                }
+                !self.enqueue(
+                    inbound,
+                    ClientError::ControlQueue,
+                    Inbound::Control(control),
+                )
+            }
+            Kind::ControlCancel => {
+                let retired = lock(&self.0.state).incoming.remove(&message.request_id);
+                if let Some(control) = retired {
+                    *lock(&control.done) = true;
+                }
+                let notice = CancelNotice {
+                    request_id: message.request_id,
+                };
+                !self.enqueue(inbound, ClientError::ControlQueue, Inbound::Cancel(notice))
+            }
         }
     }
 
-    fn enqueue(&self, inbound: &Sender<Inbound>, message: Inbound) -> bool {
+    fn enqueue(&self, inbound: &Sender<Inbound>, overflow: ClientError, message: Inbound) -> bool {
         let message = match inbound.try_send(message) {
             Ok(()) => return true,
             Err(TrySendError::Full(message)) => message,
@@ -457,7 +580,7 @@ impl Client {
             send(inbound, message) -> sent => sent.is_ok(),
             recv(self.0.done_rx) -> _ => false,
             recv(after(self.0.stall)) -> _ => {
-                self.close_with(ClientError::ObservationQueue);
+                self.close_with(overflow);
                 false
             }
         }
@@ -465,7 +588,11 @@ impl Client {
 
     fn barrier(&self, inbound: &Sender<Inbound>) -> bool {
         let (ack, acked) = crossbeam_channel::bounded::<()>(0);
-        if !self.enqueue(inbound, Inbound::Barrier(ack)) {
+        if !self.enqueue(
+            inbound,
+            ClientError::ObservationQueue,
+            Inbound::Barrier(ack),
+        ) {
             return false;
         }
         select! {

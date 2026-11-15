@@ -25,8 +25,12 @@ observation into `Inbound::Observation`, and a response to a pending call
 first queues an `Inbound::Barrier` and waits for the consumer to release it,
 so the call settles only after the observations that preceded its response,
 as Go's barrier orders them. A consumer that leaves the queue full past the
-stall bound fails the client. Reverse requests are the next slice, so nothing
-drives a Claude Code process through it yet.
+stall bound fails the client. A reverse request from Claude Code arrives as
+`Inbound::Control`, an `IncomingControl` decoded by `decode_control_request`
+that takes exactly one answer, success or error, written as Go writes it. A
+control cancel retires it, so a later answer is refused, and reaches the
+consumer as `Inbound::Cancel`. Reusing an id still awaiting its answer
+retires the client, as Go's does.
 
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
