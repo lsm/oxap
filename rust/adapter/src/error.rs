@@ -53,6 +53,8 @@ pub enum Error {
     RunActive,
     #[error("adapter: invalid submission")]
     InvalidSubmission,
+    #[error("adapter: invalid request")]
+    InvalidRequest,
     #[error("adapter: run not found")]
     RunNotFound,
     #[error("adapter: replay cursor is newer than the run")]

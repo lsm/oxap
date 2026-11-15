@@ -1980,6 +1980,7 @@ fn task_output(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
         use oxap_adapter::Error;
         wire(
             match &err {
+                crate::HubError::Adapter(Error::InvalidRequest) => "invalid_request",
                 crate::HubError::Adapter(Error::InvalidSubmission) => "invalid_submission",
                 crate::HubError::Adapter(
                     Error::UnsupportedInput
@@ -1992,12 +1993,9 @@ fn task_output(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
             err,
         )
     })?;
-    let mut response = oxap_protocol::Envelope::new(
-        TASK_OUTPUT_RESPONSE,
-        next_id(ids, "response"),
-        &output,
-    )
-    .map_err(|err| wire("internal", err))?;
+    let mut response =
+        oxap_protocol::Envelope::new(TASK_OUTPUT_RESPONSE, next_id(ids, "response"), &output)
+            .map_err(|err| wire("internal", err))?;
     response.in_reply_to = Some(envelope.id.clone());
     response.session_id = Some(entry.id().clone());
     response.capability_revision = envelope.capability_revision.clone();

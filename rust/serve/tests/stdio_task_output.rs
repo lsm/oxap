@@ -111,6 +111,9 @@ impl TaskOutputReader for Reading {
         from: Option<u64>,
     ) -> BoxFuture<'_, SessionTaskOutputResponse> {
         Box::pin(async move {
+            if from.is_some_and(|offset| offset > 4) {
+                return Err(oxap_adapter::Error::InvalidRequest);
+            }
             Ok(SessionTaskOutputResponse {
                 output: format!("{task_id} from {}", from.unwrap_or_default()),
                 next: 4,
@@ -136,7 +139,7 @@ impl Adapter for Readers {
 }
 
 #[test]
-fn a_session_that_reads_task_output_answers_with_its_output_in_reply_to_the_request() {
+fn a_reader_answers_its_output_in_reply_and_its_refused_offset_as_invalid_request() {
     let mut registry = Registry::new();
     registry
         .register(
@@ -164,4 +167,8 @@ fn a_session_that_reads_task_output_answers_with_its_output_in_reply_to_the_requ
         result["payload"],
         serde_json::json!({"output": "task-1 from 3", "next": 4, "truncated": false, "ended": true})
     );
+    let past_end = answer(&hub, &request("s", "s").replace("\"from\":3", "\"from\":9"));
+    assert_eq!(past_end["ok"], false);
+    assert_eq!(past_end["error"]["code"], "invalid_request");
+    assert_eq!(past_end["error"]["message"], "adapter: invalid request");
 }
