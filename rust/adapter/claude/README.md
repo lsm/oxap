@@ -20,9 +20,13 @@ refusal or EOF becomes the client's error. `call` writes a control request
 under a `req_<n>_<hex>` id, as Go's `mintID` does, and settles with that id's
 response bytes or its remote error. A call past its deadline retires the
 client as a cancelled context does, and every call still pending when the
-client ends fails with the client's error. The reader delivers control
-responses only: the observation queue with its barrier, and reverse requests,
-are the next slices, so nothing drives a Claude Code process through it yet.
+client ends fails with the client's error. The reader decodes each
+observation into `Inbound::Observation`, and a response to a pending call
+first queues an `Inbound::Barrier` and waits for the consumer to release it,
+so the call settles only after the observations that preceded its response,
+as Go's barrier orders them. A consumer that leaves the queue full past the
+stall bound fails the client. Reverse requests are the next slice, so nothing
+drives a Claude Code process through it yet.
 
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:

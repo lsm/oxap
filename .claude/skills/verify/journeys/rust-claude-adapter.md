@@ -20,6 +20,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_client)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_calls)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_observations)
 (cd rust && cargo test -p oxap-adapter-claude --all-features)
 ```
 
@@ -170,6 +171,16 @@ still pending while a response already read still settles its call. To see
 it bite, leave the pending map in place in `close_with` instead of taking and failing
 it: the case where one call's deadline fails the other must hang. Deliver a response to the oldest pending call instead of its id:
 the out-of-order case must fail.
+
+`tests/rpc_observations.rs` ports the observation and barrier cases: an
+observation carries its type, bytes and decoded value, a frame its type
+refuses retires the client, a response waits behind a barrier queued after the
+observations before it, a parked response still settles when the client
+closes or its write fails after delivery, a barrier that cannot be queued
+fails its call with the queue overflow, and a consumer stalled past the bound
+fails the client. To see it bite, deliver a response before queueing its
+barrier: the ordering case must fail. Drop the stall arm in `enqueue`: the
+stalled-consumer case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the

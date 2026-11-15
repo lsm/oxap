@@ -4,9 +4,11 @@ use std::hash::{BuildHasher, RandomState};
 use std::io::{BufReader, Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{after, never, select, Receiver, Sender, TrySendError};
+
+use crate::native::{decode_observation, Observation};
 
 use super::{
     control_request_message, user_turn_message, Decoder, Encoder, Kind, Message,
@@ -14,12 +16,14 @@ use super::{
 };
 
 pub const DEFAULT_QUEUE_CAPACITY: usize = 64;
+pub const DEFAULT_QUEUE_STALL: Duration = Duration::from_secs(30);
 
 pub type Closer = Box<dyn FnOnce() + Send>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ClientError {
     Closed,
+    ObservationQueue,
     WriteQueue,
     DeadlineExceeded,
     DuplicateRequestId(String),
@@ -31,6 +35,7 @@ impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Closed => f.write_str("claude rpc: client closed"),
+            Self::ObservationQueue => f.write_str("claude rpc: observation queue is full"),
             Self::WriteQueue => f.write_str("claude rpc: write queue is full"),
             Self::DeadlineExceeded => f.write_str("context deadline exceeded"),
             Self::DuplicateRequestId(id) => {
@@ -51,7 +56,22 @@ pub struct ClientOptions {
     pub frame_limit: usize,
     pub queue_capacity: usize,
     pub write_queue_capacity: usize,
+    pub queue_stall: Option<Duration>,
     pub closer: Option<Closer>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObservationMessage {
+    pub message_type: String,
+    pub subtype: String,
+    pub raw: Vec<u8>,
+    pub value: Observation,
+}
+
+#[derive(Debug)]
+pub enum Inbound {
+    Observation(ObservationMessage),
+    Barrier(Sender<()>),
 }
 
 struct WriteRequest {
@@ -78,6 +98,9 @@ struct Inner {
     counter: AtomicU64,
     entropy: RandomState,
     writes: Sender<WriteRequest>,
+    stall: Duration,
+    inbound_tx: Sender<Inbound>,
+    inbound_rx: Receiver<Inbound>,
     done_rx: Receiver<()>,
     done_tx: Mutex<Option<Sender<()>>>,
     read_done: Receiver<()>,
@@ -119,6 +142,7 @@ impl Client {
         let capacity = or_default(options.queue_capacity, DEFAULT_QUEUE_CAPACITY);
         let (writes, write_rx) =
             crossbeam_channel::bounded(or_default(options.write_queue_capacity, capacity));
+        let (inbound_tx, inbound_rx) = crossbeam_channel::bounded(capacity);
         let (done_tx, done_rx) = crossbeam_channel::bounded(0);
         let (reading, read_done) = crossbeam_channel::bounded::<()>(0);
         let (closed_tx, closed_rx) = crossbeam_channel::bounded::<()>(0);
@@ -135,6 +159,12 @@ impl Client {
             counter: AtomicU64::new(0),
             entropy: RandomState::new(),
             writes,
+            stall: options
+                .queue_stall
+                .filter(|stall| !stall.is_zero())
+                .unwrap_or(DEFAULT_QUEUE_STALL),
+            inbound_tx,
+            inbound_rx,
             done_rx,
             done_tx: Mutex::new(Some(done_tx)),
             read_done,
@@ -153,6 +183,10 @@ impl Client {
             reader_client.read_loop(Decoder::new(BufReader::new(reader), limit))
         });
         client
+    }
+
+    pub fn inbound(&self) -> Receiver<Inbound> {
+        self.0.inbound_rx.clone()
     }
 
     pub fn done(&self) -> Receiver<()> {
@@ -340,11 +374,15 @@ impl Client {
                 state.decoding = false;
                 state.routing = decoded.is_ok();
             }
-            match decoded {
-                Ok(message) => self.route(message),
+            let message = match decoded {
+                Ok(message) => message,
                 Err(error) => break error,
-            }
+            };
+            let stop = self.route(message);
             self.settle_reader();
+            if stop {
+                return;
+            }
         };
         let reason = ClientError::Transport(error.to_string());
         lock(&self.0.state).reader_err = Some(reason.clone());
@@ -365,20 +403,74 @@ impl Client {
         self.fail_pending(pending);
     }
 
-    fn route(&self, message: Message) {
-        let (Kind::ControlResponse, Some(envelope)) = (message.kind, message.response) else {
-            return;
-        };
-        let outcome = if envelope.success {
-            Ok(envelope.response)
-        } else {
-            Err(ClientError::Remote {
-                id: envelope.request_id.clone(),
-                detail: envelope.error,
-            })
-        };
-        if let Some(respond) = lock(&self.0.state).pending.remove(&envelope.request_id) {
-            let _ = respond.send(outcome);
+    fn route(&self, message: Message) -> bool {
+        match message.kind {
+            Kind::ControlResponse => {
+                let Some(envelope) = message.response else {
+                    return false;
+                };
+                let pending = lock(&self.0.state)
+                    .pending
+                    .contains_key(&envelope.request_id);
+                if pending && !self.barrier() {
+                    return true;
+                }
+                let outcome = if envelope.success {
+                    Ok(envelope.response)
+                } else {
+                    Err(ClientError::Remote {
+                        id: envelope.request_id.clone(),
+                        detail: envelope.error,
+                    })
+                };
+                if let Some(respond) = lock(&self.0.state).pending.remove(&envelope.request_id) {
+                    let _ = respond.send(outcome);
+                }
+                false
+            }
+            Kind::Observation => {
+                match decode_observation(&message.message_type, &message.subtype, &message.raw) {
+                    Ok(value) => !self.enqueue(Inbound::Observation(ObservationMessage {
+                        message_type: message.message_type,
+                        subtype: message.subtype,
+                        raw: message.raw,
+                        value,
+                    })),
+                    Err(error) => {
+                        self.close_with(ClientError::Transport(error.to_string()));
+                        true
+                    }
+                }
+            }
+            Kind::ControlRequest | Kind::ControlCancel => false,
         }
+    }
+
+    fn enqueue(&self, message: Inbound) -> bool {
+        let message = match self.0.inbound_tx.try_send(message) {
+            Ok(()) => return true,
+            Err(TrySendError::Full(message)) => message,
+            Err(TrySendError::Disconnected(_)) => return false,
+        };
+        select! {
+            send(self.0.inbound_tx, message) -> sent => sent.is_ok(),
+            recv(self.0.done_rx) -> _ => false,
+            recv(after(self.0.stall)) -> _ => {
+                self.close_with(ClientError::ObservationQueue);
+                false
+            }
+        }
+    }
+
+    fn barrier(&self) -> bool {
+        let (ack, acked) = crossbeam_channel::bounded::<()>(0);
+        if !self.enqueue(Inbound::Barrier(ack)) {
+            return false;
+        }
+        select! {
+            recv(acked) -> _ => {}
+            recv(self.0.done_rx) -> _ => {}
+        }
+        true
     }
 }
