@@ -100,6 +100,15 @@ impl Read for Held {
 
 #[test]
 fn a_third_signal_ends_serving_while_an_earlier_one_is_parked() {
+    third_signal(false);
+}
+
+#[test]
+fn a_third_signal_ends_serving_while_a_shutdown_request_is_parked() {
+    third_signal(true);
+}
+
+fn third_signal(requested: bool) {
     let (entered, parked) = mpsc::channel();
     let (released, release) = mpsc::channel();
     let gate = Arc::new(Gate {
@@ -140,22 +149,31 @@ fn a_third_signal_ends_serving_while_an_earlier_one_is_parked() {
             &StdioOptions::default(),
         ));
     });
-    let first = signals.clone();
-    std::thread::spawn(move || first.signal(1));
-    parked
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the first signal never reached the session");
     reads.recv_timeout(Duration::from_secs(10)).unwrap();
-    input
-        .send(b"{\"id\":1,\"op\":\"open\",\"adapter\":\"memory\"}\n".to_vec())
-        .unwrap();
-    reads.recv_timeout(Duration::from_secs(10)).unwrap();
+    if requested {
+        input
+            .send(b"{\"id\":1,\"op\":\"shutdown\"}\n".to_vec())
+            .unwrap();
+        parked
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the shutdown request never reached the session");
+    } else {
+        let first = signals.clone();
+        std::thread::spawn(move || first.signal(1));
+        parked
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the first signal never reached the session");
+        input
+            .send(b"{\"id\":1,\"op\":\"open\",\"adapter\":\"memory\"}\n".to_vec())
+            .unwrap();
+        reads.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
     assert!(signals.signal(3).is_none());
     let ended = served.recv_timeout(Duration::from_secs(10));
     let _ = released.send(());
     assert!(
         ended.is_ok(),
-        "the third signal did not end serving while the first was parked"
+        "the third signal did not end serving while a shutdown was parked"
     );
     assert!(ended.unwrap().is_ok(), "third signal must return Ok");
 }
