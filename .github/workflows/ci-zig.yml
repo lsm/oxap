@@ -602,8 +602,8 @@ jobs:
           cargo build --quiet --manifest-path rust/Cargo.toml -p oxap-conformance --example endpoint_conformance
           go build -o "$RUNNER_TEMP/goap" ./go/cmd/goap
           runner="$PWD/rust/target/debug/examples/endpoint_conformance"
-          "$runner" "$PWD/rust/target/debug/oap-rust-hub" serve agent > "$RUNNER_TEMP/rust-report.json"
-          "$runner" "$RUNNER_TEMP/goap" serve agent > "$RUNNER_TEMP/go-report.json"
+          "$runner" "$PWD/rust/target/debug/oap-rust-hub" serve agent
+          "$runner" "$RUNNER_TEMP/goap" serve agent
 
       - name: Tests leave no credential store in the checkout
         if: always()
