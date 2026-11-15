@@ -192,6 +192,16 @@ pub trait Session: Send + Sync {
     fn task_output_reader(&self) -> Option<&dyn TaskOutputReader> {
         None
     }
+    fn task_canceller(&self) -> Option<&dyn TaskCanceller> {
+        None
+    }
+}
+
+pub trait TaskCanceller: Send + Sync {
+    fn cancel_task(
+        &self,
+        task_id: String,
+    ) -> BoxFuture<'_, oxap_protocol::SessionTaskCancelResponse>;
 }
 
 pub trait TaskOutputReader: Send + Sync {

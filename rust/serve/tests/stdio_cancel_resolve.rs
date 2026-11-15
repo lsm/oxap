@@ -96,7 +96,7 @@ fn a_request_envelope_is_required_well_formed_schematic_and_of_the_ops_type() {
     assert_eq!(mismatch["error"]["code"], "type_mismatch");
     assert_eq!(
         mismatch["error"]["message"],
-        "op expects run.cancel.request, got session.state.request"
+        "op expects run.cancel.request or session.task.cancel.request, got session.state.request"
     );
 }
 

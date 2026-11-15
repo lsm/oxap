@@ -1928,11 +1928,22 @@ fn rollback_run(
     Ok(settled)
 }
 
+const TASK_CANCEL_REQUEST: oxap_protocol::EnvelopeType =
+    oxap_protocol::EnvelopeType::from_static("session.task.cancel.request");
+const TASK_CANCEL_RESPONSE: oxap_protocol::EnvelopeType =
+    oxap_protocol::EnvelopeType::from_static("session.task.cancel.response");
+
 fn cancel(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
     let envelope = gate_request(
         request.request.as_deref(),
-        &[oxap_protocol::EnvelopeType::RUN_CANCEL_REQUEST],
+        &[
+            oxap_protocol::EnvelopeType::RUN_CANCEL_REQUEST,
+            TASK_CANCEL_REQUEST,
+        ],
     )?;
+    if envelope.envelope_type == TASK_CANCEL_REQUEST {
+        return cancel_task(hub, request, &envelope, ids);
+    }
     let asked: oxap_protocol::RunCancelRequest = payload(&envelope)?;
     let entry = session(hub, &request.session_id)?;
     if &asked.session_id != entry.id() {
@@ -1956,6 +1967,66 @@ fn cancel(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
     )
 }
 
+fn cancel_task(
+    hub: &Hub,
+    request: &Request,
+    envelope: &oxap_protocol::Envelope,
+    ids: &Ids,
+) -> Answer {
+    let asked: oxap_protocol::SessionTaskCancelRequest = payload(envelope)?;
+    let entry = session(hub, &request.session_id)?;
+    if !addresses(envelope, &asked.session_id, entry.id()) {
+        return Err(wire(
+            "scope_mismatch",
+            "request session does not match the addressed session",
+        ));
+    }
+    let ack = block_on(entry.cancel_task(asked.task_id)).map_err(|err| {
+        use oxap_adapter::Error;
+        wire(
+            match &err {
+                crate::HubError::Adapter(
+                    Error::UnsupportedInput
+                    | Error::UnsupportedControl(_)
+                    | Error::DegradedControl(_),
+                ) => "unsupported_feature",
+                crate::HubError::Adapter(Error::InvalidSubmission) => "invalid_submission",
+                crate::HubError::Adapter(Error::SessionClosed) => "session_closed",
+                _ => "internal",
+            },
+            err,
+        )
+    })?;
+    session_reply(TASK_CANCEL_RESPONSE, envelope, entry.id(), &ack, ids)
+}
+
+fn addresses(
+    envelope: &oxap_protocol::Envelope,
+    payload: &oxap_protocol::SessionId,
+    addressed: &oxap_protocol::SessionId,
+) -> bool {
+    payload == addressed
+        && envelope
+            .session_id
+            .as_ref()
+            .is_none_or(|id| id.as_str().is_empty() || id == addressed)
+}
+
+fn session_reply(
+    kind: oxap_protocol::EnvelopeType,
+    request: &oxap_protocol::Envelope,
+    session: &oxap_protocol::SessionId,
+    body: &impl Serialize,
+    ids: &Ids,
+) -> Answer {
+    let mut response = oxap_protocol::Envelope::new(kind, next_id(ids, "response"), body)
+        .map_err(|err| wire("internal", err))?;
+    response.in_reply_to = Some(request.id.clone());
+    response.session_id = Some(session.clone());
+    response.capability_revision = request.capability_revision.clone();
+    serde_json::to_value(&response).map_err(|err| wire("internal", err))
+}
+
 const TASK_OUTPUT_REQUEST: oxap_protocol::EnvelopeType =
     oxap_protocol::EnvelopeType::from_static("session.task.output.request");
 const TASK_OUTPUT_RESPONSE: oxap_protocol::EnvelopeType =
@@ -1965,12 +2036,7 @@ fn task_output(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
     let envelope = gate_request(request.request.as_deref(), &[TASK_OUTPUT_REQUEST])?;
     let asked: oxap_protocol::SessionTaskOutputRequest = payload(&envelope)?;
     let entry = session(hub, &request.session_id)?;
-    if &asked.session_id != entry.id()
-        || envelope
-            .session_id
-            .as_ref()
-            .is_some_and(|id| !id.as_str().is_empty() && id != entry.id())
-    {
+    if !addresses(&envelope, &asked.session_id, entry.id()) {
         return Err(wire(
             "scope_mismatch",
             "request session does not match the addressed session",
@@ -1993,13 +2059,7 @@ fn task_output(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
             err,
         )
     })?;
-    let mut response =
-        oxap_protocol::Envelope::new(TASK_OUTPUT_RESPONSE, next_id(ids, "response"), &output)
-            .map_err(|err| wire("internal", err))?;
-    response.in_reply_to = Some(envelope.id.clone());
-    response.session_id = Some(entry.id().clone());
-    response.capability_revision = envelope.capability_revision.clone();
-    serde_json::to_value(&response).map_err(|err| wire("internal", err))
+    session_reply(TASK_OUTPUT_RESPONSE, &envelope, entry.id(), &output, ids)
 }
 
 fn resolve_call(entry: &HubSession, envelope: &oxap_protocol::Envelope, ids: &Ids) -> Answer {
