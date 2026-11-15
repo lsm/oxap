@@ -542,7 +542,7 @@ impl Client {
                 let duplicate = {
                     let mut state = lock(&self.0.state);
                     let duplicate = state.incoming.contains_key(&control.id);
-                    if !duplicate {
+                    if !duplicate && !state.closed {
                         state.incoming.insert(control.id.clone(), control.clone());
                     }
                     duplicate

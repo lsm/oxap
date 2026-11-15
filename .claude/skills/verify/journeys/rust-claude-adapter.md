@@ -190,10 +190,12 @@ Claude Code arrives decoded and takes exactly one answer, an answer without a
 body goes back as `{}` and an error answer as Go's error envelope, byte for
 byte, a cancel retires the request and reaches the consumer, an answered id
 may arrive again, an id still awaiting its answer retires the client when
-reused, and a request its subtype refuses retires the client. To see it bite,
+reused, a request read after close is delivered but kept out of the table,
+and a request its subtype refuses retires the client. To see it bite,
 skip setting `done` after an answer: the one-answer case must fail. Skip the
 cancel's retirement: the cancel case must fail. Insert a duplicate id
-instead of refusing it: the reuse case must fail.
+instead of refusing it: the reuse case must fail. Insert a request read after
+close into the table: the after-close case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the
