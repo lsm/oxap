@@ -63,6 +63,7 @@ var httpParityRequests = []httpParityRequest{
 	{method: "POST", path: "/sessions/ghost/task-output", media: "application/json", body: taskOutputRequestBody("ghost", "ghost")},
 	{method: "POST", path: "/sessions/s/task-output", media: "application/json", body: "{"},
 	{method: "GET", path: "/sessions/s/task-output"},
+	{method: "POST", path: "/sessions/s/cancel", media: "text/plain", body: "x"},
 	{method: "POST", path: "/sessions/s/close", media: "application/json"},
 	{method: "GET", path: "/work"},
 	{method: "GET", path: "/work/capabilities"},
