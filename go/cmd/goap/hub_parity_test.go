@@ -16,6 +16,8 @@ import (
 
 const openEnvelopeFields = `"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.open.request",`
 
+const taskCancelEnvelopeFields = `"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.task.cancel.request",`
+
 const taskOutputEnvelopeFields = `"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.task.output.request",`
 
 var hubParityScenarios = map[string][]string{
@@ -104,6 +106,12 @@ var hubParityScenarios = map[string][]string{
 		`{"id":5,"op":"task_output","session_id":"absent","request":{` + taskOutputEnvelopeFields + `"id":"t5","session_id":"absent","payload":{"session_id":"absent","task_id":7}}}`,
 		`{"id":6,"op":"task_output","session_id":"absent","request":{"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"run.cancel.request","id":"t6","session_id":"absent","run_id":"r","payload":{"session_id":"absent","run_id":"r"}}}`,
 		`{"id":7,"op":"task_output","request":{` + taskOutputEnvelopeFields + `"id":"t7","session_id":"s1","payload":{"session_id":"s1","task_id":"task-1"}}}`,
+	},
+	"the cancel op refuses a task cancel the same ways": {
+		`{"id":1,"op":"cancel","session_id":"absent","request":{` + taskCancelEnvelopeFields + `"id":"c1","session_id":"absent","payload":{"session_id":"absent","task_id":"task-1"}}}`,
+		`{"id":2,"op":"cancel","session_id":"absent","request":{` + taskCancelEnvelopeFields + `"id":"c2","session_id":"absent","payload":{"session_id":"absent","task_id":""}}}`,
+		`{"id":3,"op":"cancel","session_id":"absent","request":{` + taskCancelEnvelopeFields + `"id":"c3","session_id":"absent","payload":{"session_id":"absent"}}}`,
+		`{"id":4,"op":"cancel","request":{` + taskCancelEnvelopeFields + `"id":"c4","session_id":"s1","payload":{"session_id":"s1","task_id":"task-1"}}}`,
 	},
 	"the catalog ops refuse the same refusals": {
 		`{"id":1,"op":"models","session_id":"absent"}`,

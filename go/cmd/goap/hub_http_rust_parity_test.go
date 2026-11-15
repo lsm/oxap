@@ -36,6 +36,10 @@ func taskOutputRequestBody(envelopeSession, payloadSession string) string {
 	return `{"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.task.output.request","id":"task-output-` + payloadSession + `","session_id":"` + envelopeSession + `","payload":{"session_id":"` + payloadSession + `","task_id":"task-1","from":3}}`
 }
 
+func taskCancelRequestBody(envelopeSession, payloadSession string) string {
+	return `{"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.task.cancel.request","id":"task-cancel-` + envelopeSession + `","session_id":"` + envelopeSession + `","payload":{"session_id":"` + payloadSession + `","task_id":"task-1"}}`
+}
+
 var httpParityRequests = []httpParityRequest{
 	{method: "GET", path: "/adapters"},
 	{method: "GET", path: "/adapters/memory/capabilities"},
@@ -64,6 +68,9 @@ var httpParityRequests = []httpParityRequest{
 	{method: "POST", path: "/sessions/s/task-output", media: "application/json", body: "{"},
 	{method: "GET", path: "/sessions/s/task-output"},
 	{method: "POST", path: "/sessions/s/cancel", media: "text/plain", body: "x"},
+	{method: "POST", path: "/sessions/s/cancel", media: "application/json", body: taskCancelRequestBody("s", "s")},
+	{method: "POST", path: "/sessions/s/cancel", media: "application/json", body: taskCancelRequestBody("other", "s")},
+	{method: "POST", path: "/sessions/ghost/cancel", media: "application/json", body: taskCancelRequestBody("ghost", "ghost")},
 	{method: "POST", path: "/sessions/s/close", media: "application/json"},
 	{method: "GET", path: "/work"},
 	{method: "GET", path: "/work/capabilities"},
