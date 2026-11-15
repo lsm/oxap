@@ -22,6 +22,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_calls)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_observations)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_reverse)
+(cd rust && cargo test -p oxap-adapter-claude --lib)
 (cd rust && cargo test -p oxap-adapter-claude --all-features)
 ```
 
@@ -196,6 +197,13 @@ skip setting `done` after an answer: the one-answer case must fail. Skip the
 cancel's retirement: the cancel case must fail. Insert a duplicate id
 instead of refusing it: the reuse case must fail. Insert a request read after
 close into the table: the after-close case must fail.
+
+`tests/support/rpc_ownership.rs` runs inside the crate, under
+`cargo test -p oxap-adapter-claude --lib`, because it watches the client's
+private state: a reverse request left unread in the queue must not keep the
+client alive once its reader and writer end and every handle is dropped. To
+see it bite, make `IncomingControl` hold a strong `Client` again: the case must
+fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the
