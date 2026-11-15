@@ -70,7 +70,7 @@ func rustHubServes(t *testing.T, dir string) bool {
 		if kind == "" {
 			kind = name
 		}
-		if kind != "memory" && kind != "acp" {
+		if kind != "memory" && kind != "acp" && kind != "deepseek" {
 			return false
 		}
 	}
