@@ -3,7 +3,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
-use oxap_adapter_claude::rpc::{parse_message, Client, ClientError, ClientOptions, Kind, Message};
+use oxap_adapter_claude::rpc::{
+    parse_message, Client, ClientError, ClientOptions, Inbound, Kind, Message,
+};
 
 const WAIT: Duration = Duration::from_secs(5);
 const INITIALIZE: &str = r#"{"subtype":"initialize","hooks":null}"#;
@@ -35,11 +37,24 @@ fn frames(from_client: PipeReader) -> Receiver<Message> {
     frames
 }
 
+fn release_barriers(client: &Client) {
+    let inbound = client.inbound();
+    std::thread::spawn(move || {
+        while let Ok(message) = inbound.recv() {
+            if let Inbound::Barrier(ack) = message {
+                let _ = ack.send(());
+            }
+        }
+    });
+}
+
 fn peer() -> Peer {
     let (from_server, to_client) = std::io::pipe().unwrap();
     let (from_client, to_server) = std::io::pipe().unwrap();
+    let client = Client::new(from_server, to_server, ClientOptions::default());
+    release_barriers(&client);
     Peer {
-        client: Client::new(from_server, to_server, ClientOptions::default()),
+        client,
         frames: frames(from_client),
         to_client,
     }
@@ -225,6 +240,7 @@ fn a_response_followed_by_a_malformed_frame_still_settles_its_call() {
         let (from_server, mut to_client) = std::io::pipe().unwrap();
         let (from_client, to_server) = std::io::pipe().unwrap();
         let client = Client::new(from_server, to_server, ClientOptions::default());
+        release_barriers(&client);
         std::thread::spawn(move || {
             let Ok(request) = frames(from_client).recv_timeout(WAIT) else {
                 return;
