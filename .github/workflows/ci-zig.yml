@@ -595,6 +595,16 @@ jobs:
           set -euo pipefail
           go run ./go/cmd/goap conformance --command "$PWD/rust/target/debug/oap-rust-hub serve agent"
 
+      - name: Require the Rust conformance runner to pass the Rust and Go endpoints
+        working-directory: .
+        run: |
+          set -euo pipefail
+          cargo build --quiet --manifest-path rust/Cargo.toml -p oxap-conformance --example endpoint_conformance
+          go build -o "$RUNNER_TEMP/goap" ./go/cmd/goap
+          runner="$PWD/rust/target/debug/examples/endpoint_conformance"
+          "$runner" "$PWD/rust/target/debug/oap-rust-hub" serve agent > "$RUNNER_TEMP/rust-report.json"
+          "$runner" "$RUNNER_TEMP/goap" serve agent > "$RUNNER_TEMP/go-report.json"
+
       - name: Tests leave no credential store in the checkout
         if: always()
         working-directory: .

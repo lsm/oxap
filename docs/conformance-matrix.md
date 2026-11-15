@@ -27,7 +27,7 @@ records where each tree stands against it. Rule-level validator coverage is in
 | Hub, stdio | done | done | done |
 | Hub, HTTP and SSE | done | done | partial: the gates, the read-only routes, tools, models, open with its held subscription, submit, resolve, cancel, settings, close, SSE events, transcript, the work routes and shutdown; `oap-rust-hub serve --addr` serves them on a loopback allowlist; `TestHubHTTPAnswersGoapAndRustTheSame` holds 27 requests to goap's answers; SIGINT and SIGTERM map as in Go |
 | `serve agent` endpoint | done | done | done: `oxap_serve::endpoint`, served by `oap-rust-hub serve agent`, passes every `goap conformance` check in CI and maps SIGINT and SIGTERM as Go does |
-| Conformance runner | partial: asks no `session.list` | done | missing |
+| Conformance runner | partial: asks no `session.list` | done | done: `oxap_conformance::run`, which CI drives against both `oap-rust-hub serve agent` and `goap serve agent` |
 | Binding and run stores | done | done | done: `oxap-binding`'s file and memory session histories and run store (#1473); the hub records opens, closes and refusals (#1489) |
 | `transcript.load` (Decision 0051) | done | partial: hub route pending | partial: the stdio op and the HTTP route; no Rust adapter has a reader yet |
 | Shutdown (Decision 0050) | partial: signals and restart recovery pending | partial: same | partial: the stdio op, `POST /shutdown`, the endpoint's request and its signals, the stdio and HTTP hubs' signals; restart recovery pending |
@@ -36,7 +36,7 @@ records where each tree stands against it. Rule-level validator coverage is in
 
 Totals over the 19 rows that apply to all three trees (the SDK row does not
 apply to Zig): Zig 14 done, 5 partial, 0 missing; Go 15 done, 3 partial, 1
-missing; Rust 8 done, 4 partial, 7 missing.
+missing; Rust 9 done, 4 partial, 6 missing.
 
 ## What proves alignment today
 
@@ -69,9 +69,9 @@ Correctness and proof before features, smallest verifiable slice first.
    `session_state_mismatch` and `scope_mismatch`.
 5. **Decision 0050 is unfinished in both trees**, and no validator judges it.
 6. **Rust ports beyond the validator.** The harness catalog, memory adapter,
-   stdio hub and endpoint are done, in Decision 0052's order; what is left is
-   each harness adapter against the shared corpora, the conformance runner,
-   and the agent loop.
+   stdio hub, endpoint and conformance runner are done, in Decision 0052's
+   order; what is left is each harness adapter against the shared corpora and
+   the agent loop.
 
 ## Owners
 
