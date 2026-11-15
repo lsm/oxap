@@ -18,6 +18,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_message)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_codec)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_client)
 (cd rust && cargo test -p oxap-adapter-claude --all-features)
 ```
 
@@ -143,6 +144,21 @@ holds against `tests/fixtures/go-rpc-writes.jsonl`, which Go's own
 `MarshalJSON` produced for those frames. Regenerate it with a throwaway Go test
 in `go/adapter/claude/internal/rpc` that walks the corpus and writes
 `frame`/`written` pairs; never hand-edit the file.
+
+`tests/rpc_client.rs` ports the write-pump and teardown cases of Go's
+`internal/rpc/client_test.go` over in-memory pipes: a write past its deadline
+retires the client, a write stuck in the writer returns once the reader
+retires without a closer and waits for its own result when a closer unblocks
+the writer and still returns at its deadline when the closer fails to unblock
+it, a close waits for the closer and a second close waits behind the first,
+the reader's refusal or EOF is the client's error, and the closer runs once.
+A stuck writer is a `Write` that blocks on a channel, and a held closer blocks
+on one, so no case depends on timing beyond its five-second ceiling. To see it
+bite, drop the deadline arm in `write`'s one wait loop, which stays armed after
+`done`: both deadline cases must fail. Return
+early from a second close: the two-close case must fail. Have the read
+loop drop its error and close with `Closed`: the refusal and EOF cases must
+fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the

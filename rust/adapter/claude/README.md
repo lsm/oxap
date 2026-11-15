@@ -12,6 +12,14 @@ the observation, control request, control response or control cancel Go's
 line separators as Go escapes them, and compacts and escapes each raw member as
 Go marshals a `json.RawMessage`.
 
+`rpc::Client` is being ported from Go's `Client` in slices. It holds the write
+pump and its teardown: one writer thread encodes each frame in order, a write
+past its deadline retires the client, a write stuck in the writer returns once
+the reader retires unless a closer can unblock the writer, and the reader's
+refusal or EOF becomes the client's error. Its reader reads frames but does
+not deliver them yet; calls, observations and reverse requests are the next
+slices, so nothing drives a Claude Code process through it yet.
+
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
 an unrecognised type reads as `Unknown`, and an unrecognised system subtype as
