@@ -23,15 +23,15 @@ func TestBackendsMatchRustHub(t *testing.T) {
 	}
 	compared := 0
 	for _, dir := range cases {
-		if !servesOnlyMemory(t, dir) {
+		if !rustHubServes(t, dir) {
 			continue
 		}
 		compared++
 		backend := fixtureBackend(t, dir)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			scenario := readLines(t, filepath.Join(dir, "scenario.jsonl"))
-			wantOut, _ := exchangeWithChild(t, dir, backend, scenario, goap, "serve", "agent")
-			gotOut, _ := exchangeWithChild(t, dir, backend, scenario, rust, "serve", "agent")
+			wantOut, wantChild := exchangeWithChild(t, dir, backend, scenario, goap, "serve", "agent")
+			gotOut, gotChild := exchangeWithChild(t, dir, backend, scenario, rust, "serve", "agent")
 			if len(wantOut) < len(scenario) {
 				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(wantOut), len(scenario))
 			}
@@ -41,14 +41,17 @@ func TestBackendsMatchRustHub(t *testing.T) {
 			if where := runOrderDifference(t, wantOut, gotOut); where != "" {
 				t.Errorf("oap-rust-hub orders a run differently: %s", where)
 			}
+			if missing, extra := childLineDifference(t, wantChild, gotChild); len(missing)+len(extra) > 0 {
+				t.Errorf("oap-rust-hub writes different data to its child\n--- only goap\n%s\n--- only oap-rust-hub\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
+			}
 		})
 	}
 	if compared == 0 {
-		t.Fatal("no parity fixture serves only the memory adapter, so nothing was compared")
+		t.Fatal("no parity fixture serves only adapters oap-rust-hub has, so nothing was compared")
 	}
 }
 
-func servesOnlyMemory(t *testing.T, dir string) bool {
+func rustHubServes(t *testing.T, dir string) bool {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "registry.json"))
 	if err != nil {
@@ -67,7 +70,7 @@ func servesOnlyMemory(t *testing.T, dir string) bool {
 		if kind == "" {
 			kind = name
 		}
-		if kind != "memory" {
+		if kind != "memory" && kind != "acp" {
 			return false
 		}
 	}
