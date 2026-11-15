@@ -423,6 +423,24 @@ pub struct SessionState {
     pub compaction_policy: Option<CompactionPolicy>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionTaskOutputRequest {
+    pub session_id: SessionId,
+    pub task_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionTaskOutputResponse {
+    pub output: String,
+    pub next: u64,
+    pub truncated: bool,
+    pub ended: bool,
+}
+
 pub type SessionOpenResponse = SessionState;
 pub type SessionStateResponse = SessionState;
 pub type SessionStateUpdated = SessionState;

@@ -189,6 +189,17 @@ pub trait Session: Send + Sync {
     fn call_resolver(&self) -> Option<&dyn CallResolver> {
         None
     }
+    fn task_output_reader(&self) -> Option<&dyn TaskOutputReader> {
+        None
+    }
+}
+
+pub trait TaskOutputReader: Send + Sync {
+    fn task_output(
+        &self,
+        task_id: String,
+        from: Option<u64>,
+    ) -> BoxFuture<'_, oxap_protocol::SessionTaskOutputResponse>;
 }
 
 pub trait Admitter: Send + Sync {
