@@ -602,3 +602,7 @@ impl Client {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/support/rpc_ownership.rs"]
+mod ownership;
