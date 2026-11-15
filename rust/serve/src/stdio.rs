@@ -610,16 +610,7 @@ impl Serving {
     }
 
     fn write_stopping(&self) -> Option<std::sync::RwLockWriteGuard<'_, Stopping>> {
-        self.wait_stopping(|stopping| {
-            let taken = stopping.try_write();
-            #[cfg(test)]
-            if matches!(taken, Err(std::sync::TryLockError::WouldBlock)) {
-                if let Some(contended) = lock(&tests::CONTENDED).take() {
-                    let _ = contended.send(());
-                }
-            }
-            taken
-        })
+        self.wait_stopping(std::sync::RwLock::try_write)
     }
 
     fn wait_stopping<'a, G>(
@@ -636,6 +627,10 @@ impl Serving {
                     return Some(stopping.into_inner())
                 }
                 Err(std::sync::TryLockError::WouldBlock) => {
+                    #[cfg(test)]
+                    if let Some(contended) = lock(&tests::CONTENDED).take() {
+                        let _ = contended.send(());
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             }
@@ -2360,8 +2355,20 @@ mod tests {
     pub(super) static CONTENDED: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>> =
         std::sync::Mutex::new(None);
 
+    static PARKED: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_third_signal_ends_serving_while_a_shutdown_request_waits_on_a_parked_shutdown() {
+        third_signal_while_parked(b"{\"id\":1,\"op\":\"shutdown\"}\n", "the shutdown request");
+    }
+
+    #[test]
+    fn a_third_signal_ends_serving_while_eof_waits_on_a_parked_shutdown() {
+        third_signal_while_parked(b"", "end of input");
+    }
+
+    fn third_signal_while_parked(input: &'static [u8], waiting: &str) {
+        let _serial = super::lock(&PARKED);
         let hub = crate::Hub::new(crate::Registry::default_registry());
         let signals = super::Signals::new(&hub);
         let (contended, contention) = std::sync::mpsc::channel();
@@ -2372,20 +2379,20 @@ mod tests {
         std::thread::spawn(move || {
             let _ = done.send(super::serve_signalled(
                 &serving,
-                std::io::Cursor::new(b"{\"id\":1,\"op\":\"shutdown\"}\n".to_vec()),
+                std::io::Cursor::new(input),
                 std::io::sink(),
                 &super::StdioOptions::default(),
             ));
         });
-        contention
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the shutdown request never waited on the parked shutdown");
+        let waited = contention.recv_timeout(Duration::from_secs(10));
         assert!(signals.signal(3).is_none());
         let ended = served.recv_timeout(Duration::from_secs(10));
         drop(parked);
+        *super::lock(&CONTENDED) = None;
+        waited.unwrap_or_else(|_| panic!("{waiting} never waited on the parked shutdown"));
         assert!(
             ended.is_ok(),
-            "the third signal did not end serving while the shutdown request waited"
+            "the third signal did not end serving while {waiting} waited"
         );
         assert!(ended.unwrap().is_ok(), "third signal must return Ok");
     }

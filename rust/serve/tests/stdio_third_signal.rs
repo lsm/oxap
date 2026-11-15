@@ -100,15 +100,6 @@ impl Read for Held {
 
 #[test]
 fn a_third_signal_ends_serving_while_an_earlier_one_is_parked() {
-    third_signal(false);
-}
-
-#[test]
-fn a_third_signal_ends_serving_after_eof_while_shutdown_is_parked() {
-    third_signal(true);
-}
-
-fn third_signal(eof: bool) {
     let (entered, parked) = mpsc::channel();
     let (released, release) = mpsc::channel();
     let gate = Arc::new(Gate {
@@ -155,14 +146,10 @@ fn third_signal(eof: bool) {
         .recv_timeout(Duration::from_secs(10))
         .expect("the first signal never reached the session");
     reads.recv_timeout(Duration::from_secs(10)).unwrap();
-    if eof {
-        drop(input);
-    } else {
-        input
-            .send(b"{\"id\":1,\"op\":\"open\",\"adapter\":\"memory\"}\n".to_vec())
-            .unwrap();
-        reads.recv_timeout(Duration::from_secs(10)).unwrap();
-    }
+    input
+        .send(b"{\"id\":1,\"op\":\"open\",\"adapter\":\"memory\"}\n".to_vec())
+        .unwrap();
+    reads.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(signals.signal(3).is_none());
     let ended = served.recv_timeout(Duration::from_secs(10));
     let _ = released.send(());
