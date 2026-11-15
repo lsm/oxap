@@ -19,6 +19,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_codec)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_corpus)
 (cd rust && cargo test -p oxap-adapter-claude --test rpc_client)
+(cd rust && cargo test -p oxap-adapter-claude --test rpc_calls)
 (cd rust && cargo test -p oxap-adapter-claude --all-features)
 ```
 
@@ -159,6 +160,16 @@ bite, drop the deadline arm in `write`'s one wait loop, which stays armed after
 early from a second close: the two-close case must fail. Have the read
 loop drop its error and close with `Closed`: the refusal and EOF cases must
 fail.
+
+`tests/rpc_calls.rs` ports the call cases of the same Go file: a call writes
+its request under a minted `req_<n>_<hex>` id and settles with its own
+response bytes or remote error, responses out of order reach their own calls,
+an unmatched response is ignored, a deadline retires the client and fails
+every other pending call, and a hang-up or a malformed frame fails what is
+still pending while a response already read still settles its call. To see
+it bite, skip `fail_pending` in `close_with`: the case where one call's deadline
+fails the other must hang. Deliver a response to the oldest pending call instead of its id:
+the out-of-order case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the

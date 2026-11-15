@@ -16,9 +16,13 @@ Go marshals a `json.RawMessage`.
 pump and its teardown: one writer thread encodes each frame in order, a write
 past its deadline retires the client, a write stuck in the writer returns once
 the reader retires unless a closer can unblock the writer, and the reader's
-refusal or EOF becomes the client's error. Its reader reads frames but does
-not deliver them yet; calls, observations and reverse requests are the next
-slices, so nothing drives a Claude Code process through it yet.
+refusal or EOF becomes the client's error. `call` writes a control request
+under a `req_<n>_<hex>` id, as Go's `mintID` does, and settles with that id's
+response bytes or its remote error. A call past its deadline retires the
+client as a cancelled context does, and every call still pending when the
+client ends fails with the client's error. The reader delivers control
+responses only: the observation queue with its barrier, and reverse requests,
+are the next slices, so nothing drives a Claude Code process through it yet.
 
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
