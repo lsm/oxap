@@ -441,6 +441,19 @@ pub struct SessionTaskOutputResponse {
     pub ended: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionTaskCancelRequest {
+    pub session_id: SessionId,
+    pub task_id: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionTaskCancelResponse {
+    pub outcome: String,
+}
+
 pub type SessionOpenResponse = SessionState;
 pub type SessionStateResponse = SessionState;
 pub type SessionStateUpdated = SessionState;
