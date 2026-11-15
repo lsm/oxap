@@ -32,6 +32,10 @@ func submitRequestBody(session string) string {
 	return `{"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.message.submit.request","id":"submit-` + session + `","session_id":"` + session + `","payload":{"session_id":"` + session + `","delivery":"auto","messages":[{"role":"user","content":"run"}]}}`
 }
 
+func taskOutputRequestBody(envelopeSession, payloadSession string) string {
+	return `{"protocol":"open-agent-protocol","version":"0.1","profile":"open-agent-protocol.agent-control-core","type":"session.task.output.request","id":"task-output-` + payloadSession + `","session_id":"` + envelopeSession + `","payload":{"session_id":"` + payloadSession + `","task_id":"task-1","from":3}}`
+}
+
 var httpParityRequests = []httpParityRequest{
 	{method: "GET", path: "/adapters"},
 	{method: "GET", path: "/adapters/memory/capabilities"},
@@ -54,6 +58,11 @@ var httpParityRequests = []httpParityRequest{
 	{method: "GET", path: "/sessions/history"},
 	{method: "POST", path: "/sessions/s/submit", media: "application/json", body: strings.Replace(submitRequestBody("s"), `"payload":{"session_id":"s"`, `"payload":{"session_id":"other"`, 1)},
 	{method: "POST", path: "/sessions/s/submit", media: "application/json", body: submitRequestBody("s")},
+	{method: "POST", path: "/sessions/s/task-output", media: "application/json", body: taskOutputRequestBody("s", "s")},
+	{method: "POST", path: "/sessions/s/task-output", media: "application/json", body: taskOutputRequestBody("s", "other")},
+	{method: "POST", path: "/sessions/ghost/task-output", media: "application/json", body: taskOutputRequestBody("ghost", "ghost")},
+	{method: "POST", path: "/sessions/s/task-output", media: "application/json", body: "{"},
+	{method: "GET", path: "/sessions/s/task-output"},
 	{method: "POST", path: "/sessions/s/close", media: "application/json"},
 	{method: "GET", path: "/work"},
 	{method: "GET", path: "/work/capabilities"},
