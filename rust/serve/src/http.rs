@@ -39,7 +39,7 @@ struct Served {
     hold_for: std::time::Duration,
     keepalive: std::time::Duration,
     held: Arc<Held>,
-    stopping: std::sync::RwLock<stdio::Stopping>,
+    stopping: Arc<std::sync::RwLock<stdio::Stopping>>,
     finishing: std::sync::atomic::AtomicBool,
     done: Arc<std::sync::atomic::AtomicBool>,
     local: Option<std::net::SocketAddr>,
@@ -77,7 +77,74 @@ fn reap(held: &std::sync::Weak<Held>, hold_for: std::time::Duration) {
     }
 }
 
+#[derive(Clone)]
+pub struct Signals {
+    hub: Hub,
+    stopping: Arc<std::sync::RwLock<stdio::Stopping>>,
+    seen: Arc<AtomicUsize>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    local: Arc<std::sync::OnceLock<std::net::SocketAddr>>,
+}
+
+impl Signals {
+    pub fn new(hub: &Hub) -> Self {
+        Self {
+            hub: hub.clone(),
+            stopping: Arc::default(),
+            seen: Arc::default(),
+            done: Arc::default(),
+            local: Arc::default(),
+        }
+    }
+
+    pub fn signal(&self, count: usize) -> Option<oxap_protocol::EndpointShutdownResponse> {
+        use oxap_protocol::ShutdownMode;
+        let local = self.local.get().copied();
+        if count > 2 {
+            wake(&self.done, local);
+            return None;
+        }
+        let mut stopping = self
+            .stopping
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.seen.fetch_max(count, Ordering::SeqCst) >= count {
+            return None;
+        }
+        let wanted = if count >= 2 || stopping.mode == Some(ShutdownMode::FORCE) {
+            ShutdownMode::FORCE
+        } else {
+            ShutdownMode::GRACEFUL
+        };
+        let request = stdio::Request {
+            request: serde_json::value::to_raw_value(&serde_json::json!({ "mode": wanted })).ok(),
+            ..stdio::Request::default()
+        };
+        let watching = stopping.draining;
+        let (answer, finished) = stdio::shutdown(&self.hub, &request, &mut stopping);
+        if finished {
+            wake(&self.done, local);
+        } else if stopping.draining && !watching {
+            watch(&self.hub, &self.done, local);
+        }
+        let answer = serde_json::from_value(answer.ok()?).ok()?;
+        (stopping.mode == Some(wanted)).then_some(answer)
+    }
+}
+
 pub fn serve_http(hub: &Hub, listener: TcpListener, options: &HttpOptions) -> std::io::Result<()> {
+    serve_http_signalled(&Signals::new(hub), listener, options)
+}
+
+pub fn serve_http_signalled(
+    signals: &Signals,
+    listener: TcpListener,
+    options: &HttpOptions,
+) -> std::io::Result<()> {
+    let hub = &signals.hub;
+    if let Ok(local) = listener.local_addr() {
+        let _ = signals.local.set(local);
+    }
     let served = Arc::new(Served {
         hub: hub.clone(),
         allow: options
@@ -100,14 +167,17 @@ pub fn serve_http(hub: &Hub, listener: TcpListener, options: &HttpOptions) -> st
             .filter(|keepalive| !keepalive.is_zero())
             .unwrap_or(DEFAULT_KEEPALIVE),
         held: Arc::default(),
-        stopping: std::sync::RwLock::default(),
+        stopping: signals.stopping.clone(),
         finishing: std::sync::atomic::AtomicBool::new(false),
-        done: Arc::default(),
+        done: signals.done.clone(),
         local: listener.local_addr().ok(),
         attached: Arc::default(),
     });
     let (held, hold_for) = (Arc::downgrade(&served.held), served.hold_for);
     std::thread::spawn(move || reap(&held, hold_for));
+    if served.done.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     for stream in listener.incoming() {
         if served.done.load(Ordering::SeqCst) {
             return Ok(());
@@ -137,6 +207,20 @@ pub fn serve_http(hub: &Hub, listener: TcpListener, options: &HttpOptions) -> st
         });
     }
     Ok(())
+}
+
+fn watch(
+    hub: &Hub,
+    done: &Arc<std::sync::atomic::AtomicBool>,
+    local: Option<std::net::SocketAddr>,
+) {
+    let (hub, done) = (hub.clone(), done.clone());
+    std::thread::spawn(move || {
+        while !done.load(Ordering::SeqCst) && !stdio::Stopping::drained(&hub) {
+            std::thread::sleep(stdio::DRAIN_POLL);
+        }
+        wake(&done, local);
+    });
 }
 
 fn wake(done: &std::sync::atomic::AtomicBool, local: Option<std::net::SocketAddr>) {
@@ -926,13 +1010,7 @@ impl Served {
         if finished {
             self.finishing.store(true, Ordering::SeqCst);
         } else if stopping.draining && !watching {
-            let (hub, done, local) = (self.hub.clone(), self.done.clone(), self.local);
-            std::thread::spawn(move || {
-                while !done.load(Ordering::SeqCst) && !stdio::Stopping::drained(&hub) {
-                    std::thread::sleep(stdio::DRAIN_POLL);
-                }
-                wake(&done, local);
-            });
+            watch(&self.hub, &self.done, self.local);
         }
         match answer {
             Ok(value) => json(200, &value),

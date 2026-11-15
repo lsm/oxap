@@ -154,3 +154,20 @@ fn a_shutdown_body_is_gated_by_media_then_json_then_its_members() {
         (400, "invalid_request".into())
     );
 }
+
+#[test]
+fn a_signal_taken_before_the_hub_serves_still_stops_it() {
+    let hub = Hub::new(Registry::default_registry());
+    let signals = oxap_serve::http::Signals::new(&hub);
+    assert!(signals.signal(1).is_some());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let (returned, returns) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = oxap_serve::http::serve_http_signalled(&signals, listener, &HttpOptions::default());
+        let _ = returned.send(());
+    });
+    assert!(
+        returns.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "the hub went on serving after a signal it took before serving"
+    );
+}
