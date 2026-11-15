@@ -520,16 +520,18 @@ fn serve_lines(serving: &Serving, frames: &Frames) -> Result<bool, StdioError> {
             continue;
         }
         if request.op == "shutdown" {
-            let Some(mut stopping) = serving.write_stopping() else {
-                serving.inflight.release(size);
+            serving.inflight.release(size);
+            let id = request.id;
+            let Some((answer, finished)) = serving.shutdown_aside(request) else {
                 return Ok(false);
             };
-            let (answer, finished) = shutdown(&serving.hub, &request, &mut stopping);
-            serving.inflight.release(size);
-            if let Some(line) = fitted(request.id, answer, serving.frame_limit)? {
+            if let Some(line) = fitted(id, answer, serving.frame_limit)? {
                 serving.queue(line, false)?;
             }
             if finished {
+                let Some(stopping) = serving.read_stopping() else {
+                    return Ok(false);
+                };
                 return Ok(stopping.draining && stopping.graceful());
             }
             continue;
@@ -606,37 +608,60 @@ impl Serving {
     }
 
     fn read_stopping(&self) -> Option<std::sync::RwLockReadGuard<'_, Stopping>> {
-        self.wait_stopping(std::sync::RwLock::try_read)
+        wait_stopping(&self.abandoned, &self.stopping, std::sync::RwLock::try_read)
     }
 
-    fn write_stopping(&self) -> Option<std::sync::RwLockWriteGuard<'_, Stopping>> {
-        self.wait_stopping(std::sync::RwLock::try_write)
-    }
-
-    fn wait_stopping<'a, G>(
-        &'a self,
-        take: impl Fn(&'a std::sync::RwLock<Stopping>) -> std::sync::TryLockResult<G>,
-    ) -> Option<G> {
-        loop {
-            if self.abandoned.load(std::sync::atomic::Ordering::SeqCst) {
-                return None;
+    fn shutdown_aside(&self, request: Request) -> Option<(Answer, bool)> {
+        let hub = self.hub.clone();
+        let stopping = self.stopping.clone();
+        let abandoned = self.abandoned.clone();
+        let (sent, answered) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Some(mut stopping) =
+                wait_stopping(&abandoned, &stopping, std::sync::RwLock::try_write)
+            {
+                let _ = sent.send(shutdown(&hub, &request, &mut stopping));
             }
-            match take(&self.stopping) {
-                Ok(stopping) => return Some(stopping),
-                Err(std::sync::TryLockError::Poisoned(stopping)) => {
-                    return Some(stopping.into_inner())
-                }
-                Err(std::sync::TryLockError::WouldBlock) => {
-                    #[cfg(test)]
-                    if let Some(contended) = lock(&tests::CONTENDED).take() {
-                        let _ = contended.send(());
+        });
+        loop {
+            match answered.recv_timeout(DRAIN_POLL) {
+                Ok(answer) => return Some(answer),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return None,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.abandoned.load(std::sync::atomic::Ordering::SeqCst) {
+                        return None;
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    let _ = self.flush();
                 }
             }
         }
     }
+}
 
+fn wait_stopping<'a, G>(
+    abandoned: &std::sync::atomic::AtomicBool,
+    stopping: &'a std::sync::RwLock<Stopping>,
+    take: impl Fn(&'a std::sync::RwLock<Stopping>) -> std::sync::TryLockResult<G>,
+) -> Option<G> {
+    loop {
+        if abandoned.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        match take(stopping) {
+            Ok(stopping) => return Some(stopping),
+            Err(std::sync::TryLockError::Poisoned(stopping)) => return Some(stopping.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                #[cfg(test)]
+                if let Some(contended) = lock(&tests::CONTENDED).take() {
+                    let _ = contended.send(());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
+}
+
+impl Serving {
     fn next_frame(&self, frames: &Frames) -> Option<Result<Option<Vec<u8>>, FrameError>> {
         loop {
             if self.abandoned.load(std::sync::atomic::Ordering::SeqCst) {
