@@ -244,11 +244,17 @@ fn a_held_turn_start_leaves_every_other_operation_a_future_that_polls_at_once() 
 fn an_open_dropped_while_initialize_is_withheld_ends_codex_as_go_does() {
     let mut codex = Codex::open(
         "initialize",
-        "echo $$ > pid; read request; : > seen; while read line; do :; done",
+        "echo $$ > pid; read request; : > seen; while :; do sleep 1; done",
         Duration::from_secs(2),
     );
+    let began = Instant::now();
     codex.drop_open();
-    let survived = codex.survives(Duration::from_secs(5));
+    let took = began.elapsed();
+    let survived = codex.survives(Duration::from_secs(6));
+    assert!(
+        took < Duration::from_secs(1),
+        "dropping the open waited {took:?} for Codex to exit"
+    );
     assert!(!survived, "the dropped open left Codex running");
 }
 
