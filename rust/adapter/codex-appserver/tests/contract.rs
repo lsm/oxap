@@ -9,9 +9,13 @@ use std::time::{Duration, Instant};
 
 use futures::task::noop_waker;
 use oxap_adapter::runtime::Runtime;
-use oxap_adapter::{Adapter as _, Error, SubmitRequest};
+use oxap_adapter::{Adapter as _, Error, InteractionResolution, ResumeRequest, SubmitRequest};
+use oxap_adapter_codex_appserver::adapter::{Adapter, Config};
+use oxap_adapter_codex_appserver::process::ProcessConfig;
 use oxap_adapter_codex_appserver::session::Session;
-use oxap_protocol::{Message, MessageContent, MessageRole, MessageSubmitRequest, RunId};
+use oxap_protocol::{
+    Message, MessageContent, MessageRole, MessageSubmitRequest, RunId, SessionSettingsUpdateRequest,
+};
 use support::{adapter, request, Fake};
 
 fn wait<F: Future + Unpin>(mut future: F) -> F::Output {
@@ -183,4 +187,104 @@ fn an_open_dropped_during_thread_start_closes_its_client_as_go_does() {
     drop(opening);
     assert!(fake.closes() > 0, "the dropped open left its client open");
     release.send(()).unwrap();
+}
+
+fn poll_each_once(
+    session: &dyn oxap_adapter::Session,
+    polled: &crossbeam_channel::Sender<()>,
+) -> (Result<(), Error>, bool) {
+    let mut state = session.state();
+    start(&mut state);
+    let mut resolving = session.resolve(InteractionResolution::default());
+    start(&mut resolving);
+    let mut resuming = session.resume(ResumeRequest::default());
+    start(&mut resuming);
+    let request = SessionSettingsUpdateRequest {
+        session_id: "s".into(),
+        ..SessionSettingsUpdateRequest::default()
+    };
+    let mut updating = session.settings_updater().unwrap().update_settings(request);
+    start(&mut updating);
+    polled.send(()).unwrap();
+    (wait(updating).map(|_| ()), wait(state).is_ok())
+}
+
+#[test]
+fn a_held_turn_start_leaves_every_other_operation_a_future_that_polls_at_once() {
+    let fake = Fake::new([
+        Ok(r#"{"thread":{"id":"t-1"}}"#),
+        Ok(r#"{"turn":{"id":"turn-1","status":"inProgress"}}"#),
+    ]);
+    let session = Arc::new(open(&fake));
+    let (arrivals, release) = fake.hold_calls("turn/start");
+    let submitting = {
+        let session = session.clone();
+        std::thread::spawn(move || wait(oxap_adapter::Session::submit(&*session, submission())))
+    };
+    arrivals.recv_timeout(Duration::from_secs(5)).unwrap();
+    let (polled, finished) = crossbeam_channel::unbounded();
+    let host = {
+        let session = session.clone();
+        std::thread::spawn(move || poll_each_once(&*session, &polled))
+    };
+    let prompt = finished.recv_timeout(Duration::from_secs(1));
+    release.send(()).unwrap();
+    assert!(
+        prompt.is_ok(),
+        "an operation blocked before it returned its future"
+    );
+    let (updated, stated) = host.join().unwrap();
+    assert!(matches!(updated, Err(Error::RunActive)));
+    assert!(stated);
+    assert!(submitting.join().unwrap().is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn an_open_dropped_while_initialize_is_withheld_ends_codex_as_go_does() {
+    let dir = std::env::temp_dir().join(format!("oap-codex-contract-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = "echo $$ > pid; read request; : > seen; while read line; do :; done";
+    let adapter = Adapter::new(Config {
+        process: ProcessConfig {
+            path: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into(), "codex".into()],
+            dir: dir.to_string_lossy().into_owned(),
+            env: Some(vec!["PATH=/usr/bin:/bin".into()]),
+            shutdown_timeout: Some(Duration::from_secs(2)),
+            ..ProcessConfig::default()
+        },
+        ..Config::default()
+    })
+    .unwrap();
+    let mut opening = oxap_adapter::Adapter::open(&adapter, request());
+    start(&mut opening);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !dir.join("seen").exists() {
+        assert!(Instant::now() < deadline, "Codex never read initialize");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let pid = std::fs::read_to_string(dir.join("pid")).unwrap();
+    let alive = || {
+        std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(alive(), "Codex ended before the open was dropped");
+    drop(opening);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while alive() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let survived = alive();
+    if survived {
+        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(!survived, "the dropped open left Codex running");
 }
