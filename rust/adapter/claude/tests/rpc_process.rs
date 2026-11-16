@@ -1,6 +1,6 @@
 #![cfg(unix)]
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::RecvTimeoutError;
@@ -196,6 +196,39 @@ fn a_descendant_holding_stderr_past_the_drain_grace_finds_its_read_end_closed() 
     assert!(
         refused && !wrote,
         "the descendant's stderr write after the child exited reached an open read end"
+    );
+}
+
+#[test]
+fn a_forced_close_ends_the_reader_and_a_pending_call_while_a_descendant_holds_stdout() {
+    let _serial = serial();
+    let mut config = fake_claude(&format!("(sleep 8) &\n{KEEP_ALIVE}; {DRAIN}"));
+    config.exit_timeout = Some(Duration::from_millis(500));
+    let process = Arc::new(Process::start(&config, None).unwrap());
+    running(&process);
+    let (called, call) = crossbeam_channel::bounded(1);
+    let caller = process.clone();
+    std::thread::spawn(move || {
+        let _ = called.send(caller.client.call(br#"{"subtype":"probe"}"#, None));
+    });
+    let (closed, close) = crossbeam_channel::bounded(1);
+    let closer = process.clone();
+    std::thread::spawn(move || {
+        let _ = closed.send(closer.close(None));
+    });
+    assert_eq!(
+        close
+            .recv_timeout(WAIT)
+            .expect("close blocked while a descendant held stdout"),
+        Err(ProcessError::NotExited)
+    );
+    assert!(call
+        .recv_timeout(WAIT)
+        .expect("the pending call still waits after close")
+        .is_err());
+    assert_eq!(
+        process.done().recv_timeout(Duration::ZERO),
+        Err(RecvTimeoutError::Disconnected)
     );
 }
 
