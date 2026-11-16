@@ -144,6 +144,7 @@ impl Process {
 
     fn kill_and_release(&self) {
         self.child.kill();
+        self.child.release_stderr();
         self.client
             .close_with(ClientError::Transport("claude rpc: process exited".into()));
         let _ = self.child.exited().recv();

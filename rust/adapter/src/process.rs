@@ -323,12 +323,14 @@ impl Child {
                 recv(reader_done) -> _ => {}
                 recv(child.killed) -> _ => {}
             }
-            crossbeam_channel::select! {
-                recv(child.stderr_done) -> _ => {}
-                recv(child.killed) -> _ => {}
-                default(drain) => {}
+            let killed = crossbeam_channel::select! {
+                recv(child.stderr_done) -> _ => false,
+                recv(child.killed) -> _ => true,
+                default(drain) => false,
+            };
+            if !killed {
+                child.close_stderr();
             }
-            child.close_stderr();
             let waited = loop {
                 if let Ok(Some(exit)) = lock(&child.child).try_wait() {
                     break Some(exit);
@@ -363,9 +365,13 @@ impl Child {
         self.close_stderr();
     }
 
+    pub fn release_stderr(&self) {
+        lock(&self.stderr_shut).take();
+    }
+
     #[cfg(unix)]
     fn close_stderr(&self) {
-        lock(&self.stderr_shut).take();
+        self.release_stderr();
         let _ = self.stderr_done.recv();
     }
 
