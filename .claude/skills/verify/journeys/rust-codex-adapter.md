@@ -201,3 +201,13 @@ bite, run any of those operations before returning its future, stop
 closing the client when the cancel fires during `initialize`, or close the
 whole process instead of the rpc client on a drop: one test each must
 fail.
+
+`tests/process.rs` starts an app-server ten times with a cancel channel,
+releases the channel once `Process::start_with` returns, waits 250 ms and
+requires the client to stay open, because the caller's token is released
+after every successful open. The race it guards is too narrow to hit
+unaided, and when both channels are ready `select!` picks an arm by its
+own choice. To see it bite, put a 100 ms sleep at the top of the startup
+watcher's thread, list the completion arm first, and skip the `join` that
+`start_with` makes before returning: the test must fail on its first
+attempt. With the sleep, that order and the `join`, it must pass.

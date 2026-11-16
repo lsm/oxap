@@ -151,10 +151,13 @@ impl Process {
             process.child.clone(),
             cancel.clone(),
         );
-        std::thread::spawn(move || {
+        let watcher = std::thread::spawn(move || {
             crossbeam_channel::select! {
-                recv(cancel) -> _ => abandon(&watched, &child, timeout),
-                recv(finished) -> _ => {}
+                recv(cancel) -> _ => {
+                    abandon(&watched, &child, timeout);
+                    true
+                },
+                recv(finished) -> _ => false,
             }
         });
         let initialized = process
@@ -183,6 +186,13 @@ impl Process {
         };
         let notified = process.client.notify("initialized", None, deadline);
         drop(initializing);
+        if watcher.join().unwrap_or(true) {
+            process.abort();
+            return Err(handshake(format!(
+                "context canceled; stderr: {}",
+                process.stderr()
+            )));
+        }
         if let Err(failure) = notified {
             process.abort();
             return Err(handshake(format!(
