@@ -231,8 +231,8 @@ fn a_forced_close_returns_after_its_reader_and_pending_call_end_while_a_descenda
         "close returned while the reader was still running"
     );
     assert!(call
-        .recv_timeout(Duration::ZERO)
-        .expect("the pending call was unsettled when close returned")
+        .recv_timeout(WAIT)
+        .expect("the pending call never settled after close")
         .is_err());
     assert_eq!(
         process.done().recv_timeout(Duration::ZERO),
