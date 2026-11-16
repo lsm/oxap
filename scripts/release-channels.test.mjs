@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,4 +77,40 @@ test("a prerelease takes the latest dist-tag until a stable version is on npm, p
   assert.equal(npmDistTag("0.1.0-alpha.34", []), "latest");
   assert.equal(npmDistTag("0.2.0-alpha.1", ["0.0.0", "0.1.0"]), "next");
   assert.equal(npmDistTag("0.1.0", ["0.0.0", "0.1.0-alpha.34"]), "latest");
+});
+
+function distTagWithNpm(script) {
+  const bin = mkdtempSync(join(tmpdir(), "release-channels-npm-"));
+  writeFileSync(join(bin, "npm"), `#!/bin/sh\n${script}\n`);
+  chmodSync(join(bin, "npm"), 0o755);
+  const release = fileURLToPath(new URL("./release-channels.mjs", import.meta.url));
+  return spawnSync(process.execPath, [release, "dist-tag", "--version", "0.2.0-alpha.1"], {
+    encoding: "utf8",
+    env: { PATH: `${bin}:/usr/bin:/bin` },
+  });
+}
+
+test("dist-tag reads npm's not-found answer as no published version, and picks latest", () => {
+  const result = distTagWithNpm(`echo '{"error":{"code":"E404","summary":"Not Found"}}'; exit 1`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "latest\n");
+});
+
+test("dist-tag answers next when npm already holds a stable version", () => {
+  const result = distTagWithNpm(`echo '["0.0.0","0.1.0","0.1.1-alpha.1"]'`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "next\n");
+});
+
+test("dist-tag fails and prints no tag when the npm lookup itself fails", () => {
+  const result = distTagWithNpm(`echo 'npm error code ECONNRESET' >&2; exit 1`);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /release-channels: /);
+});
+
+test("dist-tag fails and prints no tag when npm answers something that is not a version list", () => {
+  const result = distTagWithNpm(`echo '<html>'`);
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
 });
