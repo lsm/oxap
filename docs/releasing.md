@@ -161,7 +161,10 @@ run where they disagree: the root and `clients/ts` `package.json`,
 local `oxap --version` prints) and every publishable crate. A dispatch builds
 and names its artifacts under that version, and a tag must equal it, so bump
 them all in one pull request before tagging. A version containing `-`
-publishes to npm under the `next` dist-tag, `@oxap/client` included.
+publishes to npm under the `next` dist-tag, `@oxap/client` included, once a
+stable version is on npm; until then it takes `latest`, so a plain
+`npm install -g @oxap/cli` gets the newest alpha rather than the `0.0.0`
+placeholder that reserved the name.
 
 **3. Commit the changelog through a pull request.** This is an ordinary change to
 `CHANGELOG.md` on a branch, merged the usual way. It has to be on `main` *before*

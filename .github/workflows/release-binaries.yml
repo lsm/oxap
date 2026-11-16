@@ -549,7 +549,6 @@ jobs:
       id-token: write
     env:
       VERSION: ${{ needs.versions.outputs.version }}
-      NPM_DIST_TAG: ${{ contains(github.ref_name, '-') && 'next' || 'latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -570,9 +569,10 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/release-channels.mjs registry --version "$VERSION" --channel npm --bundle bundle | tee npm.txt
+          dist_tag="$(node scripts/release-channels.mjs dist-tag --version "$VERSION")"
           for spec in $(awk '$1 == "missing" { print $3 }' npm.txt); do
             name="${spec%@*}"
-            npm publish "bundle/npm/$(printf '%s' "${name#@}" | tr / -)-$VERSION.tgz" --access public --provenance --tag "$NPM_DIST_TAG"
+            npm publish "bundle/npm/$(printf '%s' "${name#@}" | tr / -)-$VERSION.tgz" --access public --provenance --tag "$dist_tag"
           done
 
   publish-crates:
