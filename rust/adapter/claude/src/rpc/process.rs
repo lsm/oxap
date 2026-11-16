@@ -50,6 +50,7 @@ impl std::error::Error for ProcessError {}
 pub struct Process {
     pub client: Client,
     child: Child,
+    done: Receiver<()>,
     grace: Duration,
     closed: Mutex<Option<Result<(), ProcessError>>>,
 }
@@ -99,9 +100,18 @@ impl Process {
             .filter(|timeout| !timeout.is_zero())
             .unwrap_or(DEFAULT_EXIT_TIMEOUT);
         child.watch(client.read_done(), grace);
+        let (finished, done) = crossbeam_channel::bounded::<()>(0);
+        let (exited, read, drained) = (child.exited(), client.read_done(), child.stderr_done());
+        std::thread::spawn(move || {
+            let _ = exited.recv();
+            let _ = read.recv();
+            let _ = drained.recv();
+            drop(finished);
+        });
         Ok(Self {
             client,
             child,
+            done,
             grace,
             closed: Mutex::new(None),
         })
@@ -112,7 +122,7 @@ impl Process {
     }
 
     pub fn done(&self) -> Receiver<()> {
-        self.child.exited()
+        self.done.clone()
     }
 
     pub fn wait_error(&self) -> Option<String> {
@@ -128,10 +138,10 @@ impl Process {
         let expiry = deadline.map_or_else(never, |at| {
             after(at.saturating_duration_since(Instant::now()))
         });
-        let exited = self.child.exited();
+        let done = self.done.clone();
         let grace = after(self.grace);
         let outcome = select! {
-            recv(exited) -> _ => Ok(()),
+            recv(done) -> _ => Ok(()),
             recv(grace) -> _ => {
                 self.child.interrupt();
                 if !self.child.await_exit(self.grace) {
@@ -144,6 +154,7 @@ impl Process {
                 Err(ProcessError::DeadlineExceeded)
             }
         };
+        let _ = self.done.recv();
         self.client.close();
         *closed = Some(outcome.clone());
         outcome
@@ -154,6 +165,6 @@ impl Process {
         self.child.release_stderr();
         self.client
             .close_with(ClientError::Transport("claude rpc: process exited".into()));
-        let _ = self.child.exited().recv();
+        let _ = self.done.recv();
     }
 }

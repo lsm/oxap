@@ -357,6 +357,10 @@ impl Child {
         self.exited.clone()
     }
 
+    pub fn stderr_done(&self) -> Receiver<()> {
+        self.stderr_done.clone()
+    }
+
     pub fn exit_status(&self) -> Option<ExitStatus> {
         *lock(&self.status)
     }
