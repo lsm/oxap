@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -32,6 +32,33 @@ export function npmTarball(name, version) {
 
 export function bundledNpmPackages(version, bundle) {
   return NPM_PACKAGES.filter((name) => existsSync(join(bundle, "npm", npmTarball(name, version))));
+}
+
+export function npmDistTag(version, published) {
+  const stable = published.some((v) => !v.includes("-") && v !== "0.0.0");
+  return version.includes("-") && stable ? "next" : "latest";
+}
+
+function npmVersions(name) {
+  const result = spawnSync("npm", ["view", name, "versions", "--json"], { encoding: "utf8" });
+  let answer;
+  try {
+    answer = JSON.parse(result.stdout);
+  } catch {
+    fail(`npm view ${name} versions exited ${result.status} without a JSON answer: ${result.stderr.trim()}`);
+  }
+  if (result.status !== 0) {
+    if (answer?.error?.code === "E404") return [];
+    fail(`npm view ${name} versions exited ${result.status}: ${JSON.stringify(answer?.error ?? answer)}`);
+  }
+  const versions = [answer].flat();
+  if (!versions.every((v) => typeof v === "string")) fail(`npm view ${name} versions answered ${result.stdout.trim()}`);
+  return versions;
+}
+
+function distTag() {
+  const version = option("--version") ?? fail("dist-tag needs --version");
+  console.log(npmDistTag(version, npmVersions("@oxap/cli")));
 }
 
 function workspace() {
@@ -122,7 +149,7 @@ function commands() {
   const version = option("--version") ?? fail("commands needs --version");
   const run = option("--run") ?? fail("commands needs --run");
   const sha = option("--sha") ?? fail("commands needs --sha");
-  const distTag = version.includes("-") ? "next" : "latest";
+  const distTag = npmDistTag(version, npmVersions("@oxap/cli"));
   const order = publishOrder(workspace());
   const lines = [
     `# Publish ${version} by hand, once`,
@@ -176,7 +203,7 @@ function commands() {
   console.log(lines.join("\n"));
 }
 
-const actions = { versions, crates, registry, commands };
+const actions = { versions, crates, registry, commands, "dist-tag": distTag };
 const action = actions[process.argv[2]];
 if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   if (!action) fail(`usage: release-channels.mjs ${Object.keys(actions).join("|")} [options]`);
