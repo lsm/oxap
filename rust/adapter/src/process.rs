@@ -87,11 +87,14 @@ pub fn shuttable<P: Read + Send + 'static>(pipe: P, _shut: Shutter) -> impl Read
 struct Stdin {
     pipe: Mutex<Option<ChildStdin>>,
     released: AtomicBool,
+    watch: Shutter,
+    shut: Mutex<Option<Shutter>>,
 }
 
 impl Stdin {
     fn release(&self) {
         self.released.store(true, Ordering::SeqCst);
+        lock(&self.shut).take();
         if let Ok(mut pipe) = self.pipe.try_lock() {
             pipe.take();
         }
@@ -252,6 +255,7 @@ impl Child {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let (shut, shutter) = shutter_pair()?;
+        let (stdin_watch, stdin_shut) = shutter_pair()?;
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
@@ -288,6 +292,8 @@ impl Child {
                 stdin: Arc::new(Stdin {
                     pipe: Mutex::new(Some(stdin)),
                     released: AtomicBool::new(false),
+                    watch: stdin_watch,
+                    shut: Mutex::new(Some(stdin_shut)),
                 }),
                 stderr,
                 stderr_done,
@@ -408,8 +414,9 @@ struct SharedStdin(Arc<Stdin>);
 
 impl Write for SharedStdin {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let watch = &self.0.watch;
         self.0.with(
-            |stdin| stdin.write(data),
+            |stdin| write_unless_shut(stdin, watch, data),
             || Err(std::io::ErrorKind::BrokenPipe.into()),
         )
     }
@@ -417,4 +424,34 @@ impl Write for SharedStdin {
     fn flush(&mut self) -> std::io::Result<()> {
         self.0.with(|stdin| stdin.flush(), || Ok(()))
     }
+}
+
+#[cfg(unix)]
+fn write_unless_shut(
+    stdin: &mut ChildStdin,
+    watch: &Shutter,
+    data: &[u8],
+) -> std::io::Result<usize> {
+    use rustix::event::{poll, PollFd, PollFlags};
+    let mut descriptors = [
+        PollFd::new(stdin, PollFlags::OUT),
+        PollFd::new(watch, PollFlags::IN),
+    ];
+    poll(&mut descriptors, None)?;
+    if !descriptors[1].revents().is_empty() {
+        return Err(std::io::ErrorKind::BrokenPipe.into());
+    }
+    stdin.write(&data[..data.len().min(PIPE_ATOMIC)])
+}
+
+#[cfg(unix)]
+const PIPE_ATOMIC: usize = 512;
+
+#[cfg(not(unix))]
+fn write_unless_shut(
+    stdin: &mut ChildStdin,
+    _watch: &Shutter,
+    data: &[u8],
+) -> std::io::Result<usize> {
+    stdin.write(data)
 }
