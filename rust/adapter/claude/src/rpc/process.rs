@@ -25,6 +25,7 @@ pub struct ProcessConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProcessError {
     MissingPath,
+    Unsupported,
     Spawn(String),
     NotExited,
     DeadlineExceeded,
@@ -34,6 +35,9 @@ impl fmt::Display for ProcessError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingPath => f.write_str("claude rpc: executable path is required"),
+            Self::Unsupported => {
+                f.write_str("claude rpc: a forced close cannot interrupt pipes on this platform")
+            }
             Self::Spawn(detail) => f.write_str(detail),
             Self::NotExited => f.write_str("claude rpc: process did not exit after stdin EOF"),
             Self::DeadlineExceeded => f.write_str("context deadline exceeded"),
@@ -58,6 +62,9 @@ impl Process {
     pub fn start(config: &ProcessConfig, deadline: Option<Instant>) -> Result<Self, ProcessError> {
         if config.path.is_empty() {
             return Err(ProcessError::MissingPath);
+        }
+        if cfg!(not(unix)) {
+            return Err(ProcessError::Unsupported);
         }
         if deadline.is_some_and(|at| Instant::now() >= at) {
             return Err(ProcessError::DeadlineExceeded);
