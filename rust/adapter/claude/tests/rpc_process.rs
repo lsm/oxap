@@ -50,7 +50,10 @@ fn a_child_that_exits_on_stdin_eof_closes_cleanly_and_a_second_close_repeats_the
     assert!(exited(&process));
     assert_eq!(process.wait_error(), None);
     assert_eq!(process.close(None), Ok(()));
-    assert_eq!(process.client.call(b"{}", None), Err(ClientError::Closed));
+    assert_eq!(
+        process.client.call(b"{}", None),
+        Err(ClientError::Transport("EOF".into()))
+    );
 }
 
 #[test]
