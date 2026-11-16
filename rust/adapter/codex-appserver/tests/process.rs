@@ -140,3 +140,21 @@ fn configured_capabilities_ride_in_the_initialize_params() {
         "{\"id\":0,\"method\":\"initialize\",\"params\":{\"clientInfo\":{\"name\":\"open-agent-protocol\",\"version\":\"0.1\"},\"capabilities\":{\"experimentalApi\":true,\"optOutNotificationMethods\":[\"item/started\"],\"extensions\":{\"z\":{\"on\":true}}}}}"
     );
 }
+
+#[test]
+fn a_cancel_released_after_a_successful_start_leaves_the_process_running() {
+    let _serial = serial();
+    let script = r#"read request; printf '%s\n' '{"id":0,"result":{}}'; read notice; while read line; do :; done"#;
+    for attempt in 0..10 {
+        let (cancel, cancelled) = crossbeam_channel::bounded::<()>(0);
+        let process = Process::start_with(&server(script), deadline(), &cancelled).unwrap();
+        drop(cancel);
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(
+            process.client.err(),
+            None,
+            "attempt {attempt}: releasing the cancel after start closed the process"
+        );
+        assert_eq!(process.close(), Ok(()));
+    }
+}
