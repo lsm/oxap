@@ -84,7 +84,8 @@ transport, waits for the submit, as Go's does.
 operation runs on its own thread, so each returns its future at once, even
 while another submit holds `turn/start`, and dropping a future is Go's
 cancelled context. Dropped while the process factory waits for Codex's
-`initialize` answer, it ends Codex. Dropped during a native call or answer
+`initialize` answer, it closes the rpc client and kills Codex if it has
+not exited within the shutdown timeout. Dropped during a native call or answer
 (`thread/start`, `thread/resume`, `turn/start`, `turn/interrupt`, or an
 approval or input answer), it closes the rpc client, releasing Codex's
 stdin without waiting for it to exit, so a submit leaves the session closed. A submit or resolve dropped while it waits for the session,

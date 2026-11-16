@@ -146,10 +146,14 @@ impl Process {
         })
         .map_err(|failure| error(Fault::Encode(failure.to_string())))?;
         let (initializing, finished) = crossbeam_channel::bounded::<()>(0);
-        let (watched, cancel) = (process.client.clone(), cancel.clone());
+        let (watched, child, cancel) = (
+            process.client.clone(),
+            process.child.clone(),
+            cancel.clone(),
+        );
         std::thread::spawn(move || {
             crossbeam_channel::select! {
-                recv(cancel) -> _ => watched.close(),
+                recv(cancel) -> _ => abandon(&watched, &child, timeout),
                 recv(finished) -> _ => {}
             }
         });
@@ -257,14 +261,18 @@ impl Client for ProcessClient {
     }
 
     fn abort(&self) {
-        self.0.client.close();
-        let (child, timeout) = (self.0.child.clone(), self.0.timeout);
-        std::thread::spawn(move || {
-            if !child.await_exit(timeout) {
-                child.kill();
-            }
-        });
+        abandon(&self.0.client, &self.0.child, self.0.timeout);
     }
+}
+
+fn abandon(client: &RpcClient, child: &Child, timeout: Duration) {
+    client.close();
+    let child = child.clone();
+    std::thread::spawn(move || {
+        if !child.await_exit(timeout) {
+            child.kill();
+        }
+    });
 }
 
 pub struct ProcessFactory(pub ProcessConfig);

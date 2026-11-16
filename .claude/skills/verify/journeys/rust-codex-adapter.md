@@ -191,9 +191,10 @@ each must fail.
 The same file holds `turn/start` while a host thread builds and polls
 `state`, `resolve`, `resume` and `update_settings` once each: every future
 must come back within a second. It also opens a real `/bin/sh` app-server
-that reads `initialize` and never answers, drops the open, and requires
-the process to be gone, after first checking it was alive before the
-drop. A second such app-server answers `initialize`, then holds
+that reads `initialize`, never answers and ignores stdin's end, drops the
+open, and requires the drop to return in under a second and the process
+to be gone within the shutdown bound, after first checking it was alive
+before the drop. A second such app-server answers `initialize`, then holds
 `thread/start` and ignores stdin's end: dropping the open must return in
 under a second, and the process must still be gone afterwards. To see it
 bite, run any of those operations before returning its future, stop
