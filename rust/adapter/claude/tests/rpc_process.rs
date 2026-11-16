@@ -233,6 +233,37 @@ fn a_forced_close_ends_the_reader_and_a_pending_call_while_a_descendant_holds_st
 }
 
 #[test]
+fn a_forced_close_fails_a_write_blocked_on_a_descendant_holding_stdin_unread() {
+    let _serial = serial();
+    let mut config = fake_claude(&format!(
+        "sleep 12 0<&0 >/dev/null 2>&1 &\n{KEEP_ALIVE}; exec sleep 30"
+    ));
+    config.exit_timeout = Some(Duration::from_millis(500));
+    let process = Arc::new(Process::start(&config, None).unwrap());
+    running(&process);
+    let blob = format!(r#"{{"subtype":"probe","blob":"{}"}}"#, "x".repeat(1 << 20));
+    let (called, call) = crossbeam_channel::bounded(1);
+    let caller = process.clone();
+    std::thread::spawn(move || {
+        let _ = called.send(caller.client.call(blob.as_bytes(), None));
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    let (closed, close) = crossbeam_channel::bounded(1);
+    let closer = process.clone();
+    std::thread::spawn(move || {
+        let _ = closed.send(closer.close(None));
+    });
+    assert!(close
+        .recv_timeout(WAIT)
+        .expect("close blocked while a descendant held stdin unread")
+        .is_err());
+    assert!(call
+        .recv_timeout(WAIT)
+        .expect("the call's write still blocks after close")
+        .is_err());
+}
+
+#[test]
 fn a_call_settles_when_the_child_exits_right_after_its_response() {
     let _serial = serial();
     let script = r#"IFS= read -r line
