@@ -236,7 +236,7 @@ fn a_forced_close_ends_the_reader_and_a_pending_call_while_a_descendant_holds_st
 fn a_forced_close_fails_a_write_blocked_on_a_descendant_holding_stdin_unread() {
     let _serial = serial();
     let mut config = fake_claude(&format!(
-        "sleep 12 0<&0 >/dev/null 2>&1 &\n{KEEP_ALIVE}; exec sleep 30"
+        "exec 3<&0\n(exec 0<&3 3<&-; exec sleep 12) >/dev/null 2>&1 &\nexec 3<&-\n{KEEP_ALIVE}; exec sleep 30"
     ));
     config.exit_timeout = Some(Duration::from_millis(500));
     let process = Arc::new(Process::start(&config, None).unwrap());
