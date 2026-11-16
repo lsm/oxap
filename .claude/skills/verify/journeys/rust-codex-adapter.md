@@ -17,6 +17,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test inputs)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test cancels)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test usage)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test settings)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --all-features)
 ```
 
@@ -167,3 +168,11 @@ through the runner it shares with `tests/cancels.rs`. To see it bite,
 measure a run's usage from zero instead of the thread total at submit, or
 let an update for another turn leave the thread total alone: the replay
 test must fail.
+
+`tests/go_settings.json` records nine settings scenarios from the same
+generator, with each `UpdateSettings` answer or refusal, the session state
+after it and the `turn/start` params of every later submit, and
+`tests/settings.rs` replays it. To see it bite, keep the effort after a
+turn starts, send `off` as `off`, drop the previous level from the
+answer, or let a change through while a run is active: the replay test
+must fail.

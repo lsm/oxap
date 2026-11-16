@@ -12,8 +12,9 @@ use oxap_adapter::{
 use oxap_protocol::{
     Admission, EffectiveDeliveryMode, InputQuestion, InteractionId, MessageId, MessageRole,
     MessageSubmitRequest, MessageSubmitResponse, ParticipantId, RequestedDeliveryMode,
-    RunCancelResponse, RunId, RunStatus, SessionState, SessionStatus, SubmissionId, ToolCallId,
-    Usage, FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT,
+    RunCancelResponse, RunId, RunStatus, SessionSettingsUpdateRequest,
+    SessionSettingsUpdateResponse, SessionState, SessionStatus, SubmissionId, ToolCallId, Usage,
+    FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT,
 };
 use oxap_validation::OutputSchema;
 use serde_json::value::RawValue;
@@ -73,6 +74,7 @@ pub(crate) struct Inner {
     pub(crate) interactions: HashMap<InteractionId, Interaction>,
     pub(crate) next_order: u64,
     pub(crate) thread_usage: TokenUsageBreakdown,
+    pub(crate) effort: String,
 }
 
 pub(crate) struct Shared {
@@ -151,6 +153,7 @@ impl Shared {
                 interactions: HashMap::new(),
                 next_order: 0,
                 thread_usage: TokenUsageBreakdown::default(),
+                effort: String::new(),
             }),
             stop: Mutex::new(Some(stop)),
             stopped,
@@ -243,7 +246,7 @@ impl Shared {
             thread_id: self.thread_id.clone(),
             input,
             model: model.clone(),
-            effort: String::new(),
+            effort: self.lock().effort.clone(),
             output_schema: request.output_schema.clone(),
         };
         let base = self.lock().thread_usage;
@@ -284,6 +287,7 @@ impl Shared {
                     return Err(error);
                 }
             };
+            inner.effort.clear();
             inner.turns.insert(turn.clone(), run_id.clone());
             inner.runs.insert(
                 run_id.clone(),
@@ -417,6 +421,13 @@ impl Session {
 
     pub fn cancel(&self, run_id: &RunId) -> Result<RunCancelResponse, Error> {
         self.shared.cancel(run_id)
+    }
+
+    pub fn update_settings(
+        &self,
+        request: SessionSettingsUpdateRequest,
+    ) -> Result<(SessionSettingsUpdateResponse, SessionState), Error> {
+        self.shared.update_settings(request)
     }
 }
 

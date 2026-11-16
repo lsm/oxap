@@ -244,7 +244,7 @@ pub(crate) fn call<T: Decode>(
     })
 }
 
-fn features() -> BTreeMap<String, FeatureSupport> {
+pub(crate) fn features() -> BTreeMap<String, FeatureSupport> {
     let feature = |level, reason: &str| FeatureSupport {
         level,
         reason: reason.into(),
