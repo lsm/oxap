@@ -213,10 +213,15 @@ a close error, an empty environment allowlist passes nothing ambient, a child
 that ignores EOF and SIGINT is killed and reaped with `NotExited`, a close past
 its deadline kills the child, a malformed frame retires the client, stderr is
 bounded and redacted, and a call answered just before the child exits still
-settles. Spawning is serialised, so no child inherits another test's pipe. To
+settles. A forced close also shuts the stdout and stderr readers, as Go
+closes both pipes: a descendant that keeps stdout open cannot hold the reader
+or a pending call, and one that keeps stderr open past the drain grace finds
+its write refused. Spawning is serialised, so no child inherits another test's pipe. To
 see it bite, skip `release_stdin` in `close`: the clean-exit case must fail.
 Return `Ok` after the kill: the ignore-EOF case must fail. Drop the deadline
-arm: the deadline case must hang until its grace and fail.
+arm: the deadline case must hang until its grace and fail. Keep the Claude client's
+closer from dropping its shutter: the descendant-stdout case must fail. Skip
+`close_stderr` after the drain: the descendant-stderr case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the

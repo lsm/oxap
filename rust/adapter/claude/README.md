@@ -39,7 +39,9 @@ after the client is gone fails with `Closed`.
 its stderr is kept to a bound and redacted, and `close` ends stdin, then
 interrupts and finally kills a child that outlives its grace, returning
 `NotExited`, or kills it at once past the caller's deadline. A nonzero exit is
-the wait error, not a close error, as in Go.
+the wait error, not a close error, as in Go. Closing also shuts the stdout
+and stderr readers, as Go closes both pipes, so a descendant that inherited
+either one cannot keep the reader or a pending call waiting.
 
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
