@@ -242,49 +242,111 @@ fn a_held_turn_start_leaves_every_other_operation_a_future_that_polls_at_once() 
 #[cfg(unix)]
 #[test]
 fn an_open_dropped_while_initialize_is_withheld_ends_codex_as_go_does() {
-    let dir = std::env::temp_dir().join(format!("oap-codex-contract-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let script = "echo $$ > pid; read request; : > seen; while read line; do :; done";
-    let adapter = Adapter::new(Config {
-        process: ProcessConfig {
-            path: "/bin/sh".into(),
-            args: vec!["-c".into(), script.into(), "codex".into()],
-            dir: dir.to_string_lossy().into_owned(),
-            env: Some(vec!["PATH=/usr/bin:/bin".into()]),
-            shutdown_timeout: Some(Duration::from_secs(2)),
-            ..ProcessConfig::default()
-        },
-        ..Config::default()
-    })
-    .unwrap();
-    let mut opening = oxap_adapter::Adapter::open(&adapter, request());
-    start(&mut opening);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !dir.join("seen").exists() {
-        assert!(Instant::now() < deadline, "Codex never read initialize");
-        std::thread::sleep(Duration::from_millis(5));
+    let mut codex = Codex::open(
+        "initialize",
+        "echo $$ > pid; read request; : > seen; while read line; do :; done",
+        Duration::from_secs(2),
+    );
+    codex.drop_open();
+    let survived = codex.survives(Duration::from_secs(5));
+    assert!(!survived, "the dropped open left Codex running");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_open_dropped_during_thread_start_returns_before_codex_exits_as_go_does() {
+    let mut codex = Codex::open(
+        "thread-start",
+        r#"echo $$ > pid; read request; printf '%s\n' '{"id":0,"result":{}}'; read notice; read start; : > seen; while :; do sleep 1; done"#,
+        Duration::from_secs(3),
+    );
+    let began = Instant::now();
+    codex.drop_open();
+    let took = began.elapsed();
+    let survived = codex.survives(Duration::from_secs(8));
+    assert!(
+        took < Duration::from_secs(1),
+        "dropping the open waited {took:?} for Codex to exit"
+    );
+    assert!(!survived, "the dropped open left Codex running");
+}
+
+#[cfg(unix)]
+struct Codex {
+    opening: Option<oxap_adapter::BoxFuture<'static, Box<dyn oxap_adapter::Session>>>,
+    dir: std::path::PathBuf,
+    pid: String,
+}
+
+#[cfg(unix)]
+impl Codex {
+    fn open(name: &str, script: &str, shutdown: Duration) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("oap-codex-contract-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let adapter = Adapter::new(Config {
+            process: ProcessConfig {
+                path: "/bin/sh".into(),
+                args: vec!["-c".into(), script.into(), "codex".into()],
+                dir: dir.to_string_lossy().into_owned(),
+                env: Some(vec!["PATH=/usr/bin:/bin".into()]),
+                shutdown_timeout: Some(shutdown),
+                ..ProcessConfig::default()
+            },
+            ..Config::default()
+        })
+        .unwrap();
+        let mut opening: oxap_adapter::BoxFuture<'static, Box<dyn oxap_adapter::Session>> =
+            Box::pin(async move { oxap_adapter::Adapter::open(&adapter, request()).await });
+        start(&mut opening);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !dir.join("seen").exists() {
+            assert!(Instant::now() < deadline, "Codex never reached its stall");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let pid = std::fs::read_to_string(dir.join("pid"))
+            .unwrap()
+            .trim()
+            .to_owned();
+        let codex = Self {
+            opening: Some(opening),
+            dir,
+            pid,
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(codex.alive(), "Codex ended before the open was dropped");
+        codex
     }
-    let pid = std::fs::read_to_string(dir.join("pid")).unwrap();
-    let alive = || {
+
+    fn drop_open(&mut self) {
+        drop(self.opening.take());
+    }
+
+    fn alive(&self) -> bool {
         std::process::Command::new("kill")
-            .args(["-0", pid.trim()])
+            .args(["-0", &self.pid])
             .stderr(std::process::Stdio::null())
             .status()
             .unwrap()
             .success()
-    };
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(alive(), "Codex ended before the open was dropped");
-    drop(opening);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while alive() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
     }
-    let survived = alive();
-    if survived {
-        let _ = std::process::Command::new("kill").arg(pid.trim()).status();
+
+    fn survives(&self, bound: Duration) -> bool {
+        let deadline = Instant::now() + bound;
+        while self.alive() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.alive()
     }
-    let _ = std::fs::remove_dir_all(&dir);
-    assert!(!survived, "the dropped open left Codex running");
+}
+
+#[cfg(unix)]
+impl Drop for Codex {
+    fn drop(&mut self) {
+        if self.alive() {
+            let _ = std::process::Command::new("kill").arg(&self.pid).status();
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
