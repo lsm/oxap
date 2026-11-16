@@ -64,12 +64,12 @@ where
     }
     impl<P: Read + std::os::fd::AsFd> Read for Shuttable<P> {
         fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-            use rustix::event::{poll, PollFd, PollFlags};
+            use rustix::event::{PollFd, PollFlags};
             let mut descriptors = [
                 PollFd::new(&self.pipe, PollFlags::IN),
                 PollFd::new(&self.shut, PollFlags::IN),
             ];
-            poll(&mut descriptors, None)?;
+            poll_uninterrupted(&mut descriptors)?;
             if !descriptors[1].revents().is_empty() {
                 return Ok(0);
             }
@@ -77,6 +77,16 @@ where
         }
     }
     Shuttable { pipe, shut }
+}
+
+#[cfg(unix)]
+fn poll_uninterrupted(descriptors: &mut [rustix::event::PollFd<'_>]) -> std::io::Result<()> {
+    loop {
+        match rustix::event::poll(descriptors, None) {
+            Err(errno) if errno == rustix::io::Errno::INTR => {}
+            outcome => return outcome.map(drop).map_err(Into::into),
+        }
+    }
 }
 
 #[cfg(not(unix))]
@@ -438,12 +448,12 @@ fn write_unless_shut(
     watch: &Shutter,
     data: &[u8],
 ) -> std::io::Result<usize> {
-    use rustix::event::{poll, PollFd, PollFlags};
+    use rustix::event::{PollFd, PollFlags};
     let mut descriptors = [
         PollFd::new(stdin, PollFlags::OUT),
         PollFd::new(watch, PollFlags::IN),
     ];
-    poll(&mut descriptors, None)?;
+    poll_uninterrupted(&mut descriptors)?;
     if !descriptors[1].revents().is_empty() {
         return Err(std::io::ErrorKind::BrokenPipe.into());
     }
