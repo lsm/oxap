@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { bundledNpmPackages, npmTarball, pep440, publishOrder } from "./release-channels.mjs";
+import { bundledNpmPackages, npmDistTag, npmTarball, pep440, publishOrder } from "./release-channels.mjs";
 
 test("run from a checkout path holding a space, the script still runs and refuses an unknown action", () => {
   const spaced = join(mkdtempSync(join(tmpdir(), "release-channels-")), "a dir with a space");
@@ -70,4 +70,11 @@ test("the alpha line maps to its PEP 440 spelling", () => {
 
 test("a scoped package packs to the file npm pack writes", () => {
   assert.equal(npmTarball("@oxap/cli-linux-x64", "0.1.0-alpha.33"), "oxap-cli-linux-x64-0.1.0-alpha.33.tgz");
+});
+
+test("a prerelease takes the latest dist-tag until a stable version is on npm, past the 0.0.0 placeholder", () => {
+  assert.equal(npmDistTag("0.1.0-alpha.34", ["0.0.0-stage", "0.0.0", "0.1.0-alpha.33"]), "latest");
+  assert.equal(npmDistTag("0.1.0-alpha.34", []), "latest");
+  assert.equal(npmDistTag("0.2.0-alpha.1", ["0.0.0", "0.1.0"]), "next");
+  assert.equal(npmDistTag("0.1.0", ["0.0.0", "0.1.0-alpha.34"]), "latest");
 });
