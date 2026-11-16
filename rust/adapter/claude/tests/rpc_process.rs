@@ -200,9 +200,11 @@ fn a_descendant_holding_stderr_past_the_drain_grace_finds_its_read_end_closed() 
 }
 
 #[test]
-fn a_forced_close_ends_the_reader_and_a_pending_call_while_a_descendant_holds_stdout() {
+fn a_forced_close_returns_after_its_reader_and_pending_call_end_while_a_descendant_holds_stdout() {
     let _serial = serial();
-    let mut config = fake_claude(&format!("(sleep 8) &\n{KEEP_ALIVE}; {DRAIN}"));
+    let mut config = fake_claude(&format!(
+        "(sleep 8) &\n{KEEP_ALIVE}; IFS= read -r line; {KEEP_ALIVE}; {DRAIN}"
+    ));
     config.exit_timeout = Some(Duration::from_millis(500));
     let process = Arc::new(Process::start(&config, None).unwrap());
     running(&process);
@@ -211,6 +213,7 @@ fn a_forced_close_ends_the_reader_and_a_pending_call_while_a_descendant_holds_st
     std::thread::spawn(move || {
         let _ = called.send(caller.client.call(br#"{"subtype":"probe"}"#, None));
     });
+    running(&process);
     let (closed, close) = crossbeam_channel::bounded(1);
     let closer = process.clone();
     std::thread::spawn(move || {
@@ -222,9 +225,14 @@ fn a_forced_close_ends_the_reader_and_a_pending_call_while_a_descendant_holds_st
             .expect("close blocked while a descendant held stdout"),
         Err(ProcessError::NotExited)
     );
+    assert_eq!(
+        process.client.read_done().recv_timeout(Duration::ZERO),
+        Err(RecvTimeoutError::Disconnected),
+        "close returned while the reader was still running"
+    );
     assert!(call
-        .recv_timeout(WAIT)
-        .expect("the pending call still waits after close")
+        .recv_timeout(Duration::ZERO)
+        .expect("the pending call was unsettled when close returned")
         .is_err());
     assert_eq!(
         process.done().recv_timeout(Duration::ZERO),
