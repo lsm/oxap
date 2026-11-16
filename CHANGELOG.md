@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.34] - 2026-11-16
+
+### Merged pull requests
+
+- **release: Publish a prerelease to npm's latest tag until a stable version exists** ([#1843](https://github.com/lsm/oxap/pull/1843)): an alpha now publishes to npm under `latest` while no stable `@oxap/cli` exists, so `npm install -g @oxap/cli` installs it instead of the `0.0.0` name placeholder.
+- **claude: Spawn Claude Code through a Rust rpc process as Go's rpc.Start does** ([#1842](https://github.com/lsm/oxap/pull/1842)): C5 slice 3 on #1439: `rpc::Process`, the Rust port of Go's `internal/rpc/process.go`.
+
 ## [0.1.0-alpha.33] - 2026-11-14
 
 ### Renamed to OXAP
