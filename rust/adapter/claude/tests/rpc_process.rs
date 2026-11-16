@@ -168,6 +168,38 @@ fn a_start_without_an_executable_or_past_its_deadline_spawns_nothing() {
 }
 
 #[test]
+fn a_descendant_holding_stderr_past_the_drain_grace_finds_its_read_end_closed() {
+    let _serial = serial();
+    let dir = std::env::temp_dir().join(format!("oxap-claude-stderr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let alive = dir.join("alive");
+    let broken = dir.join("broken");
+    let mut config = fake_claude(&format!(
+        "(trap '' PIPE; sleep 3; if printf x >&2; then : > '{}'; else : > '{}'; fi) >/dev/null &\n{KEEP_ALIVE}; {DRAIN}",
+        alive.display(),
+        broken.display()
+    ));
+    config.exit_timeout = Some(Duration::from_millis(500));
+    let process = Process::start(&config, None).unwrap();
+    running(&process);
+    let _ = process.close(None);
+    assert_eq!(
+        process.done().recv_timeout(WAIT),
+        Err(RecvTimeoutError::Disconnected)
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !alive.exists() && !broken.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let (wrote, refused) = (alive.exists(), broken.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        refused && !wrote,
+        "the descendant's stderr write after the child exited reached an open read end"
+    );
+}
+
+#[test]
 fn a_call_settles_when_the_child_exits_right_after_its_response() {
     let _serial = serial();
     let script = r#"IFS= read -r line
