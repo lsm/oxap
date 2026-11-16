@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -40,11 +40,20 @@ export function npmDistTag(version, published) {
 }
 
 function npmVersions(name) {
+  const result = spawnSync("npm", ["view", name, "versions", "--json"], { encoding: "utf8" });
+  let answer;
   try {
-    return [JSON.parse(execFileSync("npm", ["view", name, "versions", "--json"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }))].flat();
+    answer = JSON.parse(result.stdout);
   } catch {
-    return [];
+    fail(`npm view ${name} versions exited ${result.status} without a JSON answer: ${result.stderr.trim()}`);
   }
+  if (result.status !== 0) {
+    if (answer?.error?.code === "E404") return [];
+    fail(`npm view ${name} versions exited ${result.status}: ${JSON.stringify(answer?.error ?? answer)}`);
+  }
+  const versions = [answer].flat();
+  if (!versions.every((v) => typeof v === "string")) fail(`npm view ${name} versions answered ${result.stdout.trim()}`);
+  return versions;
 }
 
 function distTag() {
