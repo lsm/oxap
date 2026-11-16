@@ -216,12 +216,15 @@ bounded and redacted, and a call answered just before the child exits still
 settles. A forced close also shuts the stdout and stderr readers, as Go
 closes both pipes: a descendant that keeps stdout open cannot hold the reader
 or a pending call, and one that keeps stderr open past the drain grace finds
-its write refused. Spawning is serialised, so no child inherits another test's pipe. To
+its write refused, and one that keeps stdin unread cannot hold a write
+blocked on the full pipe. Spawning is serialised, so no child inherits another test's pipe. To
 see it bite, skip `release_stdin` in `close`: the clean-exit case must fail.
 Return `Ok` after the kill: the ignore-EOF case must fail. Drop the deadline
 arm: the deadline case must hang until its grace and fail. Keep the Claude client's
 closer from dropping its shutter: the descendant-stdout case must fail. Skip
-`close_stderr` after the drain: the descendant-stderr case must fail.
+`close_stderr` after the drain: the descendant-stderr case must fail. Write
+the whole buffer in `write_unless_shut` instead of `PIPE_ATOMIC` bytes: the
+descendant-stdin case must fail.
 
 `tests/adapter_open.rs` pins the adapter surface above the codec: the
 descriptor `probe` returns (the pinned `claude-code.cli` endpoint, the
