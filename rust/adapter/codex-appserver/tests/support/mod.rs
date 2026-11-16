@@ -255,7 +255,7 @@ fn incoming(id: i64, method: &str, params: &str) -> (Inbound, Arc<Answers>) {
 pub fn adapter(fake: &Arc<Fake>, configure: impl FnOnce(&mut Config)) -> Adapter {
     let client = fake.clone();
     let factory: Arc<dyn ClientFactory> =
-        Arc::new(move |_: Option<Instant>| Ok(client.clone() as Arc<dyn Client>));
+        Arc::new(move |_: Option<Instant>, _: &Receiver<()>| Ok(client.clone() as Arc<dyn Client>));
     let mut config = Config {
         factory: Some(factory),
         process: ProcessConfig {

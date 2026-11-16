@@ -64,13 +64,13 @@ impl SessionContract for Session {
     }
 
     fn state(&self) -> BoxFuture<'_, SessionState> {
-        let state = self.shared.state();
-        Box::pin(async move { state })
+        let shared = self.shared.clone();
+        background(move |_| shared.state())
     }
 
     fn resolve(&self, resolution: InteractionResolution) -> BoxFuture<'_, ()> {
-        let resolved = self.shared.resolve(resolution);
-        Box::pin(async move { resolved })
+        let shared = self.shared.clone();
+        background(move |caller| shared.resolve(resolution, caller))
     }
 
     fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {
@@ -79,8 +79,8 @@ impl SessionContract for Session {
     }
 
     fn resume(&self, request: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
-        let resumed = self.shared.resume(request);
-        Box::pin(async move { resumed })
+        let shared = self.shared.clone();
+        background(move |_| shared.resume(request))
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
@@ -102,7 +102,7 @@ impl SettingsUpdater for Session {
         &self,
         request: SessionSettingsUpdateRequest,
     ) -> BoxFuture<'_, (SessionSettingsUpdateResponse, SessionState)> {
-        let updated = self.shared.update_settings(request);
-        Box::pin(async move { updated })
+        let shared = self.shared.clone();
+        background(move |_| shared.update_settings(request))
     }
 }

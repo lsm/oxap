@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use crossbeam_channel::{Receiver, Sender};
 use oxap_adapter::Error;
 
 use crate::client::Client;
@@ -13,17 +14,38 @@ enum Phase {
     Gone,
 }
 
-pub(crate) struct Caller(Mutex<(Phase, Option<Arc<dyn Client>>)>);
+struct State {
+    phase: Phase,
+    client: Option<Arc<dyn Client>>,
+    cancel: Option<Sender<()>>,
+}
+
+pub(crate) struct Caller {
+    state: Mutex<State>,
+    cancelled: Receiver<()>,
+}
 
 impl Default for Caller {
     fn default() -> Self {
-        Self(Mutex::new((Phase::Waiting, None)))
+        let (cancel, cancelled) = crossbeam_channel::bounded(0);
+        Self {
+            state: Mutex::new(State {
+                phase: Phase::Waiting,
+                client: None,
+                cancel: Some(cancel),
+            }),
+            cancelled,
+        }
     }
 }
 
 impl Caller {
+    pub(crate) fn cancelled(&self) -> &Receiver<()> {
+        &self.cancelled
+    }
+
     pub(crate) fn here(&self) -> Result<(), Error> {
-        match hold(&self.0).0 {
+        match hold(&self.state).phase {
             Phase::Gone => Err(Error::SessionClosed),
             _ => Ok(()),
         }
@@ -35,25 +57,27 @@ impl Caller {
         work: impl FnOnce() -> Result<T, rpc::Error>,
     ) -> Result<T, rpc::Error> {
         {
-            let mut state = hold(&self.0);
-            if state.0 == Phase::Gone {
+            let mut state = hold(&self.state);
+            if state.phase == Phase::Gone {
                 return Err(error(Fault::Closed));
             }
-            *state = (Phase::Calling, Some(client.clone()));
+            state.phase = Phase::Calling;
+            state.client = Some(client.clone());
         }
         let result = work();
-        let mut state = hold(&self.0);
-        if state.0 == Phase::Calling {
-            state.0 = Phase::Waiting;
+        let mut state = hold(&self.state);
+        if state.phase == Phase::Calling {
+            state.phase = Phase::Waiting;
         }
         result
     }
 
     pub(crate) fn leave(&self) {
-        let mut state = hold(&self.0);
-        if let (Phase::Calling, Some(client)) = &*state {
+        let mut state = hold(&self.state);
+        if let (Phase::Calling, Some(client)) = (state.phase, &state.client) {
             let _ = client.close();
         }
-        state.0 = Phase::Gone;
+        state.phase = Phase::Gone;
+        state.cancel = None;
     }
 }

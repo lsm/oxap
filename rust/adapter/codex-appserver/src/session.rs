@@ -413,7 +413,7 @@ impl Session {
     }
 
     pub fn resolve(&self, resolution: InteractionResolution) -> Result<(), Error> {
-        self.shared.resolve(resolution)
+        self.shared.resolve(resolution, &Caller::default())
     }
 
     pub fn state(&self) -> Result<SessionState, Error> {

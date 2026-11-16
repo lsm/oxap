@@ -87,7 +87,10 @@ impl Adapter {
         if request.participant.id.as_str().is_empty() {
             return Err(Error::InvalidParticipant);
         }
-        let client = self.factory.start(None).map_err(Error::harness)?;
+        let client = self
+            .factory
+            .start(None, caller.cancelled())
+            .map_err(Error::harness)?;
         let fail = |failure: Error| {
             let _ = client.close();
             failure

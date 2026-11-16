@@ -11,6 +11,7 @@ use oxap_protocol::{
 use serde_json::value::RawValue;
 
 use crate::adapter::ENDPOINT_ID;
+use crate::caller::Caller;
 use crate::native::{UserInputAnswer, UserInputRequestParams, UserInputResponse};
 use crate::rpc::IncomingRequest;
 use crate::session::{Inner, Interaction, Shared};
@@ -154,6 +155,7 @@ impl Shared {
         run: RunId,
         interaction: Interaction,
         request: Option<UserInputResolveRequest>,
+        caller: &Caller,
     ) -> Result<(), Error> {
         let session = self.lock().state.session_id.clone();
         let request = request
@@ -166,9 +168,10 @@ impl Shared {
             .ok_or(Error::InvalidResolution)?;
         let questions = interaction.questions.unwrap_or_default();
         let answers = answers(&questions, &request.answers).ok_or(Error::InvalidResolution)?;
-        interaction
-            .request
-            .respond(&UserInputResponse { answers })
+        caller
+            .call(&self.client, || {
+                interaction.request.respond(&UserInputResponse { answers })
+            })
             .map_err(Error::harness)?;
         let mut inner = self.lock();
         if let Some(interaction) = inner.interactions.get_mut(&id) {

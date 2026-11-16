@@ -83,6 +83,14 @@ fn handshake(detail: impl std::fmt::Display) -> Error {
 
 impl Process {
     pub fn start(config: &ProcessConfig, deadline: Option<Instant>) -> Result<Self, Error> {
+        Self::start_with(config, deadline, &crossbeam_channel::never())
+    }
+
+    pub fn start_with(
+        config: &ProcessConfig,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Self, Error> {
         if config.path.is_empty()
             || config.client_info.name.is_empty()
             || config.client_info.version.is_empty()
@@ -137,6 +145,14 @@ impl Process {
             capabilities: config.capabilities.as_ref(),
         })
         .map_err(|failure| error(Fault::Encode(failure.to_string())))?;
+        let (initializing, finished) = crossbeam_channel::bounded::<()>(0);
+        let (watched, cancel) = (process.client.clone(), cancel.clone());
+        std::thread::spawn(move || {
+            crossbeam_channel::select! {
+                recv(cancel) -> _ => watched.close(),
+                recv(finished) -> _ => {}
+            }
+        });
         let initialized = process
             .client
             .call("initialize", Some(params), deadline)
@@ -161,7 +177,9 @@ impl Process {
                 )));
             }
         };
-        if let Err(failure) = process.client.notify("initialized", None, deadline) {
+        let notified = process.client.notify("initialized", None, deadline);
+        drop(initializing);
+        if let Err(failure) = notified {
             process.abort();
             return Err(handshake(format!(
                 "notify initialized: {failure}; stderr: {}",
@@ -242,7 +260,13 @@ impl Client for ProcessClient {
 pub struct ProcessFactory(pub ProcessConfig);
 
 impl ClientFactory for ProcessFactory {
-    fn start(&self, deadline: Option<Instant>) -> Result<Arc<dyn Client>, Error> {
-        Ok(Arc::new(ProcessClient(Process::start(&self.0, deadline)?)))
+    fn start(
+        &self,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Arc<dyn Client>, Error> {
+        Ok(Arc::new(ProcessClient(Process::start_with(
+            &self.0, deadline, cancel,
+        )?)))
     }
 }

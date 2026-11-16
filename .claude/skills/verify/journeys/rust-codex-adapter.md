@@ -187,3 +187,12 @@ and the next submit's ids show the dropped one minted none. To see it bite,
 skip the close on a drop during a call, let a dropped operation still call,
 or check for the drop only after the submit's ids are minted: one test
 each must fail.
+
+The same file holds `turn/start` while a host thread builds and polls
+`state`, `resolve`, `resume` and `update_settings` once each: every future
+must come back within a second. It also opens a real `/bin/sh` app-server
+that reads `initialize` and never answers, drops the open, and requires
+the process to be gone, after first checking it was alive before the
+drop. To see it bite, run any of those operations before returning its
+future, or stop closing the client when the cancel fires during
+`initialize`: one test each must fail.
