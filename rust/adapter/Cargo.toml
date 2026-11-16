@@ -18,6 +18,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value", "unbounded_depth"] }
 thiserror = "2"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["event"] }
+
 [features]
 testkit = ["dep:futures"]
 

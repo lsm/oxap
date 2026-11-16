@@ -3,7 +3,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{after, never, select, Receiver};
-use oxap_adapter::process::{wait_error, Child, ChildConfig};
+use oxap_adapter::process::{shuttable, shutter_pair, wait_error, Child, ChildConfig};
 
 use super::{Client, ClientError, ClientOptions};
 
@@ -62,6 +62,8 @@ impl Process {
         if deadline.is_some_and(|at| Instant::now() >= at) {
             return Err(ProcessError::DeadlineExceeded);
         }
+        let (shut, shutter) =
+            shutter_pair().map_err(|failure| ProcessError::Spawn(failure.to_string()))?;
         let (child, stdout) = Child::spawn(&ChildConfig {
             path: config.path.clone(),
             args: config.args.clone(),
@@ -72,13 +74,16 @@ impl Process {
         .map_err(|failure| ProcessError::Spawn(failure.to_string()))?;
         let releaser = child.clone();
         let client = Client::new(
-            stdout,
+            shuttable(stdout, shut),
             child.writer(),
             ClientOptions {
                 frame_limit: config.frame_limit,
                 queue_capacity: config.queue_capacity,
                 write_queue_capacity: config.write_queue_capacity,
-                closer: Some(Box::new(move || releaser.release_stdin())),
+                closer: Some(Box::new(move || {
+                    releaser.release_stdin();
+                    drop(shutter);
+                })),
                 ..ClientOptions::default()
             },
         );

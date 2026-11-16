@@ -30,11 +30,58 @@ pub struct Child {
     stdin: Arc<Stdin>,
     stderr: Arc<Mutex<Stderr>>,
     stderr_done: Receiver<()>,
+    stderr_shut: Arc<Mutex<Option<Shutter>>>,
     exited: Receiver<()>,
     exit: Arc<Mutex<Option<crossbeam_channel::Sender<()>>>>,
     status: Arc<Mutex<Option<ExitStatus>>>,
     killed: Receiver<()>,
     kill: Arc<Mutex<Option<crossbeam_channel::Sender<()>>>>,
+}
+
+#[cfg(unix)]
+pub type Shutter = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+pub type Shutter = ();
+
+#[cfg(unix)]
+pub fn shutter_pair() -> std::io::Result<(Shutter, Shutter)> {
+    std::os::unix::net::UnixStream::pair()
+}
+
+#[cfg(not(unix))]
+pub fn shutter_pair() -> std::io::Result<(Shutter, Shutter)> {
+    Ok(((), ()))
+}
+
+#[cfg(unix)]
+pub fn shuttable<P>(pipe: P, shut: Shutter) -> impl Read + Send + 'static
+where
+    P: Read + std::os::fd::AsFd + Send + 'static,
+{
+    struct Shuttable<P> {
+        pipe: P,
+        shut: Shutter,
+    }
+    impl<P: Read + std::os::fd::AsFd> Read for Shuttable<P> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            use rustix::event::{poll, PollFd, PollFlags};
+            let mut descriptors = [
+                PollFd::new(&self.pipe, PollFlags::IN),
+                PollFd::new(&self.shut, PollFlags::IN),
+            ];
+            poll(&mut descriptors, None)?;
+            if !descriptors[1].revents().is_empty() {
+                return Ok(0);
+            }
+            self.pipe.read(out)
+        }
+    }
+    Shuttable { pipe, shut }
+}
+
+#[cfg(not(unix))]
+pub fn shuttable<P: Read + Send + 'static>(pipe: P, _shut: Shutter) -> impl Read + Send + 'static {
+    pipe
 }
 
 struct Stdin {
@@ -204,10 +251,11 @@ impl Child {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let (shut, shutter) = shutter_pair()?;
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
-        let mut pipe = child.stderr.take().expect("piped stderr");
+        let mut pipe = shuttable(child.stderr.take().expect("piped stderr"), shut);
         let limit = if config.stderr_limit == 0 {
             DEFAULT_STDERR_LIMIT
         } else {
@@ -243,6 +291,7 @@ impl Child {
                 }),
                 stderr,
                 stderr_done,
+                stderr_shut: Arc::new(Mutex::new(Some(shutter))),
                 exited,
                 exit: Arc::new(Mutex::new(Some(exit))),
                 status: Arc::new(Mutex::new(None)),
@@ -273,6 +322,7 @@ impl Child {
                 recv(child.killed) -> _ => {}
                 default(drain) => {}
             }
+            child.close_stderr();
             let waited = loop {
                 if let Ok(Some(exit)) = lock(&child.child).try_wait() {
                     break Some(exit);
@@ -304,7 +354,17 @@ impl Child {
 
     pub fn drain_stderr(&self, within: Duration) {
         let _ = self.stderr_done.recv_timeout(within);
+        self.close_stderr();
     }
+
+    #[cfg(unix)]
+    fn close_stderr(&self) {
+        lock(&self.stderr_shut).take();
+        let _ = self.stderr_done.recv();
+    }
+
+    #[cfg(not(unix))]
+    fn close_stderr(&self) {}
 
     pub fn kill(&self) {
         let _ = lock(&self.child).kill();
