@@ -30,6 +30,7 @@ pub struct Child {
     stdin: Arc<Stdin>,
     stderr: Arc<Mutex<Stderr>>,
     stderr_done: Receiver<()>,
+    stderr_shut: Arc<Mutex<Option<Shutter>>>,
     exited: Receiver<()>,
     exit: Arc<Mutex<Option<crossbeam_channel::Sender<()>>>>,
     status: Arc<Mutex<Option<ExitStatus>>>,
@@ -37,14 +38,73 @@ pub struct Child {
     kill: Arc<Mutex<Option<crossbeam_channel::Sender<()>>>>,
 }
 
+#[cfg(unix)]
+pub type Shutter = std::os::unix::net::UnixStream;
+#[cfg(not(unix))]
+pub type Shutter = ();
+
+#[cfg(unix)]
+pub fn shutter_pair() -> std::io::Result<(Shutter, Shutter)> {
+    std::os::unix::net::UnixStream::pair()
+}
+
+#[cfg(not(unix))]
+pub fn shutter_pair() -> std::io::Result<(Shutter, Shutter)> {
+    Ok(((), ()))
+}
+
+#[cfg(unix)]
+pub fn shuttable<P>(pipe: P, shut: Shutter) -> impl Read + Send + 'static
+where
+    P: Read + std::os::fd::AsFd + Send + 'static,
+{
+    struct Shuttable<P> {
+        pipe: P,
+        shut: Shutter,
+    }
+    impl<P: Read + std::os::fd::AsFd> Read for Shuttable<P> {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            use rustix::event::{PollFd, PollFlags};
+            let mut descriptors = [
+                PollFd::new(&self.pipe, PollFlags::IN),
+                PollFd::new(&self.shut, PollFlags::IN),
+            ];
+            poll_uninterrupted(&mut descriptors)?;
+            if !descriptors[1].revents().is_empty() {
+                return Ok(0);
+            }
+            self.pipe.read(out)
+        }
+    }
+    Shuttable { pipe, shut }
+}
+
+#[cfg(unix)]
+fn poll_uninterrupted(descriptors: &mut [rustix::event::PollFd<'_>]) -> std::io::Result<()> {
+    loop {
+        match rustix::event::poll(descriptors, None) {
+            Err(errno) if errno == rustix::io::Errno::INTR => {}
+            outcome => return outcome.map(drop).map_err(Into::into),
+        }
+    }
+}
+
+#[cfg(not(unix))]
+pub fn shuttable<P: Read + Send + 'static>(pipe: P, _shut: Shutter) -> impl Read + Send + 'static {
+    pipe
+}
+
 struct Stdin {
     pipe: Mutex<Option<ChildStdin>>,
     released: AtomicBool,
+    watch: Shutter,
+    shut: Mutex<Option<Shutter>>,
 }
 
 impl Stdin {
     fn release(&self) {
         self.released.store(true, Ordering::SeqCst);
+        lock(&self.shut).take();
         if let Ok(mut pipe) = self.pipe.try_lock() {
             pipe.take();
         }
@@ -204,10 +264,12 @@ impl Child {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let (shut, shutter) = shutter_pair()?;
+        let (stdin_watch, stdin_shut) = shutter_pair()?;
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
-        let mut pipe = child.stderr.take().expect("piped stderr");
+        let mut pipe = shuttable(child.stderr.take().expect("piped stderr"), shut);
         let limit = if config.stderr_limit == 0 {
             DEFAULT_STDERR_LIMIT
         } else {
@@ -240,9 +302,12 @@ impl Child {
                 stdin: Arc::new(Stdin {
                     pipe: Mutex::new(Some(stdin)),
                     released: AtomicBool::new(false),
+                    watch: stdin_watch,
+                    shut: Mutex::new(Some(stdin_shut)),
                 }),
                 stderr,
                 stderr_done,
+                stderr_shut: Arc::new(Mutex::new(Some(shutter))),
                 exited,
                 exit: Arc::new(Mutex::new(Some(exit))),
                 status: Arc::new(Mutex::new(None)),
@@ -268,10 +333,13 @@ impl Child {
                 recv(reader_done) -> _ => {}
                 recv(child.killed) -> _ => {}
             }
-            crossbeam_channel::select! {
-                recv(child.stderr_done) -> _ => {}
-                recv(child.killed) -> _ => {}
-                default(drain) => {}
+            let killed = crossbeam_channel::select! {
+                recv(child.stderr_done) -> _ => false,
+                recv(child.killed) -> _ => true,
+                default(drain) => false,
+            };
+            if !killed {
+                child.close_stderr();
             }
             let waited = loop {
                 if let Ok(Some(exit)) = lock(&child.child).try_wait() {
@@ -289,6 +357,10 @@ impl Child {
         self.exited.clone()
     }
 
+    pub fn stderr_done(&self) -> Receiver<()> {
+        self.stderr_done.clone()
+    }
+
     pub fn exit_status(&self) -> Option<ExitStatus> {
         *lock(&self.status)
     }
@@ -304,7 +376,21 @@ impl Child {
 
     pub fn drain_stderr(&self, within: Duration) {
         let _ = self.stderr_done.recv_timeout(within);
+        self.close_stderr();
     }
+
+    pub fn release_stderr(&self) {
+        lock(&self.stderr_shut).take();
+    }
+
+    #[cfg(unix)]
+    fn close_stderr(&self) {
+        self.release_stderr();
+        let _ = self.stderr_done.recv();
+    }
+
+    #[cfg(not(unix))]
+    fn close_stderr(&self) {}
 
     pub fn kill(&self) {
         let _ = lock(&self.child).kill();
@@ -348,8 +434,9 @@ struct SharedStdin(Arc<Stdin>);
 
 impl Write for SharedStdin {
     fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        let watch = &self.0.watch;
         self.0.with(
-            |stdin| stdin.write(data),
+            |stdin| write_unless_shut(stdin, watch, data),
             || Err(std::io::ErrorKind::BrokenPipe.into()),
         )
     }
@@ -357,4 +444,34 @@ impl Write for SharedStdin {
     fn flush(&mut self) -> std::io::Result<()> {
         self.0.with(|stdin| stdin.flush(), || Ok(()))
     }
+}
+
+#[cfg(unix)]
+fn write_unless_shut(
+    stdin: &mut ChildStdin,
+    watch: &Shutter,
+    data: &[u8],
+) -> std::io::Result<usize> {
+    use rustix::event::{PollFd, PollFlags};
+    let mut descriptors = [
+        PollFd::new(stdin, PollFlags::OUT),
+        PollFd::new(watch, PollFlags::IN),
+    ];
+    poll_uninterrupted(&mut descriptors)?;
+    if !descriptors[1].revents().is_empty() {
+        return Err(std::io::ErrorKind::BrokenPipe.into());
+    }
+    stdin.write(&data[..data.len().min(PIPE_ATOMIC)])
+}
+
+#[cfg(unix)]
+const PIPE_ATOMIC: usize = 512;
+
+#[cfg(not(unix))]
+fn write_unless_shut(
+    stdin: &mut ChildStdin,
+    _watch: &Shutter,
+    data: &[u8],
+) -> std::io::Result<usize> {
+    stdin.write(data)
 }

@@ -34,6 +34,15 @@ retires the client, as Go's does. A request holds its client weakly, so one
 left unread in the queue does not keep a finished client alive; answering it
 after the client is gone fails with `Closed`.
 
+`rpc::Process` spawns Claude Code as Go's `rpc.Start` does, over the shared
+`oxap_adapter::process::Child`: only the listed environment reaches the child,
+its stderr is kept to a bound and redacted, and `close` ends stdin, then
+interrupts and finally kills a child that outlives its grace, returning
+`NotExited`, or kills it at once past the caller's deadline. A nonzero exit is
+the wait error, not a close error, as in Go. Closing also shuts the stdout
+and stderr readers, as Go closes both pipes, so a descendant that inherited
+either one cannot keep the reader or a pending call waiting.
+
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
 an unrecognised type reads as `Unknown`, and an unrecognised system subtype as

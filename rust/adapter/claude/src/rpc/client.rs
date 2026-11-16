@@ -337,7 +337,7 @@ impl Client {
         self.err().unwrap_or(ClientError::Closed)
     }
 
-    fn close_with(&self, reason: ClientError) {
+    pub(super) fn close_with(&self, reason: ClientError) {
         if self.0.closing.swap(true, Ordering::SeqCst) {
             let _ = self.0.closed_rx.recv();
             return;

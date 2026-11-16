@@ -1,6 +1,7 @@
 mod client;
 mod codec;
 mod message;
+mod process;
 
 use std::fmt;
 
@@ -13,6 +14,7 @@ pub use message::{
     control_request_message, control_response_message, parse_message, user_turn_message,
     ControlResponseEnvelope, Kind, Message,
 };
+pub use process::{Process, ProcessConfig, ProcessError};
 
 #[derive(Debug)]
 pub enum Fault {
