@@ -21,6 +21,10 @@ pub trait Client: Send + Sync {
     fn err(&self) -> Option<String>;
 
     fn close(&self) -> Result<(), Error>;
+
+    fn abort(&self) {
+        let _ = self.close();
+    }
 }
 
 pub trait ClientFactory: Send + Sync {

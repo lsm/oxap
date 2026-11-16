@@ -255,6 +255,16 @@ impl Client for ProcessClient {
             .close()
             .map_err(|reason| error(Fault::Transport(reason)))
     }
+
+    fn abort(&self) {
+        self.0.client.close();
+        let (child, timeout) = (self.0.child.clone(), self.0.timeout);
+        std::thread::spawn(move || {
+            if !child.await_exit(timeout) {
+                child.kill();
+            }
+        });
+    }
 }
 
 pub struct ProcessFactory(pub ProcessConfig);

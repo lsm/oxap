@@ -193,6 +193,10 @@ The same file holds `turn/start` while a host thread builds and polls
 must come back within a second. It also opens a real `/bin/sh` app-server
 that reads `initialize` and never answers, drops the open, and requires
 the process to be gone, after first checking it was alive before the
-drop. To see it bite, run any of those operations before returning its
-future, or stop closing the client when the cancel fires during
-`initialize`: one test each must fail.
+drop. A second such app-server answers `initialize`, then holds
+`thread/start` and ignores stdin's end: dropping the open must return in
+under a second, and the process must still be gone afterwards. To see it
+bite, run any of those operations before returning its future, stop
+closing the client when the cancel fires during `initialize`, or close the
+whole process instead of the rpc client on a drop: one test each must
+fail.

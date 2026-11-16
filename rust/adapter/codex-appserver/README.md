@@ -86,8 +86,8 @@ while another submit holds `turn/start`, and dropping a future is Go's
 cancelled context. Dropped while the process factory waits for Codex's
 `initialize` answer, it ends Codex. Dropped during a native call or answer
 (`thread/start`, `thread/resume`, `turn/start`, `turn/interrupt`, or an
-approval or input answer), it closes the client, so a submit leaves the
-session closed. A submit or resolve dropped while it waits for the session,
+approval or input answer), it closes the rpc client, releasing Codex's
+stdin without waiting for it to exit, so a submit leaves the session closed. A submit or resolve dropped while it waits for the session,
 or a cancel dropped while another's interrupt is in flight, makes no call
 and changes nothing. A settings update or close already waiting for the
 session still runs, as Go checks their context only on entry. A result

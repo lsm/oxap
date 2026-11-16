@@ -75,7 +75,7 @@ impl Caller {
     pub(crate) fn leave(&self) {
         let mut state = hold(&self.state);
         if let (Phase::Calling, Some(client)) = (state.phase, &state.client) {
-            let _ = client.close();
+            client.abort();
         }
         state.phase = Phase::Gone;
         state.cancel = None;
