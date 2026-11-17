@@ -22,6 +22,7 @@ fn config() -> Config {
 
 fn refused(
     _: Option<std::time::Instant>,
+    _: &crossbeam_channel::Receiver<()>,
 ) -> Result<Arc<dyn Client>, oxap_adapter_codex_appserver::rpc::Error> {
     Err(error(Fault::Transport("unused".into())))
 }

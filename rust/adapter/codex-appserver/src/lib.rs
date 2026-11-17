@@ -3,8 +3,10 @@
 mod actions;
 pub mod adapter;
 mod approvals;
+mod caller;
 mod cancel;
 pub mod client;
+mod contract;
 mod events;
 pub mod filepath;
 mod inputs;

@@ -80,6 +80,20 @@ the submit and those messages land as Go's do, after the turn is known.
 Every other operation, including the reader's handling of a closed
 transport, waits for the submit, as Go's does.
 
+`Adapter` and `Session` also implement the `oxap_adapter` contracts. Every
+operation runs on its own thread, so each returns its future at once, even
+while another submit holds `turn/start`, and dropping a future is Go's
+cancelled context. Dropped while the process factory waits for Codex's
+`initialize` answer, it closes the rpc client and kills Codex if it has
+not exited within the shutdown timeout. Dropped during a native call or answer
+(`thread/start`, `thread/resume`, `turn/start`, `turn/interrupt`, or an
+approval or input answer), it closes the rpc client, releasing Codex's
+stdin without waiting for it to exit, so a submit leaves the session closed. A submit or resolve dropped while it waits for the session,
+or a cancel dropped while another's interrupt is in flight, makes no call
+and changes nothing. A settings update or close already waiting for the
+session still runs, as Go checks their context only on entry. A result
+already returned wins over the drop.
+
 `permissions::confirm` is the check a resume runs on Codex's answer: the
 thread must keep the configured sandbox, by its policy `type`, the configured
 approval policy, and the configured working directory. The directories are

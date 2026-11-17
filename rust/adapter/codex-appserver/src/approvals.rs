@@ -9,6 +9,7 @@ use oxap_protocol::{
 use serde_json::value::RawValue;
 
 use crate::adapter::ENDPOINT_ID;
+use crate::caller::Caller;
 use crate::native::{
     ApprovalResponse, CommandApprovalParams, FileApprovalParams, METHOD_COMMAND_APPROVAL,
     METHOD_FILE_APPROVAL,
@@ -171,8 +172,13 @@ impl Shared {
         );
     }
 
-    pub(crate) fn resolve(&self, resolution: InteractionResolution) -> Result<(), Error> {
+    pub(crate) fn resolve(
+        &self,
+        resolution: InteractionResolution,
+        caller: &Caller,
+    ) -> Result<(), Error> {
         let _operating = self.operate();
+        caller.here()?;
         let inner = self.lock();
         let id = match (&resolution.permission, &resolution.input) {
             (Some(permission), None) => permission.interaction_id.clone(),
@@ -197,7 +203,7 @@ impl Shared {
         if interaction.questions.is_some() {
             let interaction = interaction.clone();
             drop(inner);
-            return self.answer_input(id, run, interaction, resolution.input);
+            return self.answer_input(id, run, interaction, resolution.input, caller);
         }
         let request = resolution
             .permission
@@ -214,9 +220,11 @@ impl Shared {
             .ok_or(Error::InvalidResolution)?;
         let (answer, tool_call) = (interaction.request.clone(), interaction.tool_call.clone());
         drop(inner);
-        answer
-            .respond(&ApprovalResponse {
-                decision: request.choice_id.clone(),
+        caller
+            .call(&self.client, || {
+                answer.respond(&ApprovalResponse {
+                    decision: request.choice_id.clone(),
+                })
             })
             .map_err(Error::harness)?;
         let mut inner = self.lock();

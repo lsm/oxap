@@ -2,11 +2,16 @@ use oxap_adapter::Error;
 use oxap_protocol::{RunCancelResponse, RunId, RunStatus};
 
 use crate::adapter::call;
+use crate::caller::Caller;
 use crate::native::{TurnInterruptParams, TurnInterruptResponse, METHOD_TURN_INTERRUPT};
 use crate::session::Shared;
 
 impl Shared {
-    pub(crate) fn cancel(&self, run_id: &RunId) -> Result<RunCancelResponse, Error> {
+    pub(crate) fn cancel(
+        &self,
+        run_id: &RunId,
+        caller: &Caller,
+    ) -> Result<RunCancelResponse, Error> {
         loop {
             let operating = self.operate();
             let mut inner = self.lock();
@@ -43,8 +48,9 @@ impl Shared {
             };
             drop(inner);
             drop(operating);
-            let interrupted =
-                call::<TurnInterruptResponse>(&*self.client, METHOD_TURN_INTERRUPT, &params);
+            let interrupted = caller.call(&self.client, || {
+                call::<TurnInterruptResponse>(&*self.client, METHOD_TURN_INTERRUPT, &params)
+            });
             let _operating = self.operate();
             let mut inner = self.lock();
             drop(landed);

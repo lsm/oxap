@@ -21,17 +21,29 @@ pub trait Client: Send + Sync {
     fn err(&self) -> Option<String>;
 
     fn close(&self) -> Result<(), Error>;
+
+    fn abort(&self) {
+        let _ = self.close();
+    }
 }
 
 pub trait ClientFactory: Send + Sync {
-    fn start(&self, deadline: Option<Instant>) -> Result<Arc<dyn Client>, Error>;
+    fn start(
+        &self,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Arc<dyn Client>, Error>;
 }
 
 impl<F> ClientFactory for F
 where
-    F: Fn(Option<Instant>) -> Result<Arc<dyn Client>, Error> + Send + Sync,
+    F: Fn(Option<Instant>, &Receiver<()>) -> Result<Arc<dyn Client>, Error> + Send + Sync,
 {
-    fn start(&self, deadline: Option<Instant>) -> Result<Arc<dyn Client>, Error> {
-        self(deadline)
+    fn start(
+        &self,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Arc<dyn Client>, Error> {
+        self(deadline, cancel)
     }
 }

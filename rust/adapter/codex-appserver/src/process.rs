@@ -83,6 +83,14 @@ fn handshake(detail: impl std::fmt::Display) -> Error {
 
 impl Process {
     pub fn start(config: &ProcessConfig, deadline: Option<Instant>) -> Result<Self, Error> {
+        Self::start_with(config, deadline, &crossbeam_channel::never())
+    }
+
+    pub fn start_with(
+        config: &ProcessConfig,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Self, Error> {
         if config.path.is_empty()
             || config.client_info.name.is_empty()
             || config.client_info.version.is_empty()
@@ -137,6 +145,21 @@ impl Process {
             capabilities: config.capabilities.as_ref(),
         })
         .map_err(|failure| error(Fault::Encode(failure.to_string())))?;
+        let (initializing, finished) = crossbeam_channel::bounded::<()>(0);
+        let (watched, child, cancel) = (
+            process.client.clone(),
+            process.child.clone(),
+            cancel.clone(),
+        );
+        let watcher = std::thread::spawn(move || {
+            crossbeam_channel::select! {
+                recv(cancel) -> _ => {
+                    abandon(&watched, &child, timeout);
+                    true
+                },
+                recv(finished) -> _ => false,
+            }
+        });
         let initialized = process
             .client
             .call("initialize", Some(params), deadline)
@@ -161,7 +184,16 @@ impl Process {
                 )));
             }
         };
-        if let Err(failure) = process.client.notify("initialized", None, deadline) {
+        let notified = process.client.notify("initialized", None, deadline);
+        drop(initializing);
+        if watcher.join().unwrap_or(true) {
+            process.abort();
+            return Err(handshake(format!(
+                "context canceled; stderr: {}",
+                process.stderr()
+            )));
+        }
+        if let Err(failure) = notified {
             process.abort();
             return Err(handshake(format!(
                 "notify initialized: {failure}; stderr: {}",
@@ -237,12 +269,32 @@ impl Client for ProcessClient {
             .close()
             .map_err(|reason| error(Fault::Transport(reason)))
     }
+
+    fn abort(&self) {
+        abandon(&self.0.client, &self.0.child, self.0.timeout);
+    }
+}
+
+fn abandon(client: &RpcClient, child: &Child, timeout: Duration) {
+    client.close();
+    let child = child.clone();
+    std::thread::spawn(move || {
+        if !child.await_exit(timeout) {
+            child.kill();
+        }
+    });
 }
 
 pub struct ProcessFactory(pub ProcessConfig);
 
 impl ClientFactory for ProcessFactory {
-    fn start(&self, deadline: Option<Instant>) -> Result<Arc<dyn Client>, Error> {
-        Ok(Arc::new(ProcessClient(Process::start(&self.0, deadline)?)))
+    fn start(
+        &self,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Arc<dyn Client>, Error> {
+        Ok(Arc::new(ProcessClient(Process::start_with(
+            &self.0, deadline, cancel,
+        )?)))
     }
 }

@@ -18,6 +18,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test cancels)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test usage)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --test settings)
+(cd rust && cargo test -p oxap-adapter-codex-appserver --test contract)
 (cd rust && cargo test -p oxap-adapter-codex-appserver --all-features)
 ```
 
@@ -176,3 +177,37 @@ after it and the `turn/start` params of every later submit, and
 turn starts, send `off` as `off`, drop the previous level from the
 answer, or let a change through while a run is active: the replay test
 must fail.
+
+`tests/contract.rs` drives the session through the `oxap_adapter` contracts
+and drops futures at each point Go's printer cancelled a context over its
+real rpc client on a pipe: during `thread/start` and `turn/start`, while a
+submit waits for another, and while a cancel waits for another's interrupt.
+Go closed the client in the first two, and in the last two made no call,
+and the next submit's ids show the dropped one minted none. To see it bite,
+skip the close on a drop during a call, let a dropped operation still call,
+or check for the drop only after the submit's ids are minted: one test
+each must fail.
+
+The same file holds `turn/start` while a host thread builds and polls
+`state`, `resolve`, `resume` and `update_settings` once each: every future
+must come back within a second. It also opens a real `/bin/sh` app-server
+that reads `initialize`, never answers and ignores stdin's end, drops the
+open, and requires the drop to return in under a second and the process
+to be gone within the shutdown bound, after first checking it was alive
+before the drop. A second such app-server answers `initialize`, then holds
+`thread/start` and ignores stdin's end: dropping the open must return in
+under a second, and the process must still be gone afterwards. To see it
+bite, run any of those operations before returning its future, stop
+closing the client when the cancel fires during `initialize`, or close the
+whole process instead of the rpc client on a drop: one test each must
+fail.
+
+`tests/process.rs` starts an app-server ten times with a cancel channel,
+releases the channel once `Process::start_with` returns, waits 250 ms and
+requires the client to stay open, because the caller's token is released
+after every successful open. The race it guards is too narrow to hit
+unaided, and when both channels are ready `select!` picks an arm by its
+own choice. To see it bite, put a 100 ms sleep at the top of the startup
+watcher's thread, list the completion arm first, and skip the `join` that
+`start_with` makes before returning: the test must fail on its first
+attempt. With the sleep, that order and the `join`, it must pass.
