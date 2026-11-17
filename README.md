@@ -72,7 +72,7 @@ SDKs internally.
 oxap auth providers                      # the providers you can sign in to
 oxap auth login --provider <id>          # store a credential (Keychain first on macOS)
 oxap                                     # the terminal UI, over any stored credential
-oxap run --backend claude "summarize this repo"   # one prompt to its end, the reply on stdout
+oxap run --backend claude "write a haiku about rivers"   # one prompt to its end, the reply on stdout
 oxap serve agent,provider --stdio        # the endpoint the SDKs drive
 ```
 
