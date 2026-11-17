@@ -1419,7 +1419,7 @@ fn printUsage(file: std.Io.File) !void {
         \\  oxap tui --attach <url> [--adapter <name>]     The terminal UI over a running oxap serve's HTTP wire; adapter defaults to oapx
         \\  oxap opencode install                            Download the OpenCode oxap is tested with into ~/.oxap/opencode
         \\  oxap tui --backend opencode [--config <path>]  The terminal UI over an OpenCode server oxap starts, or the entry's endpoint
-        \\  oxap run [--agent] [--storage] [--model <id>] "<prompt>"
+        \\  oxap run [--backend <name>] [--config <path>] [--model <id>] [--system <text>] [--json] [--approve] ["<prompt>"]
         \\  oxap serve agent [--stdio] [--model <model-ref>]
         \\  oxap serve agent [--stdio] --backend <name> [--config <path>]
         \\  oxap serve provider [--stdio] [--specimens]

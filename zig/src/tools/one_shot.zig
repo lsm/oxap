@@ -4,7 +4,7 @@ const endpoint_client = @import("endpoint_client");
 
 pub const profile = "open-agent-protocol.agent-control-core";
 
-const prompt_limit: usize = 16 << 20;
+const envelope_overhead: usize = 4096;
 const exit_grace_ms: i64 = 5000;
 
 pub fn run(allocator: std.mem.Allocator, self_path: []const u8, args: []const []const u8, stdin: std.Io.File, stdout: std.Io.File, stderr: std.Io.File) !u8 {
@@ -18,9 +18,20 @@ pub fn run(allocator: std.mem.Allocator, self_path: []const u8, args: []const []
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const prompt = if (options.prompt == null or std.mem.eql(u8, options.prompt.?, "-")) try readAll(arena, stdin) else options.prompt.?;
+    const too_long = "oxap run: the prompt and --system text must fit one 1 MiB envelope line";
+    const prompt = if (options.prompt == null or std.mem.eql(u8, options.prompt.?, "-")) readAll(arena, stdin) catch |err| switch (err) {
+        error.PromptTooLong => {
+            try compat.stdio.writeLine(stderr, too_long);
+            return 2;
+        },
+        else => return err,
+    } else options.prompt.?;
     if (std.mem.trim(u8, prompt, " \t\r\n").len == 0) {
         try compat.stdio.writeLine(stderr, "oxap run: no prompt; pass one as an argument or on stdin");
+        return 2;
+    }
+    if (!fitsOneLine(prompt, options.system)) {
+        try compat.stdio.writeLine(stderr, too_long);
         return 2;
     }
 
@@ -67,10 +78,21 @@ fn readAll(arena: std.mem.Allocator, stdin: std.Io.File) ![]const u8 {
             else => return err,
         };
         if (count == 0) break;
-        if (collected.items.len + count > prompt_limit) return error.PromptTooLong;
+        if (collected.items.len + count > endpoint_client.max_line_bytes) return error.PromptTooLong;
         try collected.appendSlice(arena, buffer[0..count]);
     }
     return collected.items;
+}
+
+fn fitsOneLine(prompt: []const u8, system: ?[]const u8) bool {
+    const escaped = escapedLength(prompt) +| if (system) |text| escapedLength(text) else 0;
+    return escaped +| envelope_overhead < endpoint_client.max_line_bytes;
+}
+
+fn escapedLength(text: []const u8) usize {
+    var counter = std.Io.Writer.Discarding.init(&.{});
+    std.json.Stringify.encodeJsonString(text, .{}, &counter.writer) catch return endpoint_client.max_line_bytes;
+    return @intCast(counter.fullCount());
 }
 
 pub const Options = struct {
@@ -553,6 +575,19 @@ test "a refusal, a failed run, a cancelled run and a question each end the run a
     _ = try drive(arena, &rejected, open_reply);
     const not_accepted = try drive(arena, &rejected, "{\"type\":\"session.message.submit.response\",\"in_reply_to\":\"oxap-run-3\",\"payload\":{\"accepted\":false}}");
     try testing.expectEqualStrings("the endpoint did not accept the prompt", not_accepted.outcome.?.failed);
+}
+
+test "a prompt must fit one envelope line once escaped, counting the system text" {
+    const allocator = testing.allocator;
+    const plain = try allocator.alloc(u8, 900 * 1024);
+    defer allocator.free(plain);
+    @memset(plain, 'a');
+    try testing.expect(fitsOneLine(plain, null));
+    try testing.expect(!fitsOneLine(plain, plain[0 .. 200 * 1024]));
+    const controls = try allocator.alloc(u8, 300 * 1024);
+    defer allocator.free(controls);
+    @memset(controls, 1);
+    try testing.expect(!fitsOneLine(controls, null));
 }
 
 test "arguments take one prompt, value options once each, and --config only beside --backend" {
