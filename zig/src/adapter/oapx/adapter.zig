@@ -2529,7 +2529,7 @@ fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, partici
         const source = stringOf(item, "source");
         if (source.len == 0) return refuseTool(arena, refusal, name, "a provided tool must name a source, since the session's catalog lists every tool by one; this loop declares " ++ native_source);
         if (!std.mem.eql(u8, source, native_source)) {
-            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "provided tools must use source " ++ native_source };
+            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "this source resolves to nothing for provided tools; use " ++ native_source };
             return error.UnsupportedFeature;
         }
         if (namedIn(native, offers_input, provided[0..index], name)) return refuseTool(arena, refusal, name, "the name already resolves to a catalog entry");
@@ -3568,8 +3568,10 @@ test "a session reports a live background job, so the hub will not park it" {
 
 test "an unsupported source transport is refused" {
     var owner = Adapter.init(testing.allocator, .{});
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
     var refusal = contract.Refusal{};
-    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(testing.allocator, .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\",\"kind\":\"remote\"}]" }, &refusal));
+    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(arena.allocator(), .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\",\"kind\":\"remote\"}]" }, &refusal));
     try testing.expectEqualStrings(contract.feature_tool_sources_attach, refusal.feature);
 }
 

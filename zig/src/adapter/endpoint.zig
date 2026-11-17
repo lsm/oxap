@@ -583,7 +583,7 @@ pub const Endpoint = struct {
         }
         try contract.refuseUnadvertisedOpen(descriptor, payload, refusal);
         if (payload.session_id) |named| {
-            if (named.len > 0 and self.find(named) != null) {
+            if ((payload.reopen or contract.carriesEntries(payload.tool_sources_json)) and named.len > 0 and self.find(named) != null) {
                 const message = try std.fmt.allocPrint(arena, "session \"{s}\" already exists", .{named});
                 return self.deny("session_exists", message, &.{});
             }
