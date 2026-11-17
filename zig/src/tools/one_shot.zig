@@ -63,6 +63,11 @@ pub const Driver = struct {
 
         if (stringOf(envelope, "in_reply_to")) |reply_to| {
             if (std.mem.eql(u8, reply_to, self.pending)) return self.answered(step, kind, envelope, payload);
+            if (std.mem.eql(u8, kind, "error.response") and std.mem.startsWith(u8, reply_to, request_prefix)) {
+                const failure = objectOf(payload, "error");
+                const message = stringOf(failure, "message") orelse "no reason given";
+                step.outcome = .{ .failed = try std.fmt.allocPrint(self.arena, "the endpoint refused a permission answer: {s}", .{message}) };
+            }
             return step;
         }
         if (self.stage != .running and self.stage != .submitting) return step;
@@ -76,7 +81,11 @@ pub const Driver = struct {
             self.ends_in_newline = text[text.len - 1] == '\n';
             if (!self.options.json) step.print = text;
         } else if (std.mem.eql(u8, kind, "action.permission.requested")) {
-            step.send = try self.resolvePermission(payload);
+            if (try self.resolvePermission(payload)) |answer| {
+                step.send = answer;
+            } else {
+                step.outcome = .{ .failed = if (self.options.approve) "the agent offered no choice oxap run reads as approval" else "the agent offered no choice oxap run reads as a denial" };
+            }
         } else if (std.mem.eql(u8, kind, "user.input.requested")) {
             step.outcome = .{ .failed = "the agent asked a question, and oxap run has no one to answer it" };
         } else if (std.mem.eql(u8, kind, "run.completed")) {
@@ -139,29 +148,17 @@ pub const Driver = struct {
         });
     }
 
-    fn resolvePermission(self: *Driver, payload: ?std.json.ObjectMap) ![]const u8 {
-        const wanted = if (self.options.approve) "approve" else "deny";
-        var offered = false;
-        if (payload) |body| {
-            if (body.get("choices")) |choices| {
-                if (choices == .array) {
-                    for (choices.array.items) |choice| {
-                        if (choice != .object) continue;
-                        const id = stringOf(choice.object, "id") orelse continue;
-                        if (std.mem.eql(u8, id, wanted)) offered = true;
-                    }
-                }
-            }
-        }
+    fn resolvePermission(self: *Driver, payload: ?std.json.ObjectMap) !?[]const u8 {
+        const choice_id = pickChoice(payload, if (self.options.approve) &approving_choices else &denying_choices) orelse return null;
         const run_id = stringOf(payload, "run_id") orelse "";
-        return self.encode(try self.mint(), "action.permission.resolve.request", run_id, .{
+        return try self.encode(try self.mint(), "action.permission.resolve.request", run_id, .{
             .interaction_id = stringOf(payload, "interaction_id") orelse "",
             .requested_by = stringOf(payload, "requested_by") orelse "",
             .responded_by = stringOf(payload, "responded_by") orelse "user",
             .session_id = stringOf(payload, "session_id") orelse self.session_id,
             .run_id = run_id,
             .granted = self.options.approve,
-            .choice_id = if (offered) wanted else null,
+            .choice_id = choice_id,
         });
     }
 
@@ -173,7 +170,7 @@ pub const Driver = struct {
 
     fn mint(self: *Driver) ![]const u8 {
         self.requests += 1;
-        return std.fmt.allocPrint(self.arena, "oxap-run-{d}", .{self.requests});
+        return std.fmt.allocPrint(self.arena, request_prefix ++ "{d}", .{self.requests});
     }
 
     fn encode(self: *Driver, id: []const u8, kind: []const u8, run_id: ?[]const u8, payload: anytype) ![]const u8 {
@@ -191,6 +188,26 @@ pub const Driver = struct {
         }, .{ .emit_null_optional_fields = false });
     }
 };
+
+const request_prefix = "oxap-run-";
+
+const approving_choices = [_][]const u8{ "approve", "accept", "allow", "allow_once", "yes", "once" };
+const denying_choices = [_][]const u8{ "deny", "decline", "reject", "reject_once", "no" };
+
+fn pickChoice(payload: ?std.json.ObjectMap, ranked: []const []const u8) ?[]const u8 {
+    const body = payload orelse return null;
+    const choices = body.get("choices") orelse return null;
+    if (choices != .array) return null;
+    for (ranked) |wanted| {
+        for (choices.array.items) |choice| {
+            if (choice != .object) continue;
+            const id = stringOf(choice.object, "id") orelse continue;
+            const description = stringOf(choice.object, "description") orelse "";
+            if (std.mem.eql(u8, id, wanted) or std.mem.eql(u8, description, wanted)) return id;
+        }
+    }
+    return null;
+}
 
 fn objectOf(from: ?std.json.ObjectMap, key: []const u8) ?std.json.ObjectMap {
     const object = from orelse return null;
@@ -277,13 +294,58 @@ test "a permission is denied unless --approve, and names a choice only when the 
         try testing.expect(std.mem.endsWith(u8, answer, expected));
         try testing.expect(std.mem.startsWith(u8, answer, "{\"protocol\":\"open-agent-protocol\",\"version\":\"0.1\",\"profile\":\"open-agent-protocol.agent-control-core\",\"type\":\"action.permission.resolve.request\",\"id\":\"oxap-run-4\",\"session_id\":\"s-1\",\"run_id\":\"r-1\",\"capability_revision\":\"rev-7\","));
     }
-    var bare = Driver.init(arena, .{}, "p");
-    _ = try bare.start();
-    _ = try drive(arena, &bare, init_reply);
-    _ = try drive(arena, &bare, open_reply);
-    _ = try drive(arena, &bare, submit_reply);
-    const unoffered = (try drive(arena, &bare, "{\"type\":\"action.permission.requested\",\"payload\":{\"interaction_id\":\"p-2\",\"requested_by\":\"agent\",\"responded_by\":\"user\",\"session_id\":\"s-1\",\"run_id\":\"r-1\",\"title\":\"Allow\",\"choices\":[{\"id\":\"yes\",\"label\":\"Yes\"}]}}")).send.?;
-    try testing.expect(std.mem.indexOf(u8, unoffered, "choice_id") == null);
+}
+
+test "a permission answer takes the choice each backend names, and a run with no such choice fails instead of waiting" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const codex = "[{\"id\":\"accept\",\"label\":\"Approve once\"},{\"id\":\"acceptForSession\",\"label\":\"Approve for session\"},{\"id\":\"decline\",\"label\":\"Deny\"},{\"id\":\"cancel\",\"label\":\"Deny and cancel run\"}]";
+    const acp = "[{\"id\":\"opt-2\",\"label\":\"Reject\",\"description\":\"reject_once\"},{\"id\":\"opt-1\",\"label\":\"Allow once\",\"description\":\"allow_once\"}]";
+    const oapx = "[{\"id\":\"approve\",\"label\":\"Allow once\"},{\"id\":\"approve_always\",\"label\":\"Always allow\"},{\"id\":\"deny\",\"label\":\"Deny\"},{\"id\":\"reject_always\",\"label\":\"Always deny\"}]";
+    const cases = [_]struct { choices: []const u8, approve: bool, picks: ?[]const u8 }{
+        .{ .choices = codex, .approve = true, .picks = "accept" },
+        .{ .choices = codex, .approve = false, .picks = "decline" },
+        .{ .choices = acp, .approve = true, .picks = "opt-1" },
+        .{ .choices = acp, .approve = false, .picks = "opt-2" },
+        .{ .choices = oapx, .approve = true, .picks = "approve" },
+        .{ .choices = oapx, .approve = false, .picks = "deny" },
+        .{ .choices = "[{\"id\":\"approve_always\",\"label\":\"Always allow\"}]", .approve = false, .picks = null },
+        .{ .choices = "[{\"id\":\"reject_always\",\"label\":\"Always deny\"}]", .approve = true, .picks = null },
+    };
+    for (cases) |case| {
+        var driver = Driver.init(arena, .{ .approve = case.approve }, "p");
+        _ = try driver.start();
+        _ = try drive(arena, &driver, init_reply);
+        _ = try drive(arena, &driver, open_reply);
+        _ = try drive(arena, &driver, submit_reply);
+        const asked = try std.fmt.allocPrint(arena, "{{\"type\":\"action.permission.requested\",\"payload\":{{\"interaction_id\":\"p-1\",\"requested_by\":\"agent\",\"responded_by\":\"user\",\"session_id\":\"s-1\",\"run_id\":\"r-1\",\"title\":\"Allow\",\"choices\":{s}}}}}", .{case.choices});
+        const step = try drive(arena, &driver, asked);
+        if (case.picks) |picked| {
+            const wanted = try std.fmt.allocPrint(arena, "\"granted\":{},\"choice_id\":\"{s}\"}}}}", .{ case.approve, picked });
+            try testing.expect(std.mem.endsWith(u8, step.send.?, wanted));
+            try testing.expect(step.outcome == null);
+        } else {
+            try testing.expect(step.send == null);
+            try testing.expect(std.mem.startsWith(u8, step.outcome.?.failed, "the agent offered no choice oxap run reads as"));
+        }
+    }
+}
+
+test "a refused permission answer ends the run instead of leaving it waiting" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var driver = Driver.init(arena, .{}, "p");
+    _ = try driver.start();
+    _ = try drive(arena, &driver, init_reply);
+    _ = try drive(arena, &driver, open_reply);
+    _ = try drive(arena, &driver, submit_reply);
+    _ = try drive(arena, &driver, "{\"type\":\"action.permission.requested\",\"payload\":{\"interaction_id\":\"p-1\",\"requested_by\":\"agent\",\"responded_by\":\"user\",\"session_id\":\"s-1\",\"run_id\":\"r-1\",\"title\":\"Allow\",\"choices\":[{\"id\":\"deny\",\"label\":\"No\"}]}}");
+    const refused = try drive(arena, &driver, "{\"type\":\"error.response\",\"in_reply_to\":\"oxap-run-4\",\"payload\":{\"error\":{\"code\":\"invalid_request\",\"message\":\"not this choice\"}}}");
+    try testing.expectEqualStrings("the endpoint refused a permission answer: not this choice", refused.outcome.?.failed);
+    const foreign = try drive(arena, &driver, "{\"type\":\"error.response\",\"in_reply_to\":\"someone-else\",\"payload\":{}}");
+    try testing.expect(foreign.outcome == null);
 }
 
 test "a permission asked before the submit is answered leaves the driver waiting on the submit's answer" {
