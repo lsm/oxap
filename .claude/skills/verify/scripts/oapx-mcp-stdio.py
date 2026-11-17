@@ -69,6 +69,13 @@ def main():
         hub = None
         try:
             hub = base.Hub(command, environment, root, output, 'mcp', flags=('--no-save-oapx-sessions',))
+            bad = base.envelope('session.open.request', {'session_id':'bad-source','tool_sources':[{'id':'remote-example','kind':'remote'}]})
+            try:
+                hub.call('open', adapter='loop', request=bad)
+                raise AssertionError('remote source was accepted')
+            except AssertionError as error:
+                response = error.args[0]
+                assert isinstance(response, dict) and response['error']['details'].get('source') == 'remote-example', response
             request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process'}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             result = hub.call('open', adapter='loop', request=request)
             assert 'error' not in result.get('payload', {}), result
