@@ -86,12 +86,13 @@ def main():
             except AssertionError as error:
                 assert isinstance(error.args[0], dict), error
             assert not (root / 'started').exists(), 'invalid open started the MCP server'
-            request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process'}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
+            request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process'}], 'tools':[{'name':'host_lookup','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             result = hub.call('open', adapter='loop', request=request)
             assert 'error' not in result.get('payload', {}), result
             assert any(source['id'] == 'demo' for source in result['payload']['sources']), result
             catalog = hub.call('tools', session_id='mcp-proof')
             assert any(tool['name'] == 'mcp_demo_echo' and tool['source'] == 'demo' for tool in catalog['payload']['tools']), catalog
+            assert any(tool['name'] == 'host_lookup' and tool['source'] == 'demo' for tool in catalog['payload']['tools']), catalog
             hub.call('events', session_id='mcp-proof')
             base.submit(hub, 'mcp-proof', 'Call the echo tool with hello')
             events = [json.loads(line) for line in (output / 'mcp.jsonl').read_text().splitlines()]
