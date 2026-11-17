@@ -2805,6 +2805,13 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    const one_shot_mod = b.createModule(.{
+        .root_source_file = b.path("src/tools/one_shot.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const one_shot_test_run = b.addRunArtifact(b.addTest(.{ .root_module = one_shot_mod }));
+
     const makai_cli_module = b.createModule(.{
         .root_source_file = b.path("src/tools/makai.zig"),
         .target = target,
@@ -3213,6 +3220,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(protocol_tool_local_runtime_test).step);
     test_step.dependOn(&auth_cli_test_run.step);
     test_step.dependOn(&makai_cli_test_run.step);
+    test_step.dependOn(&one_shot_test_run.step);
 
     const test_unit_core_step = b.step("test-unit-core", "Run core types unit tests");
     test_unit_core_step.dependOn(&b.addRunArtifact(repeat_test).step);
@@ -3314,6 +3322,7 @@ pub fn build(b: *std.Build) void {
     const test_unit_makai_cli_step = b.step("test-unit-makai-cli", "Run makai CLI unit tests");
     test_unit_makai_cli_step.dependOn(&auth_cli_test_run.step);
     test_unit_makai_cli_step.dependOn(&makai_cli_test_run.step);
+    test_unit_makai_cli_step.dependOn(&one_shot_test_run.step);
 
     const test_unit_stdio_host_step = b.step("test-unit-stdio-host", "Run the stdio host's output bound and signal unit tests");
     test_unit_stdio_host_step.dependOn(&bounded_output_test_run.step);
