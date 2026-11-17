@@ -582,12 +582,10 @@ pub const Endpoint = struct {
             }
         }
         try contract.refuseUnadvertisedOpen(descriptor, payload, refusal);
-        if (payload.reopen) {
-            if (payload.session_id) |named| {
-                if (self.find(named) != null) {
-                    const message = try std.fmt.allocPrint(arena, "session \"{s}\" already exists", .{named});
-                    return self.deny("session_exists", message, &.{});
-                }
+        if (payload.session_id) |named| {
+            if (named.len > 0 and self.find(named) != null) {
+                const message = try std.fmt.allocPrint(arena, "session \"{s}\" already exists", .{named});
+                return self.deny("session_exists", message, &.{});
             }
         }
         const tool_sources_json = try self.resolveAttachments(arena, payload.tool_sources_json, refusal);

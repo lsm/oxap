@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -36,6 +37,7 @@ SERVER = '''import json,os,signal,sys
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 assert os.environ.get("EXAMPLE_ALLOWED") == "fixture"
 assert "EXAMPLE_PRIVATE" not in os.environ
+open(os.environ["EXAMPLE_START"], "a").write("start")
 for line in sys.stdin:
  r=json.loads(line); m=r.get("method"); i=r.get("id")
  if i is None: continue
@@ -44,6 +46,7 @@ for line in sys.stdin:
  elif m=="tools/call": result={"content":[{"type":"text","text":"echoed:"+r["params"]["arguments"]["text"]}]}
  else: raise ValueError(m)
  print(json.dumps({"jsonrpc":"2.0","id":i,"result":result}),flush=True)
+open(os.environ["EXAMPLE_MARKER"], "w").write("closed")
 '''
 
 def main():
@@ -59,7 +62,7 @@ def main():
         url = f'http://127.0.0.1:{server.server_port}/v1'
         (data / 'providers.json').write_text(json.dumps({'providers':[{'id':'synthetic','api':'openai-completions','base_url':url,'auth':'none','models':['synthetic-model']}]}))
         (data / 'config.json').write_text(json.dumps({'model':'synthetic-model','provider':'synthetic','api':'openai-completions','workspace':str(root)}))
-        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx'}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture']}}}))
+        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx'}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture', 'EXAMPLE_MARKER=' + str(root / 'closed'), 'EXAMPLE_START=' + str(root / 'started')]}}}))
         environment = {'PATH':'/usr/bin:/bin','HOME':str(home),'TMPDIR':str(root),'NODE_ENV':'test','EXAMPLE_PRIVATE':'must-not-inherit','OAPX_KEYCHAIN_SERVICE':'oap-verify-'+str(uuid.uuid4())}
         command = [str(binary)]
         if sys.platform == 'darwin':
@@ -76,6 +79,13 @@ def main():
             except AssertionError as error:
                 response = error.args[0]
                 assert isinstance(response, dict) and response['error']['details'].get('source') == 'remote-example', response
+            invalid = base.envelope('session.open.request', {'session_id':'invalid-model','tool_sources':[{'id':'demo','kind':'process'}], 'metadata':{'oapx':{'model':'unknown-model'}}})
+            try:
+                hub.call('open', adapter='loop', request=invalid)
+                raise AssertionError('unknown model was accepted')
+            except AssertionError as error:
+                assert isinstance(error.args[0], dict), error
+            assert not (root / 'started').exists(), 'invalid open started the MCP server'
             request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process'}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             result = hub.call('open', adapter='loop', request=request)
             assert 'error' not in result.get('payload', {}), result
@@ -92,6 +102,14 @@ def main():
             assert 'mcp_demo_echo' in json.dumps(Provider.requests[0].get('tools', [])), Provider.requests
             assert 'echoed:hello' in json.dumps(Provider.requests[1]), Provider.requests
             assert 'finished' in json.dumps(transcript), transcript
+            hub.stop(); hub = None
+            assert (root / 'closed').read_text() == 'closed', 'server did not exit on stdin EOF'
+            initialize = base.envelope('protocol.initialize.request', {'protocol_versions':['0.1'], 'profiles':['open-agent-protocol.agent-control-core'], 'participant':{'id':'user'}})
+            opens = [base.envelope('session.open.request', {'session_id':'duplicate-proof'}) for _ in range(2)]
+            direct = subprocess.run(command + ['serve', 'agent', '--backend', 'oapx', '--stdio'], input=''.join(json.dumps(x) + '\n' for x in [initialize, *opens]), text=True, cwd=root, env=environment, capture_output=True, timeout=30)
+            (output / 'direct.jsonl').write_text(direct.stdout)
+            frames = [json.loads(line) for line in direct.stdout.splitlines()]
+            assert direct.returncode == 0 and any(x.get('payload', {}).get('error', {}).get('code') == 'session_exists' for x in frames), (direct.returncode, frames, direct.stderr)
             print('PASS: discovered and called stdio MCP tool')
         finally:
             if hub: hub.stop()

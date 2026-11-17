@@ -365,7 +365,12 @@ const Journaled = struct {
     sequence: u64,
 };
 
-fn attachMcp(a: std.mem.Allocator, raw: ?[]const u8, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
+fn refuseSource(arena: std.mem.Allocator, refusal: *contract.Refusal, id: []const u8, detail: []const u8) contract.Failure {
+    refusal.* = .{ .feature = contract.feature_tool_sources_attach, .reason = contract.reason_unsatisfiable, .source = try arena.dupe(u8, id), .detail = detail };
+    return error.UnsupportedFeature;
+}
+
+fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, raw orelse "[]", .{}) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.InvalidSubmission;
     if (parsed != .array) return error.InvalidSubmission;
     const sources = try a.alloc(oap_types.ToolSourceDescriptor, parsed.array.items.len + 1);
@@ -374,11 +379,11 @@ fn attachMcp(a: std.mem.Allocator, raw: ?[]const u8, bridge: *local_tools.mcp_br
     for (parsed.array.items, 0..) |item, i| {
         if (item != .object) return error.InvalidSubmission;
         const id = stringOf(item, "id");
-        if (id.len == 0 or std.mem.eql(u8, id, native_source)) return refusal.fail(error.InvalidSubmission, "invalid tool source id");
-        for (sources[0 .. i + 1]) |prior| if (std.mem.eql(u8, prior.id, id)) return refusal.fail(error.InvalidSubmission, "duplicate tool source id");
-        if (!std.mem.eql(u8, stringOf(item, "kind"), "process")) return refusal.unsupported(contract.feature_tool_sources_attach, contract.reason_unsatisfiable);
+        if (id.len == 0 or std.mem.eql(u8, id, native_source)) return refuseSource(arena, refusal, id, "invalid tool source id");
+        for (sources[0 .. i + 1]) |prior| if (std.mem.eql(u8, prior.id, id)) return refuseSource(arena, refusal, id, "duplicate tool source id");
+        if (!std.mem.eql(u8, stringOf(item, "kind"), "process")) return refuseSource(arena, refusal, id, "only stdio MCP sources are supported");
         const protocol = stringOf(item, "protocol");
-        if (protocol.len > 0 and !std.mem.eql(u8, protocol, "mcp")) return refusal.unsupported(contract.feature_tool_sources_attach, contract.reason_unsatisfiable);
+        if (protocol.len > 0 and !std.mem.eql(u8, protocol, "mcp")) return refuseSource(arena, refusal, id, "only stdio MCP sources are supported");
         const command = stringOf(item, "command");
         if (command.len == 0) return refusal.fail(error.InvalidSubmission, "process tool source needs a command");
         var obj: std.json.ObjectMap = .empty;
@@ -451,17 +456,21 @@ pub const Session = struct {
         errdefer jobs.deinit();
         self.keep = std.heap.ArenaAllocator.init(gpa);
         errdefer self.keep.deinit();
+        const offers_input = offersUserInput(request.metadata);
+        const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, request.tools_json, refusal);
+        var options = sessionOptions(owner.options, request.metadata);
+        options.models = owner.catalog orelse owner.options.models;
+        if (request.reasoning_level) |level| options.thinking_level = try thinkingLevel(level, refusal);
+        if (try requestedModel(gpa, options.models, request.metadata, refusal)) |chosen| options.initial_model = chosen;
         const mcp = try gpa.create(local_tools.mcp_bridge.McpBridge);
         errdefer gpa.destroy(mcp);
         mcp.* = local_tools.mcp_bridge.McpBridge.init(gpa);
         mcp.bind();
         errdefer mcp.deinit();
-        const sources = try attachMcp(self.keep.allocator(), request.tool_sources_json, mcp, refusal);
+        const sources = try attachMcp(self.keep.allocator(), arena, request.tool_sources_json, mcp, refusal);
         var mcp_tools: std.ArrayList(agent.AgentTool) = .empty;
         defer mcp_tools.deinit(gpa);
         try mcp.appendAgentTools(&mcp_tools);
-        const offers_input = offersUserInput(request.metadata);
-        const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, request.tools_json, refusal);
         const job_tools = local_tools.shell.sessionTools(jobs);
         const native_count = job_tools.len + owner.options.tools.len + @intFromBool(offers_input) + mcp_tools.items.len;
         const session_tools = try gpa.alloc(agent.AgentTool, native_count + provided.len);
@@ -473,13 +482,9 @@ pub const Session = struct {
         for (provided, session_tools[native_count..]) |definition, *slot| slot.* = providedTool(self, definition);
         for (session_tools, 0..) |tool, i| {
             for (session_tools[0..i]) |prior| {
-                if (std.mem.eql(u8, prior.name, tool.name)) return refusal.fail(error.InvalidSubmission, "tool names must be unique");
+                if (std.mem.eql(u8, prior.name, tool.name)) return refuseTool(arena, refusal, tool.name, "the name already resolves to a catalog entry");
             }
         }
-        var options = sessionOptions(owner.options, request.metadata);
-        options.models = owner.catalog orelse owner.options.models;
-        if (request.reasoning_level) |level| options.thinking_level = try thinkingLevel(level, refusal);
-        if (try requestedModel(gpa, options.models, request.metadata, refusal)) |chosen| options.initial_model = chosen;
         const engine = try ownEngine(gpa, owner.options.permission_engine, options.workspace_root);
         errdefer if (engine) |held| {
             held.deinit();
@@ -2524,7 +2529,7 @@ fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, partici
         const source = stringOf(item, "source");
         if (source.len == 0) return refuseTool(arena, refusal, name, "a provided tool must name a source, since the session's catalog lists every tool by one; this loop declares " ++ native_source);
         if (!std.mem.eql(u8, source, native_source)) {
-            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "the loop declares one tool source, " ++ native_source ++ ", so another resolves to nothing" };
+            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "provided tools must use source " ++ native_source };
             return error.UnsupportedFeature;
         }
         if (namedIn(native, offers_input, provided[0..index], name)) return refuseTool(arena, refusal, name, "the name already resolves to a catalog entry");

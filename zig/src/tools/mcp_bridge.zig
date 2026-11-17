@@ -95,6 +95,21 @@ const McpToolRecord = struct {
 
 const mcp_discovery_timeout_ms: u64 = 5_000;
 
+fn waitForExit(child: *std.process.Child, duration_ms: u64) bool {
+    if (@import("builtin").os.tag == .windows) return false;
+    const start = common.nowMs();
+    while (common.durationMs(start) < duration_ms) {
+        var status: c_int = undefined;
+        const result = std.posix.system.waitpid(child.id.?, &status, std.posix.W.NOHANG);
+        if (result == child.id.?) {
+            child.id = null;
+            return true;
+        }
+        compat.time.sleepMs(10);
+    }
+    return false;
+}
+
 const McpServerSession = struct {
     config: McpServerConfig,
     child: ?std.process.Child = null,
@@ -113,12 +128,21 @@ const McpServerSession = struct {
     fn stop(self: *McpServerSession) void {
         if (self.child) |*child| {
             const io = common.defaultIo();
+            if (child.stdin) |stdin| {
+                stdin.close(io);
+                child.stdin = null;
+            }
             if (child.id) |pid| {
                 if (@import("builtin").os.tag == .windows) {
                     child.kill(io);
                 } else {
-                    std.posix.kill(pid, std.posix.SIG.KILL) catch {};
-                    _ = child.wait(io) catch {};
+                    if (!waitForExit(child, 100)) {
+                        std.posix.kill(pid, std.posix.SIG.TERM) catch {};
+                        if (!waitForExit(child, 100)) {
+                            std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+                            _ = child.wait(io) catch {};
+                        }
+                    }
                 }
             }
             if (child.stdin) |stdin| stdin.close(io);
