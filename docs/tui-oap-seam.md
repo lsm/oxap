@@ -158,7 +158,7 @@ without going through the ops table.
 | `resume_session` | `session.state.request`, then submit | **gap** — G1 |
 | `replaceMessages` (direct) | `transcript.load` | **gap** — G1 |
 | `waitForIdle` (direct, 6 production call sites) | a terminal run event | **gap** — G7 |
-| `setTools`, MCP bridge (direct) | `action.tools.provide`, `action.tool_sources.attach` | provide covered; attach **gap** — G8 |
+| `setTools`, MCP bridge (direct) | `action.tools.provide`, `action.tool_sources.attach` | provide and stdio attach covered; remote attach remains — G8 |
 | `models` / login (direct) | `models.list`; auth stays local | covered / G5 |
 
 ## Measuring parity
@@ -318,12 +318,7 @@ interaction the opener settles with `action.call.resolve.request` while the
 loop's tool waits. Its limits are 64 tools, names matching
 `^[a-zA-Z0-9_-]{1,64}$`, and JSON Schema 2020-12; a definition must name the
 one source the loop declares, `oapx` (Decision 0048), and naming none or any
-other is refused. Attaching
-sources stays unadvertised. The draft says a source may be described and
-attached at session open under `+tool-sources`, and that nothing in the protocol
-*manages* one. #618 is closed with nothing left to carry: no production code
-calls `setTools` or configures the MCP bridge, so the TUI supplies no tools, and
-the session runtime's unused MCP wiring is removed.
+other is refused. At session open, a configured stdio MCP source can also be attached to the served loop. Its tools are discovered, listed with their source, and called through the same lifecycle and permission policy. Remote MCP transports are not yet supported.
 
 ## What stays on the TUI side of the line
 

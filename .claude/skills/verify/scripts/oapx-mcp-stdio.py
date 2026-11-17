@@ -32,7 +32,10 @@ class Provider(base.Provider):
         self.wfile.write(b'data: [DONE]\n\n')
         self.wfile.flush()
 
-SERVER = '''import json,sys
+SERVER = '''import json,os,signal,sys
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+assert os.environ.get("EXAMPLE_ALLOWED") == "fixture"
+assert "EXAMPLE_PRIVATE" not in os.environ
 for line in sys.stdin:
  r=json.loads(line); m=r.get("method"); i=r.get("id")
  if i is None: continue
@@ -56,8 +59,8 @@ def main():
         url = f'http://127.0.0.1:{server.server_port}/v1'
         (data / 'providers.json').write_text(json.dumps({'providers':[{'id':'synthetic','api':'openai-completions','base_url':url,'auth':'none','models':['synthetic-model']}]}))
         (data / 'config.json').write_text(json.dumps({'model':'synthetic-model','provider':'synthetic','api':'openai-completions','workspace':str(root)}))
-        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx'}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','command':'/usr/bin/python3','args':[str(root / 'server.py')]}}}))
-        environment = {'PATH':'/usr/bin:/bin','HOME':str(home),'TMPDIR':str(root),'NODE_ENV':'test','OAPX_KEYCHAIN_SERVICE':'oap-verify-'+str(uuid.uuid4())}
+        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx'}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture']}}}))
+        environment = {'PATH':'/usr/bin:/bin','HOME':str(home),'TMPDIR':str(root),'NODE_ENV':'test','EXAMPLE_PRIVATE':'must-not-inherit','OAPX_KEYCHAIN_SERVICE':'oap-verify-'+str(uuid.uuid4())}
         command = [str(binary)]
         if sys.platform == 'darwin':
             profile = root / 'isolation.sb'
@@ -69,7 +72,14 @@ def main():
             request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process'}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             result = hub.call('open', adapter='loop', request=request)
             assert 'error' not in result.get('payload', {}), result
+            assert any(source['id'] == 'demo' for source in result['payload']['sources']), result
+            catalog = hub.call('tools', session_id='mcp-proof')
+            assert any(tool['name'] == 'mcp_demo_echo' and tool['source'] == 'demo' for tool in catalog['payload']['tools']), catalog
+            hub.call('events', session_id='mcp-proof')
             base.submit(hub, 'mcp-proof', 'Call the echo tool with hello')
+            events = [json.loads(line) for line in (output / 'mcp.jsonl').read_text().splitlines()]
+            calls = [event['envelope'] for event in events if event.get('event') == 'envelope' and event['envelope']['type'] == 'action.call.started']
+            assert any(call['payload'].get('source') == 'demo' for call in calls), calls
             transcript = hub.call('work.read', session_id='mcp-proof')
             (output / 'provider-requests.json').write_text(json.dumps(Provider.requests, indent=2))
             assert 'mcp_demo_echo' in json.dumps(Provider.requests[0].get('tools', [])), Provider.requests

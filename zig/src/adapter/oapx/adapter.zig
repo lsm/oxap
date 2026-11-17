@@ -18,7 +18,7 @@ const local_loop = @import("local_loop.zig");
 pub const LocalLoop = local_loop.LocalLoop;
 
 pub const endpoint_id = "oapx.agent";
-pub const capability_revision = "oapx-agent-v19";
+pub const capability_revision = "oapx-agent-v20";
 const native_source = "oapx";
 const native_sources = [_]oap_types.ToolSourceDescriptor{.{ .id = native_source, .kind = "native", .display_name = "oapx" }};
 
@@ -57,6 +57,7 @@ const unsaved_features = [_]contract.Feature{
     .{ .key = "action.tools", .level = .native, .reason = "the agent loop runs its own workspace tools" },
     .{ .key = "action.tools.execute", .level = .native, .reason = "the agent loop runs its own workspace tools" },
     .{ .key = contract.feature_tools_list, .level = .native },
+    .{ .key = contract.feature_tool_sources_attach, .level = .native, .modes = &.{"session_open"}, .limits_json = "{\"transports\":[\"process\"]}" },
     .{ .key = contract.feature_tools_provide, .level = .native, .reason = "a provided tool joins the loop's tools for the session, and each call to it waits for the opener's resolution", .limits_json = "{\"max_tools\":64,\"name_pattern\":\"^[a-zA-Z0-9_-]{1,64}$\",\"schema_dialect\":\"https://json-schema.org/draft/2020-12/schema\"}" },
     .{ .key = contract.feature_models_list, .level = .degraded, .reason = "the catalog is the one the terminal UI offers; served by oapx serve it is fixed when the entry is built, and only the terminal UI's own refresh moves it, at the session's next model switch, under the same revision and with no capabilities.updated" },
     .{ .key = contract.feature_model_switch, .level = .native },
@@ -247,7 +248,6 @@ pub const Adapter = struct {
     fn open(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!contract.Session {
         const self: *Adapter = @ptrCast(@alignCast(ptr));
         if (request.participant.len == 0) return refusal.fail(error.InvalidSubmission, "open requires a non-empty participant id");
-        if (contract.carriesEntries(request.tool_sources_json)) return refusal.unsupported(contract.feature_tool_sources_attach, contract.reason_unadvertised);
         var saved: ?[]const ai_types.Message = null;
         if (request.reopen) {
             if (request.session_id.len == 0) return refusal.fail(error.UnknownSession, "a reopen names the session it reopens");
@@ -365,6 +365,47 @@ const Journaled = struct {
     sequence: u64,
 };
 
+fn attachMcp(a: std.mem.Allocator, raw: ?[]const u8, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, raw orelse "[]", .{}) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.InvalidSubmission;
+    if (parsed != .array) return error.InvalidSubmission;
+    const sources = try a.alloc(oap_types.ToolSourceDescriptor, parsed.array.items.len + 1);
+    sources[0] = native_sources[0];
+    var configs = std.json.Array.init(a);
+    for (parsed.array.items, 0..) |item, i| {
+        if (item != .object) return error.InvalidSubmission;
+        const id = stringOf(item, "id");
+        if (id.len == 0 or std.mem.eql(u8, id, native_source)) return refusal.fail(error.InvalidSubmission, "invalid tool source id");
+        for (sources[0 .. i + 1]) |prior| if (std.mem.eql(u8, prior.id, id)) return refusal.fail(error.InvalidSubmission, "duplicate tool source id");
+        if (!std.mem.eql(u8, stringOf(item, "kind"), "process")) return refusal.unsupported(contract.feature_tool_sources_attach, contract.reason_unsatisfiable);
+        const protocol = stringOf(item, "protocol");
+        if (protocol.len > 0 and !std.mem.eql(u8, protocol, "mcp")) return refusal.unsupported(contract.feature_tool_sources_attach, contract.reason_unsatisfiable);
+        const command = stringOf(item, "command");
+        if (command.len == 0) return refusal.fail(error.InvalidSubmission, "process tool source needs a command");
+        var obj: std.json.ObjectMap = .empty;
+        try obj.put(a, "name", .{ .string = id });
+        try obj.put(a, "command", .{ .string = command });
+        if (item.object.get("args")) |args| try obj.put(a, "args", args);
+        var env: std.json.ObjectMap = .empty;
+        if (item.object.get("environment")) |entries| {
+            if (entries != .array) return error.InvalidSubmission;
+            for (entries.array.items) |entry| {
+                if (entry != .string) return error.InvalidSubmission;
+                const cut = std.mem.indexOfScalar(u8, entry.string, '=') orelse continue;
+                try env.put(a, entry.string[0..cut], .{ .string = entry.string[cut + 1 ..] });
+            }
+        }
+        try obj.put(a, "env", .{ .object = env });
+        try configs.append(.{ .object = obj });
+        const display = stringOf(item, "display_name");
+        const endpoint = stringOf(item, "endpoint");
+        sources[i + 1] = .{ .id = id, .kind = "process", .display_name = if (display.len > 0) display else null, .protocol = if (protocol.len > 0) protocol else null, .endpoint = if (endpoint.len > 0) endpoint else null };
+    }
+    const config = try std.json.Stringify.valueAlloc(a, std.json.Value{ .array = configs }, .{});
+    bridge.loadConfigJson(config) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.InvalidSubmission, "invalid MCP source");
+    bridge.discover() catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.BackendFailed, "MCP discovery failed");
+    return sources;
+}
+
 pub const Session = struct {
     owner: *Adapter,
     gpa: std.mem.Allocator,
@@ -374,6 +415,8 @@ pub const Session = struct {
     runtime: *session_runtime.SessionRuntime,
     loop: *local_loop.LocalLoop,
     jobs: *local_tools.shell.Jobs,
+    mcp: *local_tools.mcp_bridge.McpBridge,
+    sources: []oap_types.ToolSourceDescriptor,
     task_origins: std.StringHashMapUnmanaged(TaskOrigin) = .empty,
     shell_calls: std.StringHashMapUnmanaged([]const u8) = .empty,
     pending_tasks: usize = 0,
@@ -408,16 +451,31 @@ pub const Session = struct {
         errdefer jobs.deinit();
         self.keep = std.heap.ArenaAllocator.init(gpa);
         errdefer self.keep.deinit();
+        const mcp = try gpa.create(local_tools.mcp_bridge.McpBridge);
+        errdefer gpa.destroy(mcp);
+        mcp.* = local_tools.mcp_bridge.McpBridge.init(gpa);
+        mcp.bind();
+        errdefer mcp.deinit();
+        const sources = try attachMcp(self.keep.allocator(), request.tool_sources_json, mcp, refusal);
+        var mcp_tools: std.ArrayList(agent.AgentTool) = .empty;
+        defer mcp_tools.deinit(gpa);
+        try mcp.appendAgentTools(&mcp_tools);
         const offers_input = offersUserInput(request.metadata);
         const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, request.tools_json, refusal);
         const job_tools = local_tools.shell.sessionTools(jobs);
-        const native_count = job_tools.len + owner.options.tools.len + @intFromBool(offers_input);
+        const native_count = job_tools.len + owner.options.tools.len + @intFromBool(offers_input) + mcp_tools.items.len;
         const session_tools = try gpa.alloc(agent.AgentTool, native_count + provided.len);
         defer gpa.free(session_tools);
         @memcpy(session_tools[0..job_tools.len], &job_tools);
         @memcpy(session_tools[job_tools.len..][0..owner.options.tools.len], owner.options.tools);
         if (offers_input) session_tools[job_tools.len + owner.options.tools.len] = inputTool(self);
+        @memcpy(session_tools[native_count - mcp_tools.items.len .. native_count], mcp_tools.items);
         for (provided, session_tools[native_count..]) |definition, *slot| slot.* = providedTool(self, definition);
+        for (session_tools, 0..) |tool, i| {
+            for (session_tools[0..i]) |prior| {
+                if (std.mem.eql(u8, prior.name, tool.name)) return refusal.fail(error.InvalidSubmission, "tool names must be unique");
+            }
+        }
         var options = sessionOptions(owner.options, request.metadata);
         options.models = owner.catalog orelse owner.options.models;
         if (request.reasoning_level) |level| options.thinking_level = try thinkingLevel(level, refusal);
@@ -447,7 +505,7 @@ pub const Session = struct {
         };
         errdefer runtime.deinit();
         const kept = self.keep;
-        self.* = .{ .owner = owner, .gpa = gpa, .keep = kept, .id = "", .participant = "", .runtime = runtime, .loop = loop, .jobs = jobs, .engine = engine, .updated_at_ms = owner.now_ms(), .catalog_seen = owner.catalog_generation, .provided = provided };
+        self.* = .{ .owner = owner, .gpa = gpa, .keep = kept, .id = "", .participant = "", .runtime = runtime, .loop = loop, .jobs = jobs, .mcp = mcp, .sources = sources, .engine = engine, .updated_at_ms = owner.now_ms(), .catalog_seen = owner.catalog_generation, .provided = provided };
         const keep = self.keep.allocator();
         self.participant = try keep.dupe(u8, request.participant);
         self.id = if (request.session_id.len > 0) try keep.dupe(u8, request.session_id) else try owner.nextID(keep, "session");
@@ -718,6 +776,8 @@ pub const Session = struct {
         gpa.destroy(self.runtime);
         self.loop.deinit();
         gpa.destroy(self.loop);
+        self.mcp.deinit();
+        gpa.destroy(self.mcp);
         self.jobs.deinit();
         gpa.destroy(self.jobs);
         self.call_gate.deinit(gpa);
@@ -870,6 +930,7 @@ pub const Session = struct {
             .updated_at_ms = self.updated_at_ms,
             .reasoning_level = @tagName(self.runtime.thinkingLevel()),
             .compaction_policy_json = self.policy_json,
+            .sources = try arena.dupe(oap_types.ToolSourceDescriptor, self.sources),
             .as_of = .{ .admitted_submit_requests = admitted.items, .settled = settled.items },
             .recovered = self.recovered,
             .recovery_reason = if (self.recovered) "the transcript was loaded from the terminal UI's saved session" else null,
@@ -1728,7 +1789,7 @@ pub const Session = struct {
         try call.put("tool_call_id", .{ .string = tool_call_id });
         try call.put("execution_owner", .{ .string = endpoint_id });
         try call.put("name", .{ .string = name });
-        try call.put("source", .{ .string = native_source });
+        try call.put("source", .{ .string = self.mcp.sourceForTool(name) orelse native_source });
         return call;
     }
 
@@ -1966,11 +2027,11 @@ pub const Session = struct {
                 .description = tool.description,
                 .input_schema_json = tool.parameters_schema_json,
                 .execution_owner = endpoint_id,
-                .source = native_source,
+                .source = self.mcp.sourceForTool(tool.name) orelse native_source,
                 .annotations_json = if (tool.label.len > 0) try std.json.Stringify.valueAlloc(arena, .{ .title = tool.label }, .{}) else null,
             };
         }
-        return .{ .revision = capability_revision, .response = .{ .session_id = request.session_id, .sources = try arena.dupe(oap_types.ToolSourceDescriptor, &native_sources), .tools = definitions } };
+        return .{ .revision = capability_revision, .response = .{ .session_id = request.session_id, .sources = try arena.dupe(oap_types.ToolSourceDescriptor, self.sources), .tools = definitions } };
     }
 
     fn models(ptr: *anyopaque, arena: std.mem.Allocator, request: *const oap_types.ModelsRequest, refusal: *contract.Refusal) contract.Failure!contract.Catalog {
@@ -3500,10 +3561,10 @@ test "a session reports a live background job, so the hub will not park it" {
     try testing.expect(!harness.session.holdsNoLiveWork());
 }
 
-test "an open that attaches sources is refused, since attaching is not advertised" {
+test "an unsupported source transport is refused" {
     var owner = Adapter.init(testing.allocator, .{});
     var refusal = contract.Refusal{};
-    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(testing.allocator, .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\"}]" }, &refusal));
+    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(testing.allocator, .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\",\"kind\":\"remote\"}]" }, &refusal));
     try testing.expectEqualStrings(contract.feature_tool_sources_attach, refusal.feature);
 }
 
