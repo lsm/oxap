@@ -371,7 +371,7 @@ fn refuseSource(arena: std.mem.Allocator, refusal: *contract.Refusal, id: []cons
 }
 
 fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
-    const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, raw orelse "[]", .{}) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.InvalidSubmission;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, raw orelse "[]", .{ .allocate = .alloc_always }) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.InvalidSubmission;
     if (parsed != .array) return error.InvalidSubmission;
     const sources = try a.alloc(oap_types.ToolSourceDescriptor, parsed.array.items.len + 1);
     sources[0] = native_sources[0];
@@ -407,7 +407,6 @@ fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, b
     }
     const config = try std.json.Stringify.valueAlloc(a, std.json.Value{ .array = configs }, .{});
     bridge.loadConfigJson(config) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.InvalidSubmission, "invalid MCP source");
-    bridge.discover() catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.BackendFailed, "MCP discovery failed");
     return sources;
 }
 
@@ -457,7 +456,6 @@ pub const Session = struct {
         self.keep = std.heap.ArenaAllocator.init(gpa);
         errdefer self.keep.deinit();
         const offers_input = offersUserInput(request.metadata);
-        const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, request.tools_json, refusal);
         var options = sessionOptions(owner.options, request.metadata);
         options.models = owner.catalog orelse owner.options.models;
         if (request.reasoning_level) |level| options.thinking_level = try thinkingLevel(level, refusal);
@@ -468,6 +466,8 @@ pub const Session = struct {
         mcp.bind();
         errdefer mcp.deinit();
         const sources = try attachMcp(self.keep.allocator(), arena, request.tool_sources_json, mcp, refusal);
+        const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, sources, request.tools_json, refusal);
+        mcp.discover() catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.BackendFailed, "MCP discovery failed");
         var mcp_tools: std.ArrayList(agent.AgentTool) = .empty;
         defer mcp_tools.deinit(gpa);
         try mcp.appendAgentTools(&mcp_tools);
@@ -482,7 +482,12 @@ pub const Session = struct {
         for (provided, session_tools[native_count..]) |definition, *slot| slot.* = providedTool(self, definition);
         for (session_tools, 0..) |tool, i| {
             for (session_tools[0..i]) |prior| {
-                if (std.mem.eql(u8, prior.name, tool.name)) return refuseTool(arena, refusal, tool.name, "the name already resolves to a catalog entry");
+                if (std.mem.eql(u8, prior.name, tool.name)) {
+                    if (i < native_count) {
+                        if (mcp.sourceForTool(tool.name)) |id| return refuseSource(arena, refusal, id, "an MCP tool name already resolves to a catalog entry");
+                    }
+                    return refuseTool(arena, refusal, tool.name, "the name already resolves to a catalog entry");
+                }
             }
         }
         const engine = try ownEngine(gpa, owner.options.permission_engine, options.workspace_root);
@@ -2511,7 +2516,7 @@ fn namedIn(tools: []const agent.AgentTool, offers_input: bool, provided: []const
     return false;
 }
 
-fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, participant: []const u8, native: []const agent.AgentTool, offers_input: bool, carried: ?[]const u8, refusal: *contract.Refusal) contract.Failure![]const oap_types.ToolDefinition {
+fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, participant: []const u8, native: []const agent.AgentTool, offers_input: bool, sources: []const oap_types.ToolSourceDescriptor, carried: ?[]const u8, refusal: *contract.Refusal) contract.Failure![]const oap_types.ToolDefinition {
     const text = carried orelse return &.{};
     const document = std.json.parseFromSliceLeaky(std.json.Value, keep, text, .{ .allocate = .alloc_always, .parse_numbers = false }) catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;
@@ -2527,9 +2532,14 @@ fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, partici
         if (name.len == 0) return refuseTool(arena, refusal, "", "a provided tool needs a name");
         if (!std.mem.eql(u8, stringOf(item, "execution_owner"), participant)) return refuseTool(arena, refusal, name, "execution_owner must be the opening participant");
         const source = stringOf(item, "source");
-        if (source.len == 0) return refuseTool(arena, refusal, name, "a provided tool must name a source, since the session's catalog lists every tool by one; this loop declares " ++ native_source);
-        if (!std.mem.eql(u8, source, native_source)) {
-            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "this source resolves to nothing for provided tools; use " ++ native_source };
+        if (source.len == 0) return refuseTool(arena, refusal, name, "a provided tool must name a source in the session catalog");
+        var found = false;
+        for (sources) |candidate| if (std.mem.eql(u8, source, candidate.id)) {
+            found = true;
+            break;
+        };
+        if (!found) {
+            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "this source resolves to nothing in the session catalog" };
             return error.UnsupportedFeature;
         }
         if (namedIn(native, offers_input, provided[0..index], name)) return refuseTool(arena, refusal, name, "the name already resolves to a catalog entry");
@@ -2542,7 +2552,7 @@ fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, partici
             .description = if (description.len > 0) description else null,
             .input_schema_json = if (schema) |value| try json_encode.valueAlloc(keep, value) else "{\"type\":\"object\"}",
             .execution_owner = participant,
-            .source = native_source,
+            .source = source,
         };
     }
     return provided;

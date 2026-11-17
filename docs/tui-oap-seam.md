@@ -316,9 +316,12 @@ Decision 0011: tools supplied at open join the loop's own for the session,
 listed with the opener as `execution_owner`, and each call to one is an
 interaction the opener settles with `action.call.resolve.request` while the
 loop's tool waits. Its limits are 64 tools, names matching
-`^[a-zA-Z0-9_-]{1,64}$`, and JSON Schema 2020-12; a definition must name the
-one source the loop declares, `oapx` (Decision 0048), and naming none or any
-other is refused. At session open, a configured stdio MCP source can also be attached to the served loop. Its tools are discovered, listed with their source, and called through the same lifecycle and permission policy. Remote MCP transports are not yet supported.
+`^[a-zA-Z0-9_-]{1,64}$`, and JSON Schema 2020-12; a definition must name a
+source the loop declares or the session attaches (Decision 0048). An absent or
+unknown source is refused. At session open, a configured stdio MCP source can
+be attached to the served loop. Its tools are discovered, listed with their
+source, and called through the same lifecycle and permission policy. Remote
+MCP transports are not yet supported.
 
 ## What stays on the TUI side of the line
 
