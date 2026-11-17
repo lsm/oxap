@@ -10,6 +10,7 @@ publish = false
 [dependencies]
 oxap-adapter = { path = "../adapter", version = "=0.1.0" }
 oxap-adapter-acp = { path = "../adapter/acp", version = "=0.1.0" }
+oxap-adapter-codex-appserver = { path = "../adapter/codex-appserver", version = "=0.1.0" }
 oxap-adapter-deepseek = { path = "../adapter/deepseek", version = "=0.1.0" }
 oxap-binding = { path = "../binding", version = "=0.1.0" }
 oxap-protocol = { path = "../protocol", version = "=0.1.0" }
