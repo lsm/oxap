@@ -2809,6 +2809,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tools/one_shot.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "compat", .module = compat_mod },
+            .{ .name = "endpoint_client", .module = oap_endpoint_client_mod },
+        },
     });
     const one_shot_test_run = b.addRunArtifact(b.addTest(.{ .root_module = one_shot_mod }));
 
@@ -2887,6 +2891,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "hub_daemon", .module = hub_daemon_mod },
             .{ .name = "bounded_output", .module = bounded_output_mod },
             .{ .name = "endpoint_signals", .module = endpoint_signals_mod },
+            .{ .name = "one_shot", .module = one_shot_mod },
         },
     });
     makai_cli_module.addImport("repeat", repeat_mod);

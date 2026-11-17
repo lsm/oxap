@@ -64,6 +64,7 @@ const hub_daemon = @import("hub_daemon");
 const hub_http = @import("hub_http");
 const bounded_output = @import("bounded_output");
 const endpoint_signals = @import("endpoint_signals");
+const one_shot = @import("one_shot");
 
 const builtin = @import("builtin");
 
@@ -1442,14 +1443,15 @@ fn printUsage(file: std.Io.File) !void {
         \\                   sessions over one adapter registry. --config
         \\                   names the registry document; without it the
         \\                   built-in memory adapter is served alone.
-        \\  run              Non-interactive print mode: stream a prompt using
-        \\                   stored credentials and print every event to stdout.
-        \\                   Options may appear before or after the prompt.
-        \\                   Use --agent to run through the full agent loop.
-        \\                   Use --storage to resolve credentials like the TUI.
-        \\                   It talks to Kimi only: --model <id> picks a Kimi
-        \\                   model (default kimi-k2.7-code), and any other id
-        \\                   is refused.
+        \\  run              Run one prompt to its end and print the reply. The
+        \\                   prompt is the argument, or stdin when it is absent
+        \\                   or "-". It is served by oxap serve agent: --backend
+        \\                   and --config pick the harness, and --model the
+        \\                   model (provider/api@model for the built-in loop).
+        \\                   --system adds instructions, --json prints every
+        \\                   envelope as one line, and --approve grants the
+        \\                   permissions the agent asks for, which are denied
+        \\                   otherwise. Exits 1 when the run does not complete.
         \\  serve agent      Serve agent-control-core over stdio, one envelope per line
         \\                   Remote provider: set OXAP_PROVIDER_SERVICE_URL and
         \\                   OXAP_PROVIDER_SERVICE_SECURITY=loopback|tls|mesh_proxy
@@ -2446,7 +2448,9 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, args[1], "run")) {
-        try runPrintMode(allocator, args[2..]);
+        const self_path = try std.process.executablePathAlloc(backendIo(), init.arena.allocator());
+        const code = try one_shot.run(allocator, self_path, args[2..], stdin, stdout, stderr);
+        if (code != 0) std.process.exit(code);
         return;
     }
 
