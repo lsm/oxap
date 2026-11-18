@@ -72,7 +72,7 @@ SDKs internally.
 oxap auth providers                      # the providers you can sign in to
 oxap auth login --provider <id>          # store a credential (Keychain first on macOS)
 oxap                                     # the terminal UI, over any stored credential
-KIMI_API_KEY=<key> oxap run --agent "summarize this repo"   # one prompt over Kimi, every event printed
+oxap run --backend claude "write a haiku about rivers"   # one prompt to its end, the reply on stdout
 oxap serve agent,provider --stdio        # the endpoint the SDKs drive
 ```
 
@@ -84,6 +84,8 @@ backend:
 
 - its own agent loop, which reaches any catalogued model provider;
 - a third-party harness, translated by a pinned adapter.
+
+[Two ways oxap runs a model](docs/two-layers.md) says when to pick which.
 
 ```mermaid
 flowchart TB

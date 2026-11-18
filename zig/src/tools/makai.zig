@@ -23,9 +23,6 @@ const provider_catalog = @import("provider_catalog");
 const provider_credential = @import("provider_credential");
 const auth_providers = @import("auth/providers");
 
-const kimi_provider_id = "kimi";
-const kimi_china_base_url = provider_catalog.baseUrlOrCompileError(kimi_provider_id, "openai-completions", "china");
-const kimi_global_base_url = provider_catalog.baseUrlOrCompileError(kimi_provider_id, "openai-completions", "global");
 const oap_conformance = @import("oap_conformance");
 const oap_auth_adapter = @import("oap_auth_adapter");
 const agent_oap_provider_bridge = @import("agent_oap_provider_bridge");
@@ -64,6 +61,7 @@ const hub_daemon = @import("hub_daemon");
 const hub_http = @import("hub_http");
 const bounded_output = @import("bounded_output");
 const endpoint_signals = @import("endpoint_signals");
+const one_shot = @import("one_shot");
 
 const builtin = @import("builtin");
 
@@ -90,49 +88,6 @@ fn invokedAsLegacyName(program_path: []const u8) bool {
 const AuthProtocolServer = auth_protocol_server.AuthProtocolServer;
 const STDIO_IDLE_SLEEP_NS = std.time.ns_per_ms;
 const STDIO_THREAD_JOIN_TIMEOUT_MS: u64 = 5_000;
-
-fn kimiContextWindow() !u32 {
-    return provider_catalog.rowContextWindow(kimi_provider_id) orelse error.KimiRowHasNoContextWindow;
-}
-
-fn kimiMaxTokens() !u32 {
-    return provider_catalog.rowMaxTokens(kimi_provider_id) orelse error.KimiRowHasNoMaxTokens;
-}
-
-fn kimiDefaultRegion() []const u8 {
-    return provider_catalog.defaultRegion(kimi_provider_id) orelse "china";
-}
-
-fn kimiRegionFromProviderData(provider_data: []const u8) []const u8 {
-    if (std.mem.startsWith(u8, provider_data, "region:")) {
-        return provider_catalog.regionFromValue(kimi_provider_id, provider_data["region:".len..]) orelse kimiDefaultRegion();
-    }
-    return kimiDefaultRegion();
-}
-
-fn loadStoredKimiRegion(allocator: std.mem.Allocator) ?[]const u8 {
-    var storage = oauth_storage.AuthStorage.loadDefaultStoredOnly(allocator) catch return null;
-    defer storage.deinit();
-    const auth = storage.providers.get(kimi_provider_id) orelse return null;
-    return switch (auth) {
-        .api_key => null,
-        .oauth => |creds| if (creds.provider_data) |data| kimiRegionFromProviderData(data) else null,
-    };
-}
-
-fn resolvePrintKimiRegion(allocator: std.mem.Allocator, use_storage_auth: bool) []const u8 {
-    if (provider_catalog.regionEnv(kimi_provider_id)) |name| {
-        const region_env = compat.getEnvVarOwned(allocator, name) catch null;
-        if (region_env) |env| {
-            defer allocator.free(env);
-            if (provider_catalog.regionFromValue(kimi_provider_id, env)) |region| return region;
-        }
-    }
-    if (use_storage_auth) {
-        if (loadStoredKimiRegion(allocator)) |region| return region;
-    }
-    return kimiDefaultRegion();
-}
 
 const defaultBaseUrlForRef = provider_base_url.defaultBaseUrlForRef;
 const isReasoningModelRef = provider_base_url.isReasoningModelRef;
@@ -1418,7 +1373,7 @@ fn printUsage(file: std.Io.File) !void {
         \\  oxap tui --attach <url> [--adapter <name>]     The terminal UI over a running oxap serve's HTTP wire; adapter defaults to oapx
         \\  oxap opencode install                            Download the OpenCode oxap is tested with into ~/.oxap/opencode
         \\  oxap tui --backend opencode [--config <path>]  The terminal UI over an OpenCode server oxap starts, or the entry's endpoint
-        \\  oxap run [--agent] [--storage] [--model <id>] "<prompt>"
+        \\  oxap run [--backend <name>] [--config <path>] [--model <id>] [--system <text>] [--json] [--approve] ["<prompt>"]
         \\  oxap serve agent [--stdio] [--model <model-ref>]
         \\  oxap serve agent [--stdio] --backend <name> [--config <path>]
         \\  oxap serve provider [--stdio] [--specimens]
@@ -1442,14 +1397,15 @@ fn printUsage(file: std.Io.File) !void {
         \\                   sessions over one adapter registry. --config
         \\                   names the registry document; without it the
         \\                   built-in memory adapter is served alone.
-        \\  run              Non-interactive print mode: stream a prompt using
-        \\                   stored credentials and print every event to stdout.
-        \\                   Options may appear before or after the prompt.
-        \\                   Use --agent to run through the full agent loop.
-        \\                   Use --storage to resolve credentials like the TUI.
-        \\                   It talks to Kimi only: --model <id> picks a Kimi
-        \\                   model (default kimi-k2.7-code), and any other id
-        \\                   is refused.
+        \\  run              Run one prompt to its end and print the reply. The
+        \\                   prompt is the argument, or stdin when it is absent
+        \\                   or "-". It is served by oxap serve agent: --backend
+        \\                   and --config pick the harness, and --model the
+        \\                   model (provider/api@model for the built-in loop).
+        \\                   --system adds instructions, --json prints every
+        \\                   envelope as one line, and --approve grants the
+        \\                   permissions the agent asks for, which are denied
+        \\                   otherwise. Exits 1 when the run does not complete.
         \\  serve agent      Serve agent-control-core over stdio, one envelope per line
         \\                   Remote provider: set OXAP_PROVIDER_SERVICE_URL and
         \\                   OXAP_PROVIDER_SERVICE_SECURITY=loopback|tls|mesh_proxy
@@ -1611,421 +1567,6 @@ test "the tui takes a backend and the registry its entry is read from" {
     try std.testing.expectError(error.UnknownOption, parseTuiArgs(&.{"--backend"}));
 }
 
-const DEFAULT_PRINT_MODEL_ID = "kimi-k2.7-code";
-
-const PrintModeOptions = struct {
-    prompt: []const u8,
-    model_id: []const u8 = DEFAULT_PRINT_MODEL_ID,
-    use_agent_loop: bool = false,
-    use_storage_auth: bool = false,
-};
-
-const PrintModeInvocation = union(enum) {
-    print: PrintModeOptions,
-    tui_runtime: []const u8,
-};
-
-const PrintModeArgError = union(enum) {
-    missing_prompt,
-    missing_option_value: []const u8,
-    misplaced_option: []const u8,
-    unsupported_option: []const u8,
-    unexpected_argument: []const u8,
-};
-
-fn takePrintModeOptionValue(args: []const []const u8, index: *usize) ?[]const u8 {
-    const value_index = index.* + 1;
-    if (value_index >= args.len) return null;
-    const value = args[value_index];
-    if (std.mem.startsWith(u8, value, "--")) return null;
-    index.* = value_index;
-    return value;
-}
-
-fn parsePrintModeArgs(
-    args: []const []const u8,
-    err_out: *PrintModeArgError,
-) error{InvalidArgument}!PrintModeInvocation {
-    var prompt: ?[]const u8 = null;
-    var model_id: []const u8 = DEFAULT_PRINT_MODEL_ID;
-    var use_agent_loop = false;
-    var use_storage_auth = false;
-
-    var index: usize = 0;
-    while (index < args.len) : (index += 1) {
-        const arg = args[index];
-        if (!std.mem.startsWith(u8, arg, "--")) {
-            if (prompt != null) {
-                err_out.* = .{ .unexpected_argument = arg };
-                return error.InvalidArgument;
-            }
-            prompt = arg;
-            continue;
-        }
-        if (std.mem.eql(u8, arg, "--agent")) {
-            use_agent_loop = true;
-        } else if (std.mem.eql(u8, arg, "--storage")) {
-            use_storage_auth = true;
-        } else if (std.mem.eql(u8, arg, "--tui-runtime")) {
-            if (prompt != null) {
-                err_out.* = .{ .misplaced_option = arg };
-                return error.InvalidArgument;
-            }
-            const tui_prompt = takePrintModeOptionValue(args, &index) orelse {
-                err_out.* = .{ .missing_option_value = arg };
-                return error.InvalidArgument;
-            };
-            return .{ .tui_runtime = tui_prompt };
-        } else if (std.mem.eql(u8, arg, "--model")) {
-            model_id = takePrintModeOptionValue(args, &index) orelse {
-                err_out.* = .{ .missing_option_value = arg };
-                return error.InvalidArgument;
-            };
-        } else {
-            err_out.* = .{ .unsupported_option = arg };
-            return error.InvalidArgument;
-        }
-    }
-
-    const resolved_prompt = prompt orelse {
-        err_out.* = .missing_prompt;
-        return error.InvalidArgument;
-    };
-    return .{ .print = .{
-        .prompt = resolved_prompt,
-        .model_id = model_id,
-        .use_agent_loop = use_agent_loop,
-        .use_storage_auth = use_storage_auth,
-    } };
-}
-
-fn servesPrintModel(model_id: []const u8) bool {
-    return provider_catalog.declaredModel(kimi_provider_id, model_id) != null;
-}
-
-fn reportPrintModeArgError(err: PrintModeArgError) void {
-    switch (err) {
-        .missing_prompt => perr("error: -p requires a prompt argument\n"),
-        .missing_option_value => |flag| perrf("error: {s} requires a value\n", .{flag}),
-        .misplaced_option => |flag| perrf("error: {s} must appear before the prompt\n", .{flag}),
-        .unsupported_option => |flag| perrf("error: unsupported -p option: {s}\n", .{flag}),
-        .unexpected_argument => |arg| perrf("error: unexpected -p argument: {s}\n", .{arg}),
-    }
-}
-
-fn runPrintMode(allocator: std.mem.Allocator, args: []const []const u8) !void {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = parsePrintModeArgs(args, &arg_error) catch |err| {
-        reportPrintModeArgError(arg_error);
-        return err;
-    };
-    const options = switch (invocation) {
-        .tui_runtime => |tui_prompt| return runPrintTuiRuntime(allocator, tui_prompt),
-        .print => |parsed| parsed,
-    };
-    const prompt = options.prompt;
-    const model_id = options.model_id;
-    const use_agent_loop = options.use_agent_loop;
-    const use_storage_auth = options.use_storage_auth;
-
-    if (!servesPrintModel(model_id)) {
-        perrf("error: oxap run talks to Kimi only, and {s} is not a Kimi model; use the terminal UI or oxap serve agent --model <provider>/<api>@<model> for another provider's model\n", .{model_id});
-        return error.InvalidArgument;
-    }
-
-    perr("[print] building kimi model from env...\n");
-
-    const api_key_copy: ?[]u8 = if (use_storage_auth) null else blk: {
-        const api_key_env = compat.getEnvVarOwned(allocator, "KIMI_API_KEY") catch |err| {
-            perrf("error: set KIMI_API_KEY to use -p, or pass --storage to use saved credentials: {s}\n", .{@errorName(err)});
-            return error.NoCredentials;
-        };
-        break :blk api_key_env;
-    };
-    defer if (api_key_copy) |key| allocator.free(key);
-
-    const region = resolvePrintKimiRegion(allocator, use_storage_auth);
-    const is_global_kimi = std.mem.eql(u8, region, "global");
-    const base_url = if (is_global_kimi) kimi_global_base_url else kimi_china_base_url;
-
-    const model = ai_types.Model{
-        .id = model_id,
-        .name = model_id,
-        .api = "openai-completions",
-        .provider = "kimi",
-        .base_url = base_url,
-        .reasoning = false,
-        .input = &[_][]const u8{"text"},
-        .cost = .{ .input = 0, .output = 0, .cache_read = 0, .cache_write = 0 },
-        .context_window = try kimiContextWindow(),
-        .max_tokens = try kimiMaxTokens(),
-    };
-
-    var registry = api_registry.ApiRegistry.init(allocator);
-    defer registry.deinit();
-    try register_builtins.registerBuiltInApiProviders(&registry);
-
-    const provider = registry.getApiProvider(model.api) orelse {
-        perrf("error: no provider registered for api '{s}'\n", .{model.api});
-        return error.NoProvider;
-    };
-    _ = provider;
-
-    const messages = try allocator.alloc(ai_types.Message, 1);
-    defer allocator.free(messages);
-    messages[0] = .{ .user = .{ .content = .{ .text = prompt }, .timestamp = compat.time.nowSeconds() } };
-    const context = ai_types.Context{ .messages = messages };
-
-    perrf("[print] model={s} api={s} provider={s} base_url={s}\n", .{ model.id, model.api, model.provider, model.base_url });
-    if (api_key_copy) |key| {
-        perrf("[print] api_key_len={d} reasoning={any}\n", .{ key.len, model.reasoning });
-    } else {
-        perrf("[print] api_key=storage reasoning={any}\n", .{model.reasoning});
-    }
-    if (use_agent_loop) {
-        return runPrintAgentLoop(allocator, model, prompt, api_key_copy);
-    }
-
-    perr("[print] starting stream via protocol bridge...\n");
-
-    var bridge = agent_bridge.InProcessProviderProtocolBridge.init(&registry);
-    const protocol = bridge.protocolClient();
-
-    const stream = try protocol.stream(model, context, .{
-        .api_key = api_key_copy,
-    }, allocator);
-    defer _ = stream.deinitAndDestroy();
-
-    perr("[print] stream created, polling events...\n");
-
-    var event_count: usize = 0;
-    while (stream.wait()) |ev| {
-        event_count += 1;
-        var owned_event = ev;
-        defer if (stream.ownership.isOwned()) ai_types.deinitAssistantMessageEvent(allocator, &owned_event);
-        switch (ev) {
-            .text_delta => |td| {
-                perrf("[text] ({d}b) {s}\n", .{ td.delta.len, td.delta });
-            },
-            .thinking_delta => |td| {
-                perrf("[think] ({d}b) {s}\n", .{ td.delta.len, td.delta });
-            },
-            .toolcall_delta => |td| {
-                perrf("[tool_delta] {s}\n", .{td.delta});
-            },
-            .done => |d| {
-                perrf("[done] stop_reason={s} events={d}\n", .{ @tagName(d.message.stop_reason), event_count });
-                break;
-            },
-            .@"error" => |e| {
-                perrf("[error] reason={s} events={d}\n", .{ @tagName(e.reason), event_count });
-                break;
-            },
-            else => {
-                perrf("[event#{d}] {s}\n", .{ event_count, @tagName(ev) });
-            },
-        }
-    }
-
-    if (stream.getError()) |e| {
-        perrf("[print] stream error: {s}\n", .{e});
-    } else if (stream.getResult()) |result| {
-        perrf("[print] COMPLETE stop={s} events={d} content_blocks={d}\n", .{ @tagName(result.stop_reason), event_count, result.content.len });
-    } else {
-        perrf("[print] NoFinalMessage after {d} events\n", .{event_count});
-    }
-}
-
-fn runPrintAgentLoop(
-    allocator: std.mem.Allocator,
-    model: ai_types.Model,
-    prompt: []const u8,
-    api_key: ?[]const u8,
-) !void {
-    perr("[print-agent] starting full agent loop via protocol bridge...\n");
-
-    var registry = api_registry.ApiRegistry.init(allocator);
-    defer registry.deinit();
-    try register_builtins.registerBuiltInApiProviders(&registry);
-
-    var bridge = agent_bridge.InProcessProviderProtocolBridge.init(&registry);
-    const protocol = bridge.protocolClient();
-
-    var context = agent_loop.AgentContext.init(allocator);
-    defer context.deinit();
-    context.system_prompt = ai_types.OwnedSlice(u8).initBorrowed("You are Makai running a Kimi debug print request. Reply concisely.");
-
-    const messages = try allocator.alloc(ai_types.Message, 1);
-    defer allocator.free(messages);
-    messages[0] = .{ .user = .{ .content = .{ .text = try allocator.dupe(u8, prompt) }, .timestamp = compat.time.nowSeconds() } };
-
-    const stream = try agent_loop.agentLoop(allocator, messages, &context, .{
-        .model = model,
-        .protocol = protocol,
-        .tools = &.{},
-        .api_key = api_key,
-        .max_tokens = model.max_tokens,
-        .thinking_level = .low,
-        .max_iterations = 1,
-    });
-    defer _ = stream.deinitAndDestroy();
-
-    var event_count: usize = 0;
-    while (stream.wait()) |event| {
-        event_count += 1;
-        var owned_event = event;
-        defer owned_event.deinit(allocator);
-
-        switch (owned_event) {
-            .message_update => |update| {
-                switch (update.event) {
-                    .text_delta => |td| perrf("[agent-text] ({d}b) {s}\n", .{ td.delta.len, td.delta }),
-                    .thinking_delta => |td| perrf("[agent-think] ({d}b) {s}\n", .{ td.delta.len, td.delta }),
-                    else => perrf("[agent-provider-event#{d}] {s}\n", .{ event_count, @tagName(update.event) }),
-                }
-            },
-            .message_end => |payload| {
-                if (payload.message == .assistant) {
-                    const msg = payload.message.assistant;
-                    perrf("[agent-message-end] stop={s} content_blocks={d}\n", .{ @tagName(msg.stop_reason), msg.content.len });
-                } else {
-                    perrf("[agent-message-end] {s}\n", .{@tagName(payload.message)});
-                }
-            },
-            .turn_end => |payload| {
-                perrf("[agent-turn-end] stop={s} content_blocks={d}\n", .{ @tagName(payload.message.stop_reason), payload.message.content.len });
-                if (payload.message.error_message.slice().len > 0) {
-                    perrf("[agent-turn-end] error={s}\n", .{payload.message.error_message.slice()});
-                }
-            },
-            .agent_end => perrf("[agent-end]\n", .{}),
-            else => perrf("[agent-event#{d}] {s}\n", .{ event_count, @tagName(owned_event) }),
-        }
-    }
-
-    if (stream.getError()) |e| {
-        perrf("[print-agent] stream error: {s}\n", .{e});
-    } else if (stream.getResult()) |result| {
-        perrf("[print-agent] COMPLETE iterations={d} stop={s} events={d} content_blocks={d}\n", .{
-            result.iterations,
-            @tagName(result.final_message.stop_reason),
-            event_count,
-            result.final_message.content.len,
-        });
-        if (result.final_message.error_message.slice().len > 0) {
-            perrf("[print-agent] final error={s}\n", .{result.final_message.error_message.slice()});
-        }
-    } else {
-        perrf("[print-agent] NoFinalMessage after {d} events\n", .{event_count});
-    }
-}
-
-fn runPrintTuiRuntime(allocator: std.mem.Allocator, prompt: []const u8) !void {
-    perr("[print-tui] starting TUI runtime path with production tool registry...\n");
-
-    var registry = api_registry.ApiRegistry.init(allocator);
-    defer registry.deinit();
-    try register_builtins.registerBuiltInApiProviders(&registry);
-
-    var bridge = agent_bridge.InProcessProviderProtocolBridge.init(&registry);
-
-    const models = [_]ai_types.Model{.{
-        .id = "kimi-k2.7-code",
-        .name = "Kimi K2.7 Code",
-        .api = "openai-completions",
-        .provider = "kimi",
-        .base_url = kimi_china_base_url,
-        .reasoning = false,
-        .input = &[_][]const u8{"text"},
-        .cost = .{ .input = 0, .output = 0, .cache_read = 0, .cache_write = 0 },
-        .context_window = try kimiContextWindow(),
-        .max_tokens = try kimiMaxTokens(),
-    }};
-
-    var loop = oapx_adapter.LocalLoop.init(allocator, .{ .protocol = (&bridge).protocolClient(), .run_async = false });
-    defer loop.deinit();
-
-    const options = tui_app.SessionRuntimeOptions{
-        .protocol = (&bridge).protocolClient(),
-        .models = &models,
-        .initial_model_id = "kimi-k2.7-code",
-        .run_async = false,
-        .compact_output = true,
-        .loop = loop.loop(),
-    };
-
-    var runtime = try tui_app.SessionRuntime.init(allocator, options);
-    defer runtime.deinit();
-
-    if (runtime.currentModel()) |model| {
-        perrf("[print-tui] initial model={s} api={s} provider={s} base_url={s}\n", .{ model.id, model.api, model.provider, model.base_url });
-    } else {
-        perr("[print-tui] no initial model\n");
-    }
-
-    runtime.switchModel("kimi-k2.7-code") catch |err| {
-        perrf("[print-tui] switchModel(kimi-k2.7-code) failed: {s}\n", .{@errorName(err)});
-        return err;
-    };
-    if (runtime.currentModel()) |model| {
-        perrf("[print-tui] active model={s} api={s} provider={s} base_url={s} tools={d}\n", .{
-            model.id,
-            model.api,
-            model.provider,
-            model.base_url,
-            runtime.availableTools().len,
-        });
-    }
-
-    try runtime.submitTurn(prompt);
-
-    var event_count: usize = 0;
-    while (true) {
-        const stream = runtime.streamEvents();
-        if (stream.wait()) |event| {
-            event_count += 1;
-            var owned_event = event;
-            defer owned_event.deinit(allocator);
-            switch (owned_event) {
-                .text_delta => |td| perrf("[print-tui-text] ({d}b) {s}\n", .{ td.delta.slice().len, td.delta.slice() }),
-                .thinking_delta => |td| perrf("[print-tui-think] ({d}b) {s}\n", .{ td.delta.slice().len, td.delta.slice() }),
-                .message_end => |payload| perrf("[print-tui-message-end] role={s} stop={s} is_error={any} text={s}\n", .{
-                    @tagName(payload.role),
-                    @tagName(payload.stop_reason),
-                    payload.is_error,
-                    payload.text.slice(),
-                }),
-                .turn_end => |payload| perrf("[print-tui-turn-end] stop={s}\n", .{@tagName(payload.stop_reason)}),
-                .agent_end => |payload| {
-                    perrf("[print-tui-agent-end] reason={s} events={d}\n", .{ @tagName(payload.reason), event_count });
-                    break;
-                },
-                .@"error" => |payload| perrf("[print-tui-error] {s}\n", .{payload.message.slice()}),
-                else => perrf("[print-tui-event#{d}] {s}\n", .{ event_count, @tagName(owned_event) }),
-            }
-            continue;
-        }
-
-        if (stream.getError()) |err_msg| {
-            perrf("[print-tui] stream error: {s}\n", .{err_msg});
-            break;
-        }
-        if (stream.getResult()) |result| {
-            perrf("[print-tui] COMPLETE reason={s} events={d}\n", .{ @tagName(result.reason), event_count });
-            break;
-        }
-        break;
-    }
-}
-
-fn perr(msg: []const u8) void {
-    std.debug.print("{s}", .{msg});
-}
-
-fn perrf(comptime fmt: []const u8, args: anytype) void {
-    std.debug.print(fmt, args);
-}
-
 const PRODUCTION_AUTH_SERVER_OPTIONS = auth_protocol_server.AuthProtocolServer.Options{
     .persist_credentials = true,
     .enable_real_oauth = true,
@@ -2098,34 +1639,6 @@ fn handleAuthWithOptions(
     }
 
     return error.InvalidArgument;
-}
-
-test "print mode serves the Kimi models the catalog declares and refuses another provider's model" {
-    try std.testing.expect(servesPrintModel(DEFAULT_PRINT_MODEL_ID));
-    try std.testing.expect(!servesPrintModel("claude-haiku-4.5"));
-    try std.testing.expect(!servesPrintModel("github-copilot/openai-completions@claude-haiku-4.5"));
-}
-
-test "the print path resolves a Kimi region exactly as the catalog does" {
-    const allocator = std.testing.allocator;
-    try provider_catalog.blankEnvironment(allocator);
-    defer compat.clearTestEnv();
-
-    const named = provider_catalog.defaultRegion(kimi_provider_id).?;
-    const values = [_][]const u8{ "", "china", "global", "moonshot", "cn", "coding", " global ", "GLOBAL", "mars", "region:global" };
-
-    for (values) |value| {
-        const canonical = provider_catalog.regionFromValue(kimi_provider_id, value) orelse named;
-        try compat.setTestEnv(allocator, "KIMI_REGION", value);
-        try std.testing.expectEqualStrings(canonical, resolvePrintKimiRegion(allocator, false));
-    }
-
-    try compat.setTestEnv(allocator, "KIMI_REGION", "global");
-    try std.testing.expectEqualStrings("global", kimiRegionFromProviderData("region:moonshot"));
-    try std.testing.expectEqualStrings("global", kimiRegionFromProviderData("region: global "));
-    try std.testing.expectEqualStrings(named, kimiRegionFromProviderData("region:"));
-    try std.testing.expectEqualStrings(named, kimiRegionFromProviderData("no region here"));
-    try std.testing.expectEqualStrings(named, kimiRegionFromProviderData("region:mars"));
 }
 
 test "the hub's wall clock is in nanoseconds, which is the unit the hub divides" {
@@ -2445,8 +1958,10 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    if (std.mem.eql(u8, args[1], "run")) {
-        try runPrintMode(allocator, args[2..]);
+    if (std.mem.eql(u8, args[1], "run") or std.mem.eql(u8, args[1], "-p")) {
+        const self_path = try std.process.executablePathAlloc(backendIo(), init.arena.allocator());
+        const code = try one_shot.run(allocator, self_path, args[2..], stdin, stdout, stderr);
+        if (code != 0) std.process.exit(code);
         return;
     }
 
@@ -2487,11 +2002,6 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, args[1], "--tui")) {
         try compat.stdio.writeAll(stderr, "oxap --tui was removed; run oxap, which starts the terminal UI over OAP\n");
         return error.InvalidArgument;
-    }
-
-    if (std.mem.eql(u8, args[1], "-p")) {
-        try runPrintMode(allocator, args[2..]);
-        return;
     }
 
     if (std.mem.eql(u8, args[1], "auth")) {
@@ -2561,159 +2071,6 @@ test "OAP model wire reference resolves to local API without changing provider i
     try std.testing.expectError(error.InvalidModelRef, modelFromCanonicalRef(allocator, "acme/other:no-such-wire@m"));
 }
 
-test "print mode parses options that follow the prompt" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = try parsePrintModeArgs(
-        &[_][]const u8{ "write a haiku", "--model", "claude-sonnet-4-5" },
-        &arg_error,
-    );
-    try std.testing.expect(std.meta.activeTag(invocation) == .print);
-    try std.testing.expectEqualStrings("write a haiku", invocation.print.prompt);
-    try std.testing.expectEqualStrings("claude-sonnet-4-5", invocation.print.model_id);
-    try std.testing.expect(!invocation.print.use_agent_loop);
-    try std.testing.expect(!invocation.print.use_storage_auth);
-}
-
-test "print mode parses options that precede the prompt" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = try parsePrintModeArgs(
-        &[_][]const u8{ "--agent", "--storage", "--model", "claude-sonnet-4-5", "write a haiku" },
-        &arg_error,
-    );
-    try std.testing.expectEqualStrings("write a haiku", invocation.print.prompt);
-    try std.testing.expectEqualStrings("claude-sonnet-4-5", invocation.print.model_id);
-    try std.testing.expect(invocation.print.use_agent_loop);
-    try std.testing.expect(invocation.print.use_storage_auth);
-}
-
-test "print mode parses options split around the prompt" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = try parsePrintModeArgs(
-        &[_][]const u8{ "--agent", "write a haiku", "--storage", "--model", "claude-sonnet-4-5" },
-        &arg_error,
-    );
-    try std.testing.expectEqualStrings("write a haiku", invocation.print.prompt);
-    try std.testing.expectEqualStrings("claude-sonnet-4-5", invocation.print.model_id);
-    try std.testing.expect(invocation.print.use_agent_loop);
-    try std.testing.expect(invocation.print.use_storage_auth);
-}
-
-test "print mode keeps the default model when --model is absent" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = try parsePrintModeArgs(&[_][]const u8{"write a haiku"}, &arg_error);
-    try std.testing.expectEqualStrings(DEFAULT_PRINT_MODEL_ID, invocation.print.model_id);
-}
-
-test "print mode takes the last --model when repeated on both sides" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = try parsePrintModeArgs(
-        &[_][]const u8{ "--model", "first", "write a haiku", "--model", "second" },
-        &arg_error,
-    );
-    try std.testing.expectEqualStrings("second", invocation.print.model_id);
-}
-
-test "print mode rejects a trailing --model without a value" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "write a haiku", "--model" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .missing_option_value);
-    try std.testing.expectEqualStrings("--model", arg_error.missing_option_value);
-}
-
-test "print mode rejects an unsupported option after the prompt" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "write a haiku", "--bogus" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .unsupported_option);
-    try std.testing.expectEqualStrings("--bogus", arg_error.unsupported_option);
-}
-
-test "print mode rejects a second positional argument" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "write a haiku", "and a limerick" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .unexpected_argument);
-    try std.testing.expectEqualStrings("and a limerick", arg_error.unexpected_argument);
-}
-
-test "print mode rejects options without a prompt" {
-    var arg_error: PrintModeArgError = .{ .unsupported_option = "--sentinel" };
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "--agent", "--model", "claude-sonnet-4-5" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .missing_prompt);
-
-    var empty_error: PrintModeArgError = .{ .unsupported_option = "--sentinel" };
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{}, &empty_error),
-    );
-    try std.testing.expect(std.meta.activeTag(empty_error) == .missing_prompt);
-}
-
-test "print mode rejects an option token as a --model value" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "write a haiku", "--model", "--storage" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .missing_option_value);
-    try std.testing.expectEqualStrings("--model", arg_error.missing_option_value);
-
-    var leading_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "--model", "--agent", "write a haiku" }, &leading_error),
-    );
-    try std.testing.expect(std.meta.activeTag(leading_error) == .missing_option_value);
-    try std.testing.expectEqualStrings("--model", leading_error.missing_option_value);
-}
-
-test "print mode rejects --tui-runtime once a prompt is set" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "first", "--tui-runtime", "second" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .misplaced_option);
-    try std.testing.expectEqualStrings("--tui-runtime", arg_error.misplaced_option);
-}
-
-test "print mode rejects an option token as a --tui-runtime prompt" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{ "--tui-runtime", "--model", "some-model" }, &arg_error),
-    );
-    try std.testing.expect(std.meta.activeTag(arg_error) == .missing_option_value);
-    try std.testing.expectEqualStrings("--tui-runtime", arg_error.missing_option_value);
-}
-
-test "print mode short-circuits on --tui-runtime with its prompt" {
-    var arg_error: PrintModeArgError = .missing_prompt;
-    const invocation = try parsePrintModeArgs(
-        &[_][]const u8{ "--tui-runtime", "write a haiku", "--model", "ignored" },
-        &arg_error,
-    );
-    try std.testing.expect(std.meta.activeTag(invocation) == .tui_runtime);
-    try std.testing.expectEqualStrings("write a haiku", invocation.tui_runtime);
-
-    var missing_error: PrintModeArgError = .missing_prompt;
-    try std.testing.expectError(
-        error.InvalidArgument,
-        parsePrintModeArgs(&[_][]const u8{"--tui-runtime"}, &missing_error),
-    );
-    try std.testing.expect(std.meta.activeTag(missing_error) == .missing_option_value);
-    try std.testing.expectEqualStrings("--tui-runtime", missing_error.missing_option_value);
-}
 const OapModeArgs = struct {
     default_model_id: ?[]const u8 = null,
     answers_specimens: bool = false,

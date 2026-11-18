@@ -5,7 +5,8 @@ serves a third-party harness behind the same envelopes instead, and
 `oapx tui --backend <name>` runs the terminal UI over it. This page says what
 each backend needs before it starts. The pins come from `harnesses/*.json`,
 the only place a pin is written; what each harness cannot express in OAP is in
-the ledger linked from its row.
+the ledger linked from its row. [Two ways oxap runs a model](two-layers.md)
+says when to pick a harness over the built-in loop.
 
 ```sh
 oapx serve agent --stdio --backend claude
@@ -19,12 +20,12 @@ oapx serve agent --stdio --backend acp --config oap-serve.json
 | `oapx` | — | — | yes | — |
 | `memory` | — | — | yes | — |
 | `claude` | `claude-code` | `2.1.322` | yes: `claude` from `PATH` | [mapping](../research/claude-code-agent-sdk-2.1.322-mapping.md) |
-| `codex` | `codex-app-server` | `rust-v0.163.0` | yes: `codex` from `PATH` | [mapping](../research/codex-app-server-0.163.0-mapping.md) |
+| `codex` | `codex-app-server` | `rust-v0.167.2` | yes: `codex` from `PATH` | [mapping](../research/codex-app-server-0.167.2-mapping.md) |
 | `pi` | `pi` | `v1.5.2` | yes: `pi` from `PATH` | [mapping](../research/pi-v1.5.2-mapping.md) |
 | `opencode` | `opencode` | `v2.2.7` | yes: the installed build, else `opencode` from `PATH` | [mapping](../research/opencode-v2.2.7-mapping.md) |
-| `acp` | `acp` | `v1.12.0` | no: needs `executable` | [mapping](../research/acp-v1.12.0-mapping.md) |
+| `acp` | `acp` | `v1.17.0` | no: needs `executable` | [mapping](../research/acp-v1.17.0-mapping.md) |
 | `hermes` | `hermes` | `v0.23.1` | no: needs `executable` | [mapping](../research/hermes-v0.23.1-mapping.md) |
-| `deepseek` | `deepseek-harness` | `dsh-v0.2.1-rc.2` | no: needs `executable`, `provider` and `model` | [mapping](../research/deepseek-harness-dsh-v0.2.1-rc.2-mapping.md) |
+| `deepseek` | `deepseek-harness` | `dsh-v0.2.2-rc.2` | no: needs `executable`, `provider` and `model` | [mapping](../research/deepseek-harness-dsh-v0.2.2-rc.2-mapping.md) |
 
 `--config <path>` takes the entry of that name from a registry shaped like
 [`examples/oap-serve.json`](../examples/oap-serve.json). Unknown members are
