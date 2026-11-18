@@ -2036,6 +2036,11 @@ pub fn build(b: *std.Build) void {
     const mcp_http_probe = b.addExecutable(.{ .name = "mcp-challenge-probe", .root_module = mcp_http_probe_mod });
     const install_mcp_http_probe = b.addInstallArtifact(mcp_http_probe, .{});
     b.step("mcp-challenge-probe", "Build the MCP authorization challenge probe").dependOn(&install_mcp_http_probe.step);
+    const mcp_oauth_mod = b.createModule(.{ .root_source_file = b.path("src/tools/mcp_oauth.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "compat", .module = compat_mod }} });
+    const mcp_oauth_probe_mod = b.createModule(.{ .root_source_file = b.path("../.claude/skills/verify/scripts/mcp-oauth-discovery-probe.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "mcp_oauth", .module = mcp_oauth_mod }} });
+    const mcp_oauth_probe = b.addExecutable(.{ .name = "mcp-oauth-discovery-probe", .root_module = mcp_oauth_probe_mod });
+    const install_mcp_oauth_probe = b.addInstallArtifact(mcp_oauth_probe, .{});
+    b.step("mcp-oauth-discovery-probe", "Build the MCP OAuth metadata probe").dependOn(&install_mcp_oauth_probe.step);
     const tools_registry_mod = b.createModule(.{ .root_source_file = b.path("src/tools/registry.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "agent", .module = agent_mod }, .{ .name = "permission", .module = permission_mod }, .{ .name = "tools/shell", .module = tools_shell_mod }, .{ .name = "tools/file", .module = tools_file_mod }, .{ .name = "tools/edit", .module = tools_edit_mod }, .{ .name = "tools/mcp_bridge", .module = tools_mcp_bridge_mod } } });
 
     const model_catalog_mod = b.createModule(.{

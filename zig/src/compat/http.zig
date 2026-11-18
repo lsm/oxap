@@ -384,6 +384,7 @@ pub const FetchOptions = struct {
     accept_encoding: ?[]const u8 = null,
     max_response_bytes: usize = 8 * 1024 * 1024,
     timeout_ms: u64 = default_fetch_timeout_ms,
+    no_redirect: bool = false,
 };
 
 pub const Fetched = struct {
@@ -409,6 +410,7 @@ const FetchJob = struct {
     request_body: ?[]u8,
     accept_encoding: ?[]u8,
     max_response_bytes: usize,
+    no_redirect: bool,
 
     const arena = std.heap.page_allocator;
 
@@ -453,6 +455,7 @@ const FetchJob = struct {
             .request_body = request_body,
             .accept_encoding = accept_encoding,
             .max_response_bytes = options.max_response_bytes,
+            .no_redirect = options.no_redirect,
         };
         return job;
     }
@@ -496,6 +499,7 @@ const FetchJob = struct {
             .accept_encoding = job.accept_encoding,
         }) catch return false;
         defer request.deinit();
+        if (job.no_redirect) request.redirect_behavior = .unhandled;
 
         if (job.request_body) |value| {
             sendRequest(&request, value) catch return false;
