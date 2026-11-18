@@ -30,6 +30,8 @@ class Server(http.server.BaseHTTPRequestHandler):
     reject_open = False
     redirect_open = False
     deny_refresh = False
+    static_auth = False
+    custom_header = False
     ping_answered = threading.Event()
 
     def log_message(self, *args):
@@ -79,6 +81,8 @@ class Server(http.server.BaseHTTPRequestHandler):
             initialize = json.loads(payload)
             method = initialize.get('method')
             auth = self.headers.get('Authorization')
+            if self.custom_header:
+                assert self.headers.get('X-Static') == 'fixture-header'
             if self.served and auth and method == 'initialize' and self.redirect_open:
                 self.send_response(302)
                 self.send_header('Location', self.server.origin + '/leak')
@@ -98,7 +102,7 @@ class Server(http.server.BaseHTTPRequestHandler):
                 self.send_header('Content-Length', '0')
                 self.end_headers()
                 return
-            assert self.served and auth == f'Bearer fixture-access-{self.refreshes}'
+            assert self.served and auth == ('Bearer static-token' if self.static_auth else f'Bearer fixture-access-{self.refreshes}')
             if method != 'initialize':
                 assert self.headers.get('Mcp-Session-Id') == 'fixture-session'
             if method is None:
@@ -155,7 +159,8 @@ class Server(http.server.BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         self.requests.append(('DELETE', self.path))
-        assert self.served and self.headers.get('Authorization') == f'Bearer fixture-access-{self.refreshes - int(self.deny_refresh)}'
+        assert self.served and self.headers.get('Authorization') == ('Bearer static-token' if self.static_auth else f'Bearer fixture-access-{self.refreshes - int(self.deny_refresh)}')
+        if self.custom_header: assert self.headers.get('X-Static') == 'fixture-header'
         assert self.headers.get('Mcp-Session-Id') == 'fixture-session'
         self.send_response(204)
         self.end_headers()
@@ -164,7 +169,8 @@ class Server(http.server.BaseHTTPRequestHandler):
 def main():
     binary = Path(sys.argv[1]).resolve()
     Server.scope_mode = sys.argv[2] if len(sys.argv) > 2 else 'challenge'
-    Server.served = Server.scope_mode == 'served'
+    scenario = Server.scope_mode
+    Server.served = scenario in ('served', 'static', 'oauth-header')
     if Server.served:
         Server.scope_mode = 'challenge'
     assert Server.scope_mode in ('challenge', 'metadata', 'none')
@@ -214,6 +220,9 @@ def main():
             reader.join()
             assert code == 0, f'login exit={code}'
             if Server.served:
+                Server.static_auth = scenario == 'static'
+                Server.custom_header = scenario in ('static', 'oauth-header')
+                if Server.static_auth: Server.reject_tool_once = False
                 served_journey(command, env, root, server)
                 return
             status = subprocess.run(command + ['auth', 'mcp-status', '--endpoint', server.origin + '/mcp'], env=env, cwd=root, capture_output=True, text=True, timeout=15)
@@ -241,13 +250,25 @@ def served_journey(command, env, root, server):
     data.mkdir(parents=True, exist_ok=True)
     (data / 'providers.json').write_text(json.dumps({'providers': [{'id': 'synthetic', 'api': 'openai-completions', 'base_url': f'http://127.0.0.1:{provider.server_port}/v1', 'auth': 'none', 'models': ['synthetic-model']}]}))
     (data / 'config.json').write_text(json.dumps({'model': 'synthetic-model', 'provider': 'synthetic', 'api': 'openai-completions', 'workspace': str(root)}))
-    (root / 'hub.json').write_text(json.dumps({'adapters': {'loop': {'type': 'oapx'}}, 'tool_sources': {'demo': {'kind': 'remote', 'protocol': 'mcp', 'endpoint': server.origin + '/mcp'}}}))
+    source = {'kind': 'remote', 'protocol': 'mcp', 'endpoint': server.origin + '/mcp'}
+    if Server.custom_header: source['headers'] = {'X-Static': 'fixture-header'}
+    if Server.static_auth: source['auth'] = 'static-token'
+    (root / 'hub.json').write_text(json.dumps({'adapters': {'loop': {'type': 'oapx'}}, 'tool_sources': {'demo': source}}))
     output = root / 'evidence'; output.mkdir()
     hub = None
     try:
         hub = stdio.base.Hub(command, env, root, output, 'oauth-served', flags=('--no-save-oapx-sessions',))
         request = stdio.base.envelope('session.open.request', {'session_id': 'oauth-proof', 'tool_sources': [{'id': 'demo', 'kind': 'remote'}], 'metadata': {'oapx': {'permission_mode': 'bypass'}}})
         hub.call('open', adapter='loop', request=request)
+        if Server.static_auth:
+            assert Server.refreshes == 0, f'static auth unexpectedly refreshed OAuth: count={Server.refreshes}'
+            stdio.base.submit(hub, 'oauth-proof', 'Call the echo tool with hello')
+            assert 'echoed:hello' in json.dumps(stdio.Provider.requests[-1])
+            hub.stop(); hub = None
+            assert ('DELETE', '/mcp') in Server.requests
+            assert Server.refreshes == 0
+            print('PASS: static bearer took precedence over saved OAuth; requests remained authenticated')
+            return
         assert Server.refreshes == 1, f'expired login did not refresh: count={Server.refreshes}'
         catalog = hub.call('tools', session_id='oauth-proof')
         assert any(tool['name'] == 'mcp_demo_echo' for tool in catalog['payload']['tools'])

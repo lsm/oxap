@@ -683,6 +683,13 @@ rather than weaker ones. A client attaches one by `id` and
 nothing else — see "Tool sources" above for why the wire form is refused on
 that route.
 
+An `oapx` remote MCP source can also configure `headers` and bearer `auth`.
+Each header value and the token may be a literal string or an environment
+reference, for example `"headers":{"X-Region":"west"}` and
+`"auth":{"env":"MCP_TOKEN"}`. Missing or empty referenced variables stop
+the daemon before it contacts the source. These values are not published in
+the source catalog.
+
 The daemon binds `127.0.0.1` by default and has no authentication: v0 is a
 single-user local service, and pointing it at an external interface is
 explicitly unsupported. On a loopback bind the daemon serves only requests

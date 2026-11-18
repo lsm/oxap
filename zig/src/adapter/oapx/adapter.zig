@@ -445,6 +445,9 @@ fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, a
     }
     const config = try std.json.Stringify.valueAlloc(a, std.json.Value{ .array = configs }, .{});
     bridge.loadConfigJson(config) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.InvalidSubmission, "invalid MCP source");
+    for (configured) |source| {
+        bridge.setHeaders(source.id, source.headers) catch return error.OutOfMemory;
+    }
     return sources;
 }
 

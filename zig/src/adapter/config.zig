@@ -39,6 +39,7 @@ pub const ToolSource = struct {
     command: []const u8 = "",
     args: []const []const u8 = &.{},
     environment: []const []const u8 = &.{},
+    headers: []const std.http.Header = &.{},
 };
 
 pub const File = struct {
@@ -66,7 +67,7 @@ const adapter_members = [_][]const u8{
     "max_tokens",         "agent_config",    "system_prompt",    "endpoint",
     "agent",              "any_directory",   "model_provider",
 };
-const source_members = [_][]const u8{ "kind", "display_name", "protocol", "endpoint", "command", "args", "environment" };
+const source_members = [_][]const u8{ "kind", "display_name", "protocol", "endpoint", "command", "args", "environment", "headers", "auth" };
 const source_kinds = [_][]const u8{ "native", "local", "process", "remote", "hosted" };
 
 const Reader = struct {
@@ -230,6 +231,26 @@ fn readToolSource(reader: Reader, id: []const u8, value: std.json.Value, environ
     if (duplicateName(declared)) |twice| return reader.refuse("{s}: environment names \"{s}\" twice", .{ where, twice });
     const environment = try resolveEnvironment(reader, where, declared, environ, true);
     const args = try reader.strings(object, where, "args") orelse &.{};
+    var headers: std.ArrayList(std.http.Header) = .empty;
+    if (object.get("headers")) |raw| {
+        if (!std.mem.eql(u8, kind, "remote") or raw != .object) return reader.refuse("{s}: headers require a remote source and an object", .{where});
+        var entries = raw.object.iterator();
+        while (entries.next()) |entry| {
+            const name = entry.key_ptr.*;
+            if (!validHeaderName(name) or reservedHeader(name)) return reader.refuse("{s}: invalid or reserved header name", .{where});
+            for (headers.items) |previous| if (std.ascii.eqlIgnoreCase(previous.name, name)) return reader.refuse("{s}: duplicate header name", .{where});
+            const resolved = try headerValue(reader, where, entry.value_ptr.*, environ);
+            if (!validHeaderValue(resolved)) return reader.refuse("{s}: invalid header value", .{where});
+            try headers.append(reader.arena, .{ .name = name, .value = resolved });
+        }
+    }
+    if (object.get("auth")) |raw| {
+        if (!std.mem.eql(u8, kind, "remote")) return reader.refuse("{s}: auth requires a remote source", .{where});
+        for (headers.items) |header| if (std.ascii.eqlIgnoreCase(header.name, "authorization")) return reader.refuse("{s}: auth conflicts with the authorization header", .{where});
+        const bearer = try headerValue(reader, where, raw, environ);
+        if (!validBearer(bearer)) return reader.refuse("{s}: invalid bearer token", .{where});
+        try headers.append(reader.arena, .{ .name = "Authorization", .value = try std.fmt.allocPrint(reader.arena, "Bearer {s}", .{bearer}) });
+    }
     return .{
         .id = id,
         .kind = kind,
@@ -239,7 +260,45 @@ fn readToolSource(reader: Reader, id: []const u8, value: std.json.Value, environ
         .command = command,
         .args = args,
         .environment = environment,
+        .headers = headers.items,
     };
+}
+
+fn headerValue(reader: Reader, where: []const u8, value: std.json.Value, environ: *const std.process.Environ.Map) Error![]const u8 {
+    if (value == .string) return value.string;
+    if (value != .object or value.object.count() != 1) return reader.refuse("{s}: header value must be a string or an env reference", .{where});
+    const field = value.object.get("env") orelse return reader.refuse("{s}: header value must be a string or an env reference", .{where});
+    if (field != .string or field.string.len == 0) return reader.refuse("{s}: env reference needs a variable name", .{where});
+    const resolved = environ.get(field.string) orelse return reader.refuse("{s}: environment variable \"{s}\" is not set", .{ where, field.string });
+    if (resolved.len == 0) return reader.refuse("{s}: environment variable \"{s}\" is empty", .{ where, field.string });
+    return resolved;
+}
+
+fn validHeaderName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |c| if (!std.ascii.isAlphanumeric(c) and std.mem.indexOfScalar(u8, "!#$%&'*+-.^_`|~", c) == null) return false;
+    return true;
+}
+
+fn reservedHeader(name: []const u8) bool {
+    for ([_][]const u8{ "host", "content-length", "transfer-encoding", "connection", "accept", "content-type", "mcp-session-id", "mcp-protocol-version" }) |reserved| {
+        if (std.ascii.eqlIgnoreCase(name, reserved)) return true;
+    }
+    return false;
+}
+
+fn validHeaderValue(value: []const u8) bool {
+    for (value) |c| if ((c < 32 and c != '\t') or c == 127) return false;
+    return true;
+}
+
+fn validBearer(value: []const u8) bool {
+    if (value.len == 0 or value[0] == '=') return false;
+    var padding = false;
+    for (value) |c| {
+        if (c == '=') padding = true else if (padding or !(std.ascii.isAlphanumeric(c) or std.mem.indexOfScalar(u8, "-._~+/", c) != null)) return false;
+    }
+    return true;
 }
 
 fn resolveEnvironment(reader: Reader, where: []const u8, entries: []const []const u8, environ: *const std.process.Environ.Map, required: bool) Error![]const []const u8 {

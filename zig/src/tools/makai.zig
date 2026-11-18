@@ -566,6 +566,7 @@ fn hubConfiguredSources(
             .command = source.command,
             .args = source.args,
             .environment = source.environment,
+            .headers = source.headers,
         };
     }
     return sources;
@@ -5739,7 +5740,7 @@ fn runBackendMode(
     const entry = try backendEntry(surface, arena, name, config_path, &environ, &configured_sources);
     const tool_sources = try arena.alloc(adapter_contract.ConfiguredSource, configured_sources.len);
     for (configured_sources, tool_sources) |source, *slot| {
-        slot.* = .{ .id = source.id, .kind = source.kind, .display_name = source.display_name, .protocol = source.protocol, .endpoint = source.endpoint, .command = source.command, .args = source.args, .environment = source.environment };
+        slot.* = .{ .id = source.id, .kind = source.kind, .display_name = source.display_name, .protocol = source.protocol, .endpoint = source.endpoint, .command = source.command, .args = source.args, .environment = source.environment, .headers = source.headers };
     }
 
     var claude: claude_adapter.Adapter = undefined;

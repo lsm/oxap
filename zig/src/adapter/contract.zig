@@ -126,6 +126,7 @@ pub const ConfiguredSource = struct {
     command: []const u8 = "",
     args: []const []const u8 = &.{},
     environment: []const []const u8 = &.{},
+    headers: []const std.http.Header = &.{},
 };
 
 pub const OpenRequest = struct {
