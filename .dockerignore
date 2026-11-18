@@ -1,0 +1,5 @@
+**
+!zig/
+!zig/zig-out/
+!zig/zig-out/bin/
+!zig/zig-out/bin/oxap
