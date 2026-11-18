@@ -125,6 +125,7 @@ pub const Adapter = struct {
     allocator: std.mem.Allocator,
     options: session_runtime.SessionRuntimeOptions,
     environment: []const []const u8 = &.{},
+    configured_sources: []const contract.ConfiguredSource = &.{},
     history: ?HistoryLoader = null,
     catalog: ?[]ai_types.Model = null,
     catalog_generation: u64 = 0,
@@ -389,7 +390,7 @@ fn allowedEnvironment(entries: []const []const u8, name: []const u8) ?[]const u8
     return null;
 }
 
-fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, allowed: []const []const u8, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
+fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, allowed: []const []const u8, configured: []const contract.ConfiguredSource, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
     const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, raw orelse "[]", .{ .allocate = .alloc_always }) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.InvalidSubmission;
     if (parsed != .array) return error.InvalidSubmission;
     const sources = try a.alloc(oap_types.ToolSourceDescriptor, parsed.array.items.len + 1);
@@ -406,6 +407,11 @@ fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, a
         if (protocol.len > 0 and !std.mem.eql(u8, protocol, "mcp")) return refuseSource(arena, refusal, id, "only MCP sources are supported");
         const endpoint = stringOf(item, "endpoint");
         if (std.mem.eql(u8, kind, "remote")) {
+            var registered = false;
+            for (configured) |source| {
+                if (std.mem.eql(u8, source.id, id) and std.mem.eql(u8, source.kind, kind) and std.mem.eql(u8, source.endpoint, endpoint)) registered = true;
+            }
+            if (!registered) return refuseSource(arena, refusal, id, "no matching remote tool source is configured");
             if (!std.mem.startsWith(u8, endpoint, "http://") and !std.mem.startsWith(u8, endpoint, "https://")) return refuseSource(arena, refusal, id, "remote MCP source needs an HTTP endpoint");
             var obj: std.json.ObjectMap = .empty;
             try obj.put(a, "name", .{ .string = id });
@@ -497,7 +503,7 @@ pub const Session = struct {
         mcp.* = local_tools.mcp_bridge.McpBridge.init(gpa);
         mcp.bind();
         errdefer mcp.deinit();
-        const sources = try attachMcp(self.keep.allocator(), arena, request.tool_sources_json, owner.environment, mcp, refusal);
+        const sources = try attachMcp(self.keep.allocator(), arena, request.tool_sources_json, owner.environment, owner.configured_sources, mcp, refusal);
         const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, sources, request.tools_json, refusal);
         mcp.discover() catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.BackendFailed, "MCP discovery failed");
         var mcp_tools: std.ArrayList(agent.AgentTool) = .empty;
@@ -3613,7 +3619,7 @@ test "an unsupported source transport is refused" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     var refusal = contract.Refusal{};
-    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(arena.allocator(), .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\",\"kind\":\"remote\"}]" }, &refusal));
+    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(arena.allocator(), .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\",\"kind\":\"hosted\"}]" }, &refusal));
     try testing.expectEqualStrings(contract.feature_tool_sources_attach, refusal.feature);
 }
 
@@ -5799,7 +5805,7 @@ test "attached source descriptions survive reuse of the open request buffer" {
     defer bridge.deinit();
     const raw = try request.allocator().dupe(u8, "[{\"id\":\"files\",\"kind\":\"process\",\"command\":\"/bin/true\",\"display_name\":\"Files\",\"protocol\":\"mcp\",\"endpoint\":\"stdio:files\"}]");
     var refusal = contract.Refusal{};
-    const sources = try attachMcp(keep.allocator(), request.allocator(), raw, &.{}, &bridge, &refusal);
+    const sources = try attachMcp(keep.allocator(), request.allocator(), raw, &.{}, &.{}, &bridge, &refusal);
     @memset(raw, 'x');
     try testing.expectEqualStrings("files", sources[1].id);
     try testing.expectEqualStrings("Files", sources[1].display_name.?);

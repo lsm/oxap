@@ -118,7 +118,7 @@ def main():
                     hub.call('open', adapter='loop', request=request)
                 except AssertionError as error:
                     response = error.args[0]
-                    assert isinstance(response, dict) and response['error']['code'] == 'backend_failed', response
+                    assert isinstance(response, dict) and response['error']['code'] == 'probe_failed', response
                     assert not Mcp.methods, Mcp.methods
                     print('PASS: untrusted HTTPS server refused')
                     return

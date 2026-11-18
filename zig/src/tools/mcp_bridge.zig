@@ -199,7 +199,7 @@ const McpServerSession = struct {
         defer allocator.free(request);
         if (std.mem.indexOfScalar(u8, request[0 .. request.len - 1], '\n') != null) return error.InvalidMcpRequest;
         if (self.config.endpoint) |endpoint| {
-            var response = mcp_http.call(allocator, endpoint, self.http_session, self.http_initialized, .POST, request, id, cancel_token, timeout_ms orelse 30000) catch |err| {
+            var response = mcp_http.call(allocator, endpoint, self.http_session, self.http_initialized, .POST, request, id, cancel_token, timeout_ms) catch |err| {
                 if (err == error.Cancelled) self.notifyCancelled(allocator, id);
                 return err;
             };

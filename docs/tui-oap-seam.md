@@ -322,6 +322,8 @@ unknown source is refused. At session open, a configured stdio or Streamable HTT
 be attached to the served loop. Its tools are discovered, listed with their
 source, and called through the same lifecycle and permission policy. Remote
 sources use an `http` or `https` endpoint and do not yet support authentication.
+The loop refuses a remote source unless its id and endpoint match the operator's
+configuration, including when an unconfigured descriptor reaches the adapter.
 Caller-supplied environment names resolve
 only against the adapter entry's environment; source entries take precedence.
 An unallowlisted name is refused before the server starts.

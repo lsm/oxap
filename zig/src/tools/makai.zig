@@ -433,6 +433,7 @@ const HubRegistry = struct {
     allocator: std.mem.Allocator,
     environ: *const std.process.Environ.Map,
     surface: ConfigSurface,
+    configured_sources: []const adapter_contract.ConfiguredSource = &.{},
     production: ?*tui_app.ProductionRuntime = null,
     saved: ?*ServedSessions = null,
     memories: std.ArrayList(*memory_adapter.Adapter) = .empty,
@@ -530,6 +531,7 @@ const HubRegistry = struct {
             const built = try arena.create(oapx_adapter.Adapter);
             built.* = oapx_adapter.Adapter.init(self.allocator, production.options());
             built.environment = entry.environment;
+            built.configured_sources = self.configured_sources;
             if (self.saved) |saved| saved.attach(built);
             return built.adapter();
         }
@@ -725,7 +727,7 @@ fn runHub(
         };
     }
     const tool_sources = try hubConfiguredSources(arena, file.tool_sources);
-    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = surface };
+    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = surface, .configured_sources = tool_sources };
     defer registry.deinit();
     var saved: ?ServedSessions = null;
     defer if (saved) |*held| held.deinit();
@@ -5719,6 +5721,7 @@ fn runBackendMode(
         oapx_production.?.initBridge();
         oapx = oapx_adapter.Adapter.init(allocator, oapx_production.?.options());
         oapx.environment = entry.environment;
+        oapx.configured_sources = tool_sources;
         break :oapx_served oapx.adapter();
     } else {
         try surface.refuse("{s} \"{s}\" is of type \"{s}\", which oxap does not know; it serves claude, codex, pi, acp, hermes, deepseek, opencode, memory and oapx", .{ surface.noun, name, entry.kind });

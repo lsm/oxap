@@ -164,7 +164,7 @@ pub fn notify(url: []const u8, session: ?[]const u8, initialized: bool, body: []
     job.release();
 }
 
-pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: u64) !Reply {
+pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64) !Reply {
     const job = try create(url, session, initialized, method, body, id);
     const thread = std.Thread.spawn(.{}, Job.run, .{job}) catch |err| {
         job.release();
@@ -180,10 +180,10 @@ pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initial
             job.cancelled.store(true, .release);
             return error.Cancelled;
         };
-        if (std.Io.Timestamp.now(io, .boot).toMilliseconds() - start >= timeout_ms) {
+        if (timeout_ms) |deadline_ms| if (std.Io.Timestamp.now(io, .boot).toMilliseconds() - start >= deadline_ms) {
             job.cancelled.store(true, .release);
             return error.Timeout;
-        }
+        };
         const interval: std.Io.Timeout = .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(50), .clock = .boot } };
         job.event.waitTimeout(io, interval) catch continue;
         break;
