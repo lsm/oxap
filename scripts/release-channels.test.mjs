@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { bundledNpmPackages, npmDistTag, npmTarball, pep440, publishOrder } from "./release-channels.mjs";
+import { PYPI_PROJECTS, bundledNpmPackages, npmDistTag, npmTarball, pep440, publishOrder, pythonVersions } from "./release-channels.mjs";
 
 test("run from a checkout path holding a space, the script still runs and refuses an unknown action", () => {
   const spaced = join(mkdtempSync(join(tmpdir(), "release-channels-")), "a dir with a space");
@@ -113,4 +113,20 @@ test("dist-tag fails and prints no tag when npm answers something that is not a 
   const result = distTagWithNpm(`echo '<html>'`);
   assert.notEqual(result.status, 0);
   assert.equal(result.stdout, "");
+});
+
+test("PyPI carries the oxap name beside oxap-sdk", () => {
+  assert.deepEqual(PYPI_PROJECTS, ["oxap-sdk", "oxap"]);
+});
+
+test("the oxap package reports its own version and the oxap-sdk version it pins", () => {
+  const files = {
+    "sdk/python/pyproject.toml": 'name = "oxap-sdk"\nversion = "0.1.0a34"\n',
+    "sdk/python-oxap/pyproject.toml": 'name = "oxap"\nversion = "0.1.0a34"\ndependencies = ["oxap-sdk==0.1.0a33"]\n',
+  };
+  assert.deepEqual(pythonVersions((path) => files[path]), {
+    "sdk/python/pyproject.toml": "0.1.0a34",
+    "sdk/python-oxap/pyproject.toml": "0.1.0a34",
+    "sdk/python-oxap/pyproject.toml oxap-sdk pin": "0.1.0a33",
+  });
 });

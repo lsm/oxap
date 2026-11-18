@@ -414,11 +414,12 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Build the wheel and sdist
+      - name: Build the wheels and sdists
         run: |
           set -euo pipefail
           python -m pip install --quiet build
           python -m build sdk/python --outdir dist/release/python
+          python -m build sdk/python-oxap --outdir dist/release/python
 
       - uses: actions/upload-artifact@v4
         with:

@@ -5,7 +5,7 @@ builds the six `oxap` binaries, signs and notarizes the macOS ones, packs every
 channel, smoke-tests the packed files, and only then publishes: the GitHub
 Release, npm (the six `@oxap/cli-<target>` packages, then `@oxap/cli`,
 `@oxap/sdk` and `@oxap/client`), crates.io (every crate whose manifest is
-publishable, dependencies first) and PyPI (`oxap-sdk`). Every registry is
+publishable, dependencies first) and PyPI (`oxap-sdk`, and `oxap`, which installs it). Every registry is
 reached through OIDC trusted publishing; the workflow holds no registry token.
 After publishing, `release-smoke.yml` installs each channel from its registry.
 
@@ -157,7 +157,8 @@ deliberate revert of one commit, not a regeneration.
 Every package carries the release version, and the `versions` job refuses a
 run where they disagree: the root and `clients/ts` `package.json`,
 `sdk/python/pyproject.toml` in its PEP 440 spelling (`0.1.0a33` for
-`0.1.0-alpha.33`), `zig/build.zig.zon` (the default for `-Dversion`, so what a
+`0.1.0-alpha.33`), `sdk/python-oxap/pyproject.toml` and the `oxap-sdk` version
+it pins, `zig/build.zig.zon` (the default for `-Dversion`, so what a
 local `oxap --version` prints) and every publishable crate. A dispatch builds
 and names its artifacts under that version, and a tag must equal it, so bump
 them all in one pull request before tagging. A version containing `-`
