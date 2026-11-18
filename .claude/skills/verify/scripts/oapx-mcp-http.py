@@ -110,7 +110,9 @@ def main():
             else:
                 raise AssertionError('unconfigured remote source was accepted')
             assert not Unconfigured.methods, Unconfigured.methods
-            feature = hub.call('capabilities', adapter='loop')['payload']['features']['action.tool_sources.attach']
+            capabilities = hub.call('capabilities', adapter='loop')
+            assert capabilities['capability_revision'] != 'oapx-agent-v20', capabilities['capability_revision']
+            feature = capabilities['payload']['features']['action.tool_sources.attach']
             assert 'remote' in feature['modes'] and 'remote' in feature['limits']['transports'], feature
             request = base.envelope('session.open.request', {'session_id':'http-proof','tool_sources':[{'id':'demo','kind':'remote'}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             if os.environ.get('OAP_VERIFY_TLS_EXPECT_REFUSAL'):
