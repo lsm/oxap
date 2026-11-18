@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,6 +43,7 @@ type DiscoveredModel struct {
 	MaxTokens     int
 	Reasoning     *bool
 	ImageInput    *bool
+	ChatEndpoint  bool
 }
 
 type ListedModel struct {
@@ -139,6 +141,9 @@ func (d Discoverer) discoverRow(ctx context.Context, id string, mode DiscoveryMo
 	}
 	if len(models) > 0 {
 		for _, model := range models {
+			if id == "command-code" && !model.ChatEndpoint {
+				continue
+			}
 			out.Models = append(out.Models, d.listedModel(target, model, true))
 		}
 		return
@@ -366,6 +371,10 @@ func ParseModelListing(data []byte) ([]DiscoveredModel, error) {
 			continue
 		}
 		model := DiscoveredModel{ID: id}
+		var endpoints []string
+		if json.Unmarshal(item["supported_endpoints"], &endpoints) == nil {
+			model.ChatEndpoint = slices.Contains(endpoints, "/chat/completions")
+		}
 		if name, ok := stringMember(item, "display_name"); ok {
 			model.Name = name
 		}

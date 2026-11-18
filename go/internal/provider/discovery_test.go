@@ -471,3 +471,22 @@ func TestDiscoveryReadsTheOXAPGlobalBaseURLBeforeItsOldName(t *testing.T) {
 		t.Errorf("only the old name: override = %q, want its value", got)
 	}
 }
+
+func TestCommandCodeDiscoversOnlyChatCompletionModels(t *testing.T) {
+	server := newListingServer(t, map[string]listingAnswer{"command-code": {status: http.StatusOK, body: `{"data":[{"id":"chat","supported_endpoints":["/chat/completions"]},{"id":"messages","supported_endpoints":["/messages"]},{"id":"unknown"}]}`}})
+	key := "synthetic"
+	catalog := providercatalog.Catalog{Providers: []providercatalog.Provider{{
+		ID: "command-code", Auth: []string{"api_key"}, Wires: []string{"openai-completions"},
+		Endpoints: []providercatalog.Endpoint{{Wire: "openai-completions", BaseURL: server.server.URL + "/command-code"}}, ModelsPath: "/v1/models",
+	}}}
+	discovery := Discoverer{Catalog: catalog, Stored: func(id string) *providercatalog.StoredCredential {
+		if id == "command-code" {
+			return &providercatalog.StoredCredential{APIKey: &key}
+		}
+		return nil
+	}}
+	got := discovery.Discover(context.Background(), DiscoverForceFetch)
+	if !slices.Equal(modelKeys(got), []string{"command-code/chat"}) {
+		t.Fatalf("models = %v, want only the supported chat model", modelKeys(got))
+	}
+}

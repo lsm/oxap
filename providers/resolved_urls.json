@@ -201,6 +201,13 @@
       "id": "google",
       "wire": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com"
+    },
+    {
+      "id": "command-code",
+      "wire": "openai-completions",
+      "base_url": "https://api.commandcode.ai/provider/v1",
+      "models_url": "https://api.commandcode.ai/provider/v1/models",
+      "request_url": "https://api.commandcode.ai/provider/v1/chat/completions"
     }
   ]
 }

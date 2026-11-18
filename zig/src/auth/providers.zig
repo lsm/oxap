@@ -101,12 +101,13 @@ test "every catalogued row is listed with a display name" {
 
 test "every catalogued row is listed, including the ones the runtime cannot load yet" {
     const listed = [_][]const u8{
-        "openai",       "anthropic",    "opencode-zen",        "openrouter",
-        "deepseek",     "zai-coding-plan", "kimi",         "opencode-go",     "openai-codex",
-        "alibaba-coding-plan", "minimax-coding-plan", "tencent-coding-plan", "volcengine-coding-plan",
-        "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams", "deepinfra",
-        "xiaomi",       "vercel",       "zenmux",          "ollama",
-        "azure",        "github-copilot", "google",
+        "openai",                 "anthropic",            "opencode-zen",          "openrouter",
+        "deepseek",               "zai-coding-plan",      "kimi",                  "opencode-go",
+        "openai-codex",           "alibaba-coding-plan",  "minimax-coding-plan",   "tencent-coding-plan",
+        "volcengine-coding-plan", "xiaomi-token-plan-cn", "xiaomi-token-plan-sgp", "xiaomi-token-plan-ams",
+        "deepinfra",              "xiaomi",               "vercel",                "zenmux",
+        "ollama",                 "azure",                "github-copilot",        "google",
+        "command-code",
     };
     try std.testing.expectEqual(listed.len, CATALOG_PROVIDER_DEFINITIONS.len);
     for (listed, 0..) |id, index| {
@@ -141,7 +142,7 @@ test "the CI fixture row is not a catalog row and is served last, for tests only
     try std.testing.expect(provider_catalog.provider(fixture_provider_id) == null);
     try std.testing.expectEqual(@as(usize, provider_catalog.all.len + 1), ALL_DEFINITIONS.len);
     try std.testing.expectEqualStrings(fixture_provider_id, ALL_DEFINITIONS[ALL_DEFINITIONS.len - 1].id);
-    for (ALL_DEFINITIONS[0 .. provider_catalog.all.len], 0..) |definition, index| {
+    for (ALL_DEFINITIONS[0..provider_catalog.all.len], 0..) |definition, index| {
         try std.testing.expectEqualStrings(provider_catalog.all[index].id, definition.id);
     }
 

@@ -62,6 +62,7 @@ pub const catalog_loader_rows = [_][]const u8{
     "opencode-go",
     "vercel",
     "zenmux",
+    "command-code",
     "deepinfra",
     "zai-coding-plan",
     "alibaba-coding-plan",
