@@ -27,9 +27,11 @@ those commands name it. To pin npm exactly, name the version, for example
 
 The registry packages appear with the `v0.1.0-alpha.33` release; until then,
 each SDK's README says how to use it from a checkout. Of the Rust crates only
-`oxap-sdk` and `oxap`, which re-exports it, are published. The others (`oxap-protocol`, `oxap-validation`,
-`oxap-adapter` and the rest) carry their OXAP names but stay
-`publish = false`, so depend on them from this repository.
+`oxap-sdk` and `oxap` are published; `oxap` re-exports `oxap-sdk` and is on
+crates.io from `0.1.0-alpha.34`, published by hand after the tag. The others
+(`oxap-protocol`, `oxap-validation`, `oxap-adapter` and the rest) carry their
+OXAP names but stay `publish = false`, so depend on them from this
+repository.
 
 Release archives cover macOS, Linux and Windows on arm64 and x64. The npm
 package `@oxap/cli` picks the matching `@oxap/cli-<os>-<arch>` package through
