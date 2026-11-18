@@ -4,6 +4,8 @@ import http.server
 import importlib.util
 import json
 import os
+import queue
+import socket
 from pathlib import Path
 import shutil
 import subprocess
@@ -34,6 +36,59 @@ class Provider(base.Provider):
     def do_POST(self):
         self.record()
         super().do_POST()
+
+
+def missing_header_inference(binary, environment, root):
+    clean = dict(environment)
+    clean.pop('EXAMPLE_HEADER', None)
+    process = subprocess.Popen([str(binary), 'serve', 'provider', '--stdio'], cwd=root,
+                               env=clean, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, text=True)
+    frames = queue.Queue()
+    def read():
+        for line in process.stdout:
+            frames.put(json.loads(line))
+        frames.put(None)
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    def send(kind, identifier, payload):
+        frame = {'protocol': 'open-agent-protocol', 'version': '0.1',
+                 'profile': 'open-agent-protocol.model-provider-core',
+                 'type': kind, 'id': identifier, 'payload': payload}
+        process.stdin.write(json.dumps(frame) + '\n')
+        process.stdin.flush()
+    def receive(kind):
+        while True:
+            frame = frames.get(timeout=30)
+            assert frame is not None, f'endpoint exited before {kind}'
+            if frame['type'] == kind:
+                return frame
+    try:
+        send('provider.credential.grant.request', 'grant', {'provider_id': 'deepseek', 'nonce': 'fixture-nonce'})
+        channel = receive('provider.credential.grant.channel')['payload']['channel']
+        with socket.socket(socket.AF_UNIX) as client:
+            client.connect(channel)
+            client.sendall(b'fixture-nonce\nsynthetic-side-channel-value')
+        granted = receive('provider.credential.grant.response')['payload']
+        assert granted['accepted'], granted
+        send('inference.create.request', 'infer', {'model_ref': 'deepseek/anthropic-messages@synthetic-model',
+             'messages': [{'role': 'user', 'content': 'hello'}], 'credential_ref': granted['credential_ref']})
+        response = receive('inference.create.response')
+        assert response['payload']['accepted'], response
+        failed = receive('inference.failed')
+        assert failed['payload']['error']['code'] == 'invalid_request', failed
+        send('provider.describe.request', 'after', {})
+        assert receive('provider.describe.response')['in_reply_to'] == 'after'
+    finally:
+        if process.poll() is None:
+            process.stdin.close()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+        reader.join(timeout=5)
+        process.stdout.close()
 
 
 def main():
@@ -85,20 +140,20 @@ def main():
             for artifact in output.iterdir():
                 assert 'fixture-tenant-value' not in artifact.read_text(), artifact.name
             count = len(Provider.observed)
+            missing_header_inference(binary, environment, root)
             del environment['EXAMPLE_HEADER']
+            config['providers'] = [{'id': 'healthy', 'api': 'openai-completions', 'base_url': url, 'auth': 'none', 'models': ['synthetic-model']}]
+            (data / 'providers.json').write_text(json.dumps(config))
+            (data / 'config.json').write_text(json.dumps({'model': 'synthetic-model', 'provider': 'healthy', 'api': 'openai-completions', 'workspace': str(root)}))
             hub = base.Hub(command, environment, root, output, 'missing', flags=('--no-save-oapx-sessions',))
-            try:
-                base.open_session(hub, 'missing-header')
-                base.submit(hub, 'missing-header', 'synthetic missing header turn')
-            except AssertionError as error:
-                response = error.args[0]
-                assert isinstance(response, dict) and response.get('error', {}).get('code') == 'internal', response
-            else:
-                raise AssertionError('missing environment was accepted')
+            base.open_session(hub, 'missing-header')
+            base.submit(hub, 'missing-header', 'healthy provider turn')
+            transcript = hub.call('work.read', session_id='missing-header')
+            assert base.REPLY in json.dumps(transcript), transcript
             hub.stop()
             hub = None
-            assert len(Provider.observed) == count, 'missing environment sent a provider request'
-            print(f'PASS: {count} requests carried catalog and override headers; missing environment sent none')
+            assert len(Provider.observed) > count, 'healthy provider sent no requests'
+            print(f'PASS: {count} requests carried catalog and override headers; healthy provider remained usable')
         finally:
             if hub:
                 hub.stop()
