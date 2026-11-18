@@ -123,6 +123,27 @@ jobs:
         if: always()
         run: ./scripts/check-no-test-litter.sh
 
+  mcp-http-journey:
+    name: Streamable HTTP MCP journey
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Verify HTTP and HTTPS tools
+        run: |
+          zig build --build-file zig/build.zig -Doptimize=ReleaseSafe
+          NODE_ENV=test python3 .claude/skills/verify/scripts/oapx-mcp-http.py "$RUNNER_TEMP/mcp-http"
+          NODE_ENV=test OAP_VERIFY_MCP_STATELESS=1 python3 .claude/skills/verify/scripts/oapx-mcp-http.py "$RUNNER_TEMP/mcp-http-stateless"
+          mkdir "$RUNNER_TEMP/mcp-cert"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 -addext basicConstraints=critical,CA:TRUE -keyout "$RUNNER_TEMP/mcp-cert/key.pem" -out "$RUNNER_TEMP/mcp-cert/cert.pem" >/dev/null 2>&1
+          sudo cp "$RUNNER_TEMP/mcp-cert/cert.pem" /usr/local/share/ca-certificates/oap-mcp-ci.crt
+          trap 'sudo rm -f /usr/local/share/ca-certificates/oap-mcp-ci.crt; sudo update-ca-certificates >/dev/null' EXIT
+          sudo update-ca-certificates >/dev/null
+          NODE_ENV=test OAP_VERIFY_TLS_CERT="$RUNNER_TEMP/mcp-cert/cert.pem" OAP_VERIFY_TLS_KEY="$RUNNER_TEMP/mcp-cert/key.pem" python3 .claude/skills/verify/scripts/oapx-mcp-http.py "$RUNNER_TEMP/mcp-https"
+
   responses-proxy-journey:
     name: Responses proxy and attempt audit
     runs-on: ubuntu-latest

@@ -58,6 +58,7 @@ pub fn real_builder(path: &std::path::Path) -> ClientBuilder {
     let mut builder = ClientBuilder::new()
         .command(path)
         .env_clear()
+        .env("NODE_ENV", "test")
         .handshake_timeout(Duration::from_millis(5_000))
         .response_timeout(Duration::from_millis(20_000))
         .frame_timeout(Duration::from_millis(20_000));
