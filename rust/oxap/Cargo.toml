@@ -1,0 +1,21 @@
+[package]
+name = "oxap"
+version = "0.1.0-alpha.34"
+edition = "2021"
+rust-version = "1.82"
+description = "OXAP for Rust: the oxap-sdk client for the oxap runtime, under the project's own name"
+repository = "https://github.com/lsm/oxap"
+license = "MIT"
+readme = "README.md"
+keywords = ["ai", "llm", "agent", "sdk"]
+categories = ["api-bindings", "asynchronous"]
+
+[features]
+default = []
+download = ["oxap-sdk/download"]
+
+[dependencies]
+oxap-sdk = { version = "=0.1.0-alpha.34", path = "../sdk" }
+
+[lints.rust]
+unsafe_code = "forbid"

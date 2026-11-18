@@ -159,7 +159,8 @@ run where they disagree: the root and `clients/ts` `package.json`,
 `sdk/python/pyproject.toml` in its PEP 440 spelling (`0.1.0a33` for
 `0.1.0-alpha.33`), `sdk/python-oxap/pyproject.toml` and the `oxap-sdk` version
 it pins, `zig/build.zig.zon` (the default for `-Dversion`, so what a
-local `oxap --version` prints) and every publishable crate. A dispatch builds
+local `oxap --version` prints) and every publishable crate, whose
+`rust/oxap` pin on `oxap-sdk` must match too (a stale one fails the build). A dispatch builds
 and names its artifacts under that version, and a tag must equal it, so bump
 them all in one pull request before tagging. A version containing `-`
 publishes to npm under the `next` dist-tag, `@oxap/client` included, once a
