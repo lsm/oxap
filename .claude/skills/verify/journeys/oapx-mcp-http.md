@@ -8,7 +8,8 @@ NODE_ENV=test python3 .claude/skills/verify/scripts/oapx-mcp-http.py /tmp/oap-mc
 
 Require exit 0 and `PASS`. The isolated hub uses a synthetic loopback model
 provider and a stateful Streamable HTTP MCP server. It checks initialization,
-session propagation, JSON and SSE replies, an inbound ping while the stream is
+the revision of the remote-capable descriptor, session propagation, JSON and
+SSE replies, an inbound ping while the stream is
 open, tool discovery and execution, and session deletion. Both served entry
 points refuse a wire-supplied unconfigured endpoint before connecting to it.
 Inspect `http.jsonl`
