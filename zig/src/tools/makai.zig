@@ -529,6 +529,7 @@ const HubRegistry = struct {
             const production = self.runtime() catch |failure| return self.reported(failure);
             const built = try arena.create(oapx_adapter.Adapter);
             built.* = oapx_adapter.Adapter.init(self.allocator, production.options());
+            built.environment = entry.environment;
             if (self.saved) |saved| saved.attach(built);
             return built.adapter();
         }
@@ -5692,6 +5693,7 @@ fn runBackendMode(
         oapx_production = try tui_app.ProductionRuntime.init(allocator, .{});
         oapx_production.?.initBridge();
         oapx = oapx_adapter.Adapter.init(allocator, oapx_production.?.options());
+        oapx.environment = entry.environment;
         break :oapx_served oapx.adapter();
     } else {
         try surface.refuse("{s} \"{s}\" is of type \"{s}\", which oxap does not know; it serves claude, codex, pi, acp, hermes, deepseek, opencode, memory and oapx", .{ surface.noun, name, entry.kind });

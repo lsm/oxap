@@ -95,6 +95,21 @@ const McpToolRecord = struct {
 
 const mcp_discovery_timeout_ms: u64 = 5_000;
 
+fn waitForExit(child: *std.process.Child, duration_ms: u64) bool {
+    if (@import("builtin").os.tag == .windows) return false;
+    const start = common.nowMs();
+    while (common.durationMs(start) < duration_ms) {
+        var status: c_int = undefined;
+        const result = std.posix.system.waitpid(child.id.?, &status, std.posix.W.NOHANG);
+        if (result == child.id.?) {
+            child.id = null;
+            return true;
+        }
+        compat.time.sleepMs(10);
+    }
+    return false;
+}
+
 const McpServerSession = struct {
     config: McpServerConfig,
     child: ?std.process.Child = null,
@@ -113,7 +128,23 @@ const McpServerSession = struct {
     fn stop(self: *McpServerSession) void {
         if (self.child) |*child| {
             const io = common.defaultIo();
-            if (child.id != null) child.kill(io);
+            if (child.stdin) |stdin| {
+                stdin.close(io);
+                child.stdin = null;
+            }
+            if (child.id) |pid| {
+                if (@import("builtin").os.tag == .windows) {
+                    child.kill(io);
+                } else {
+                    if (!waitForExit(child, 100)) {
+                        std.posix.kill(pid, std.posix.SIG.TERM) catch {};
+                        if (!waitForExit(child, 100)) {
+                            std.posix.kill(pid, std.posix.SIG.KILL) catch {};
+                            _ = child.wait(io) catch {};
+                        }
+                    }
+                }
+            }
             if (child.stdin) |stdin| stdin.close(io);
             if (child.stdout) |stdout| stdout.close(io);
             if (child.stderr) |stderr| stderr.close(io);
@@ -127,11 +158,13 @@ const McpServerSession = struct {
         const argv = try buildArgv(allocator, self.config.command, self.config.args);
         defer allocator.free(argv);
 
-        var env_map = try compat.createEnvMap(allocator);
+        var env_map = std.process.Environ.Map.init(allocator);
         defer env_map.deinit();
         for (self.config.env) |entry| try env_map.put(entry.key, entry.value);
 
-        self.child = try std.process.spawn(common.defaultIo(), .{
+        var threaded = std.Io.Threaded.init(allocator, .{});
+        defer threaded.deinit();
+        self.child = try std.process.spawn(threaded.io(), .{
             .argv = argv,
             .environ_map = &env_map,
             .stdin = .pipe,
@@ -157,6 +190,8 @@ const McpServerSession = struct {
         if (std.mem.indexOfScalar(u8, request[0 .. request.len - 1], '\n') != null) return error.InvalidMcpRequest;
         try writeUnlessCancelled(child, request, cancel_token);
 
+        var threaded = std.Io.Threaded.init(allocator, .{});
+        defer threaded.deinit();
         const start_ms = common.nowMs();
         const poll_timeout: std.Io.Timeout = .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(common.process_poll_ms), .clock = .boot } };
         var matched_response: ?std.json.Parsed(std.json.Value) = null;
@@ -190,7 +225,7 @@ const McpServerSession = struct {
             if (timeout_ms) |limit| if (common.durationMs(start_ms) >= limit) return error.Timeout;
             var multi_reader_buffer: std.Io.File.MultiReader.Buffer(1) = undefined;
             var multi_reader: std.Io.File.MultiReader = undefined;
-            multi_reader.init(allocator, common.defaultIo(), multi_reader_buffer.toStreams(), &.{child.stdout.?});
+            multi_reader.init(allocator, threaded.io(), multi_reader_buffer.toStreams(), &.{child.stdout.?});
             defer multi_reader.deinit();
             const reader = multi_reader.reader(0);
             multi_reader.fill(1, poll_timeout) catch |err| switch (err) {
@@ -328,6 +363,13 @@ pub const McpBridge = struct {
                 break;
             }
         }
+    }
+
+    pub fn sourceForTool(self: *const McpBridge, name: []const u8) ?[]const u8 {
+        for (self.tools.items) |record| {
+            if (std.mem.eql(u8, record.agent_tool.name, name)) return self.servers.items[record.server_index].config.name;
+        }
+        return null;
     }
 
     pub fn appendAgentTools(self: *McpBridge, out: *std.ArrayList(agent.AgentTool)) !void {

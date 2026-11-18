@@ -18,7 +18,7 @@ const local_loop = @import("local_loop.zig");
 pub const LocalLoop = local_loop.LocalLoop;
 
 pub const endpoint_id = "oapx.agent";
-pub const capability_revision = "oapx-agent-v19";
+pub const capability_revision = "oapx-agent-v20";
 const native_source = "oapx";
 const native_sources = [_]oap_types.ToolSourceDescriptor{.{ .id = native_source, .kind = "native", .display_name = "oapx" }};
 
@@ -57,6 +57,7 @@ const unsaved_features = [_]contract.Feature{
     .{ .key = "action.tools", .level = .native, .reason = "the agent loop runs its own workspace tools" },
     .{ .key = "action.tools.execute", .level = .native, .reason = "the agent loop runs its own workspace tools" },
     .{ .key = contract.feature_tools_list, .level = .native },
+    .{ .key = contract.feature_tool_sources_attach, .level = .native, .modes = &.{"session_open"}, .limits_json = "{\"transports\":[\"process\"]}" },
     .{ .key = contract.feature_tools_provide, .level = .native, .reason = "a provided tool joins the loop's tools for the session, and each call to it waits for the opener's resolution", .limits_json = "{\"max_tools\":64,\"name_pattern\":\"^[a-zA-Z0-9_-]{1,64}$\",\"schema_dialect\":\"https://json-schema.org/draft/2020-12/schema\"}" },
     .{ .key = contract.feature_models_list, .level = .degraded, .reason = "the catalog is the one the terminal UI offers; served by oapx serve it is fixed when the entry is built, and only the terminal UI's own refresh moves it, at the session's next model switch, under the same revision and with no capabilities.updated" },
     .{ .key = contract.feature_model_switch, .level = .native },
@@ -123,6 +124,7 @@ pub const Recorder = struct {
 pub const Adapter = struct {
     allocator: std.mem.Allocator,
     options: session_runtime.SessionRuntimeOptions,
+    environment: []const []const u8 = &.{},
     history: ?HistoryLoader = null,
     catalog: ?[]ai_types.Model = null,
     catalog_generation: u64 = 0,
@@ -247,7 +249,6 @@ pub const Adapter = struct {
     fn open(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!contract.Session {
         const self: *Adapter = @ptrCast(@alignCast(ptr));
         if (request.participant.len == 0) return refusal.fail(error.InvalidSubmission, "open requires a non-empty participant id");
-        if (contract.carriesEntries(request.tool_sources_json)) return refusal.unsupported(contract.feature_tool_sources_attach, contract.reason_unadvertised);
         var saved: ?[]const ai_types.Message = null;
         if (request.reopen) {
             if (request.session_id.len == 0) return refusal.fail(error.UnknownSession, "a reopen names the session it reopens");
@@ -365,6 +366,71 @@ const Journaled = struct {
     sequence: u64,
 };
 
+fn refuseSource(arena: std.mem.Allocator, refusal: *contract.Refusal, id: []const u8, detail: []const u8) contract.Failure {
+    refusal.* = .{ .feature = contract.feature_tool_sources_attach, .reason = contract.reason_unsatisfiable, .source = try arena.dupe(u8, id), .detail = detail };
+    return error.UnsupportedFeature;
+}
+
+fn refuseEnvironment(arena: std.mem.Allocator, refusal: *contract.Refusal, id: []const u8, name: []const u8) contract.Failure {
+    const field = try arena.dupe(u8, name);
+    const source = arena.dupe(u8, id) catch |err| {
+        arena.free(field);
+        return err;
+    };
+    refusal.* = .{ .feature = contract.feature_tool_sources_attach, .reason = contract.reason_unsatisfiable, .source = source, .field = field, .detail = "environment variable is not allowed" };
+    return error.UnsupportedFeature;
+}
+
+fn allowedEnvironment(entries: []const []const u8, name: []const u8) ?[]const u8 {
+    for (entries) |entry| {
+        const index = std.mem.indexOfScalar(u8, entry, '=') orelse continue;
+        if (std.mem.eql(u8, entry[0..index], name)) return entry[index + 1 ..];
+    }
+    return null;
+}
+
+fn attachMcp(a: std.mem.Allocator, arena: std.mem.Allocator, raw: ?[]const u8, allowed: []const []const u8, bridge: *local_tools.mcp_bridge.McpBridge, refusal: *contract.Refusal) contract.Failure![]oap_types.ToolSourceDescriptor {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, a, raw orelse "[]", .{ .allocate = .alloc_always }) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.InvalidSubmission;
+    if (parsed != .array) return error.InvalidSubmission;
+    const sources = try a.alloc(oap_types.ToolSourceDescriptor, parsed.array.items.len + 1);
+    sources[0] = native_sources[0];
+    var configs = std.json.Array.init(a);
+    for (parsed.array.items, 0..) |item, i| {
+        if (item != .object) return error.InvalidSubmission;
+        const id = stringOf(item, "id");
+        if (id.len == 0 or std.mem.eql(u8, id, native_source)) return refuseSource(arena, refusal, id, "invalid tool source id");
+        for (sources[0 .. i + 1]) |prior| if (std.mem.eql(u8, prior.id, id)) return refuseSource(arena, refusal, id, "duplicate tool source id");
+        if (!std.mem.eql(u8, stringOf(item, "kind"), "process")) return refuseSource(arena, refusal, id, "only stdio MCP sources are supported");
+        const protocol = stringOf(item, "protocol");
+        if (protocol.len > 0 and !std.mem.eql(u8, protocol, "mcp")) return refuseSource(arena, refusal, id, "only stdio MCP sources are supported");
+        const command = stringOf(item, "command");
+        if (command.len == 0) return refusal.fail(error.InvalidSubmission, "process tool source needs a command");
+        var obj: std.json.ObjectMap = .empty;
+        try obj.put(a, "name", .{ .string = id });
+        try obj.put(a, "command", .{ .string = command });
+        if (item.object.get("args")) |args| try obj.put(a, "args", args);
+        var env: std.json.ObjectMap = .empty;
+        if (item.object.get("environment")) |entries| {
+            if (entries != .array) return error.InvalidSubmission;
+            for (entries.array.items) |entry| {
+                if (entry != .string) return error.InvalidSubmission;
+                const cut = std.mem.indexOfScalar(u8, entry.string, '=');
+                const name = if (cut) |index| entry.string[0..index] else entry.string;
+                const value = if (cut) |index| entry.string[index + 1 ..] else allowedEnvironment(allowed, name) orelse return refuseEnvironment(arena, refusal, id, name);
+                try env.put(a, name, .{ .string = value });
+            }
+        }
+        try obj.put(a, "env", .{ .object = env });
+        try configs.append(.{ .object = obj });
+        const display = stringOf(item, "display_name");
+        const endpoint = stringOf(item, "endpoint");
+        sources[i + 1] = .{ .id = id, .kind = "process", .display_name = if (display.len > 0) display else null, .protocol = if (protocol.len > 0) protocol else null, .endpoint = if (endpoint.len > 0) endpoint else null };
+    }
+    const config = try std.json.Stringify.valueAlloc(a, std.json.Value{ .array = configs }, .{});
+    bridge.loadConfigJson(config) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.InvalidSubmission, "invalid MCP source");
+    return sources;
+}
+
 pub const Session = struct {
     owner: *Adapter,
     gpa: std.mem.Allocator,
@@ -374,6 +440,8 @@ pub const Session = struct {
     runtime: *session_runtime.SessionRuntime,
     loop: *local_loop.LocalLoop,
     jobs: *local_tools.shell.Jobs,
+    mcp: *local_tools.mcp_bridge.McpBridge,
+    sources: []oap_types.ToolSourceDescriptor,
     task_origins: std.StringHashMapUnmanaged(TaskOrigin) = .empty,
     shell_calls: std.StringHashMapUnmanaged([]const u8) = .empty,
     pending_tasks: usize = 0,
@@ -409,19 +477,40 @@ pub const Session = struct {
         self.keep = std.heap.ArenaAllocator.init(gpa);
         errdefer self.keep.deinit();
         const offers_input = offersUserInput(request.metadata);
-        const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, request.tools_json, refusal);
+        var options = sessionOptions(owner.options, request.metadata);
+        options.models = owner.catalog orelse owner.options.models;
+        if (request.reasoning_level) |level| options.thinking_level = try thinkingLevel(level, refusal);
+        if (try requestedModel(gpa, options.models, request.metadata, refusal)) |chosen| options.initial_model = chosen;
+        const mcp = try gpa.create(local_tools.mcp_bridge.McpBridge);
+        errdefer gpa.destroy(mcp);
+        mcp.* = local_tools.mcp_bridge.McpBridge.init(gpa);
+        mcp.bind();
+        errdefer mcp.deinit();
+        const sources = try attachMcp(self.keep.allocator(), arena, request.tool_sources_json, owner.environment, mcp, refusal);
+        const provided = try admitProvidedTools(self.keep.allocator(), arena, request.participant, owner.options.tools, offers_input, sources, request.tools_json, refusal);
+        mcp.discover() catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else refusal.fail(error.BackendFailed, "MCP discovery failed");
+        var mcp_tools: std.ArrayList(agent.AgentTool) = .empty;
+        defer mcp_tools.deinit(gpa);
+        try mcp.appendAgentTools(&mcp_tools);
         const job_tools = local_tools.shell.sessionTools(jobs);
-        const native_count = job_tools.len + owner.options.tools.len + @intFromBool(offers_input);
+        const native_count = job_tools.len + owner.options.tools.len + @intFromBool(offers_input) + mcp_tools.items.len;
         const session_tools = try gpa.alloc(agent.AgentTool, native_count + provided.len);
         defer gpa.free(session_tools);
         @memcpy(session_tools[0..job_tools.len], &job_tools);
         @memcpy(session_tools[job_tools.len..][0..owner.options.tools.len], owner.options.tools);
         if (offers_input) session_tools[job_tools.len + owner.options.tools.len] = inputTool(self);
+        @memcpy(session_tools[native_count - mcp_tools.items.len .. native_count], mcp_tools.items);
         for (provided, session_tools[native_count..]) |definition, *slot| slot.* = providedTool(self, definition);
-        var options = sessionOptions(owner.options, request.metadata);
-        options.models = owner.catalog orelse owner.options.models;
-        if (request.reasoning_level) |level| options.thinking_level = try thinkingLevel(level, refusal);
-        if (try requestedModel(gpa, options.models, request.metadata, refusal)) |chosen| options.initial_model = chosen;
+        for (session_tools, 0..) |tool, i| {
+            for (session_tools[0..i]) |prior| {
+                if (std.mem.eql(u8, prior.name, tool.name)) {
+                    if (i < native_count) {
+                        if (mcp.sourceForTool(tool.name)) |id| return refuseSource(arena, refusal, id, "an MCP tool name already resolves to a catalog entry");
+                    }
+                    return refuseTool(arena, refusal, tool.name, "the name already resolves to a catalog entry");
+                }
+            }
+        }
         const engine = try ownEngine(gpa, owner.options.permission_engine, options.workspace_root);
         errdefer if (engine) |held| {
             held.deinit();
@@ -447,7 +536,7 @@ pub const Session = struct {
         };
         errdefer runtime.deinit();
         const kept = self.keep;
-        self.* = .{ .owner = owner, .gpa = gpa, .keep = kept, .id = "", .participant = "", .runtime = runtime, .loop = loop, .jobs = jobs, .engine = engine, .updated_at_ms = owner.now_ms(), .catalog_seen = owner.catalog_generation, .provided = provided };
+        self.* = .{ .owner = owner, .gpa = gpa, .keep = kept, .id = "", .participant = "", .runtime = runtime, .loop = loop, .jobs = jobs, .mcp = mcp, .sources = sources, .engine = engine, .updated_at_ms = owner.now_ms(), .catalog_seen = owner.catalog_generation, .provided = provided };
         const keep = self.keep.allocator();
         self.participant = try keep.dupe(u8, request.participant);
         self.id = if (request.session_id.len > 0) try keep.dupe(u8, request.session_id) else try owner.nextID(keep, "session");
@@ -718,6 +807,8 @@ pub const Session = struct {
         gpa.destroy(self.runtime);
         self.loop.deinit();
         gpa.destroy(self.loop);
+        self.mcp.deinit();
+        gpa.destroy(self.mcp);
         self.jobs.deinit();
         gpa.destroy(self.jobs);
         self.call_gate.deinit(gpa);
@@ -870,6 +961,7 @@ pub const Session = struct {
             .updated_at_ms = self.updated_at_ms,
             .reasoning_level = @tagName(self.runtime.thinkingLevel()),
             .compaction_policy_json = self.policy_json,
+            .sources = try arena.dupe(oap_types.ToolSourceDescriptor, self.sources),
             .as_of = .{ .admitted_submit_requests = admitted.items, .settled = settled.items },
             .recovered = self.recovered,
             .recovery_reason = if (self.recovered) "the transcript was loaded from the terminal UI's saved session" else null,
@@ -1728,7 +1820,7 @@ pub const Session = struct {
         try call.put("tool_call_id", .{ .string = tool_call_id });
         try call.put("execution_owner", .{ .string = endpoint_id });
         try call.put("name", .{ .string = name });
-        try call.put("source", .{ .string = native_source });
+        try call.put("source", .{ .string = self.mcp.sourceForTool(name) orelse native_source });
         return call;
     }
 
@@ -1966,11 +2058,11 @@ pub const Session = struct {
                 .description = tool.description,
                 .input_schema_json = tool.parameters_schema_json,
                 .execution_owner = endpoint_id,
-                .source = native_source,
+                .source = self.mcp.sourceForTool(tool.name) orelse native_source,
                 .annotations_json = if (tool.label.len > 0) try std.json.Stringify.valueAlloc(arena, .{ .title = tool.label }, .{}) else null,
             };
         }
-        return .{ .revision = capability_revision, .response = .{ .session_id = request.session_id, .sources = try arena.dupe(oap_types.ToolSourceDescriptor, &native_sources), .tools = definitions } };
+        return .{ .revision = capability_revision, .response = .{ .session_id = request.session_id, .sources = try arena.dupe(oap_types.ToolSourceDescriptor, self.sources), .tools = definitions } };
     }
 
     fn models(ptr: *anyopaque, arena: std.mem.Allocator, request: *const oap_types.ModelsRequest, refusal: *contract.Refusal) contract.Failure!contract.Catalog {
@@ -2445,7 +2537,7 @@ fn namedIn(tools: []const agent.AgentTool, offers_input: bool, provided: []const
     return false;
 }
 
-fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, participant: []const u8, native: []const agent.AgentTool, offers_input: bool, carried: ?[]const u8, refusal: *contract.Refusal) contract.Failure![]const oap_types.ToolDefinition {
+fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, participant: []const u8, native: []const agent.AgentTool, offers_input: bool, sources: []const oap_types.ToolSourceDescriptor, carried: ?[]const u8, refusal: *contract.Refusal) contract.Failure![]const oap_types.ToolDefinition {
     const text = carried orelse return &.{};
     const document = std.json.parseFromSliceLeaky(std.json.Value, keep, text, .{ .allocate = .alloc_always, .parse_numbers = false }) catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;
@@ -2461,9 +2553,14 @@ fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, partici
         if (name.len == 0) return refuseTool(arena, refusal, "", "a provided tool needs a name");
         if (!std.mem.eql(u8, stringOf(item, "execution_owner"), participant)) return refuseTool(arena, refusal, name, "execution_owner must be the opening participant");
         const source = stringOf(item, "source");
-        if (source.len == 0) return refuseTool(arena, refusal, name, "a provided tool must name a source, since the session's catalog lists every tool by one; this loop declares " ++ native_source);
-        if (!std.mem.eql(u8, source, native_source)) {
-            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "the loop declares one tool source, " ++ native_source ++ ", so another resolves to nothing" };
+        if (source.len == 0) return refuseTool(arena, refusal, name, "a provided tool must name a source in the session catalog");
+        var found = false;
+        for (sources) |candidate| if (std.mem.eql(u8, source, candidate.id)) {
+            found = true;
+            break;
+        };
+        if (!found) {
+            refusal.* = .{ .feature = contract.feature_tools_provide, .reason = contract.reason_unsatisfiable, .tool = try arena.dupe(u8, name), .source = try arena.dupe(u8, source), .detail = "this source resolves to nothing in the session catalog" };
             return error.UnsupportedFeature;
         }
         if (namedIn(native, offers_input, provided[0..index], name)) return refuseTool(arena, refusal, name, "the name already resolves to a catalog entry");
@@ -2476,7 +2573,7 @@ fn admitProvidedTools(keep: std.mem.Allocator, arena: std.mem.Allocator, partici
             .description = if (description.len > 0) description else null,
             .input_schema_json = if (schema) |value| try json_encode.valueAlloc(keep, value) else "{\"type\":\"object\"}",
             .execution_owner = participant,
-            .source = native_source,
+            .source = source,
         };
     }
     return provided;
@@ -3500,10 +3597,12 @@ test "a session reports a live background job, so the hub will not park it" {
     try testing.expect(!harness.session.holdsNoLiveWork());
 }
 
-test "an open that attaches sources is refused, since attaching is not advertised" {
+test "an unsupported source transport is refused" {
     var owner = Adapter.init(testing.allocator, .{});
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
     var refusal = contract.Refusal{};
-    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(testing.allocator, .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\"}]" }, &refusal));
+    try testing.expectError(error.UnsupportedFeature, owner.adapter().open(arena.allocator(), .{ .participant = "user", .tool_sources_json = "[{\"id\":\"s\",\"kind\":\"remote\"}]" }, &refusal));
     try testing.expectEqualStrings(contract.feature_tool_sources_attach, refusal.feature);
 }
 
@@ -5678,4 +5777,21 @@ test "an open whose oxap and oapx settings disagree on anything is refused befor
         try testing.expectError(error.InvalidSubmission, harness.owner.adapter().open(a, .{ .participant = "user", .session_id = "split", .metadata = metadata }, &refusal));
         try testing.expectEqualStrings("metadata carries oxap and oapx settings that disagree; send one of them", refusal.message);
     }
+}
+
+test "attached source descriptions survive reuse of the open request buffer" {
+    var keep = std.heap.ArenaAllocator.init(testing.allocator);
+    defer keep.deinit();
+    var request = std.heap.ArenaAllocator.init(testing.allocator);
+    defer request.deinit();
+    var bridge = local_tools.mcp_bridge.McpBridge.init(testing.allocator);
+    defer bridge.deinit();
+    const raw = try request.allocator().dupe(u8, "[{\"id\":\"files\",\"kind\":\"process\",\"command\":\"/bin/true\",\"display_name\":\"Files\",\"protocol\":\"mcp\",\"endpoint\":\"stdio:files\"}]");
+    var refusal = contract.Refusal{};
+    const sources = try attachMcp(keep.allocator(), request.allocator(), raw, &.{}, &bridge, &refusal);
+    @memset(raw, 'x');
+    try testing.expectEqualStrings("files", sources[1].id);
+    try testing.expectEqualStrings("Files", sources[1].display_name.?);
+    try testing.expectEqualStrings("mcp", sources[1].protocol.?);
+    try testing.expectEqualStrings("stdio:files", sources[1].endpoint.?);
 }
