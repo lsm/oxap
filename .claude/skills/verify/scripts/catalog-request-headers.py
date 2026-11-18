@@ -141,6 +141,7 @@ def main():
                 assert 'fixture-tenant-value' not in artifact.read_text(), artifact.name
             count = len(Provider.observed)
             missing_header_inference(binary, environment, root)
+            assert len(Provider.observed) == count, 'missing environment sent a provider request'
             del environment['EXAMPLE_HEADER']
             config['providers'] = [{'id': 'healthy', 'api': 'openai-completions', 'base_url': url, 'auth': 'none', 'models': ['synthetic-model']}]
             (data / 'providers.json').write_text(json.dumps(config))

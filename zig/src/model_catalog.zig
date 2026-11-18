@@ -993,7 +993,10 @@ fn loadRowsWithProvenance(
         } else try catalogEndpointFromEnvironment(allocator, storage, id, file);
         var held = endpoint orelse continue;
         defer held.deinit(allocator);
-        try appendCatalogTargetModels(allocator, &models, held, storage, mode, provenance, &models_dev, refusals);
+        appendCatalogTargetModels(allocator, &models, held, storage, mode, provenance, &models_dev, refusals) catch |err| switch (err) {
+            error.MissingHeaderEnvironment => continue,
+            else => return err,
+        };
     }
     return models.toOwnedSlice(allocator);
 }

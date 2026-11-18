@@ -3730,7 +3730,13 @@ fn startOapInference(
 
     var lookup = try auth_resolver.overrideLookup(allocator, provider_id);
     defer lookup.deinit(allocator);
-    var model = try buildOapInferenceModel(allocator, served, lookup);
+    var model = buildOapInferenceModel(allocator, served, lookup) catch |err| switch (err) {
+        error.MissingHeaderEnvironment => {
+            try failOapInference(server, inference_id, .invalid_request, "a required provider header environment variable is missing or empty");
+            return;
+        },
+        else => return err,
+    };
     errdefer model.deinit(allocator);
     var context = try buildOapInferenceContext(allocator, inference.messages, .{
         .provider = model.provider,
