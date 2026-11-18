@@ -36,16 +36,22 @@ def main():
             return result
         help_result = run('help', ['--help'], True)
         assert 'harness install' in help_result.stdout, 'help omits harness install'
-        run('unknown', ['harness','install','no-such-harness'], False)
-        run('version-refusal', ['harness','install','opencode','--version','0.0.0'], False)
+        unknown = run('unknown', ['harness','install','no-such-harness'], False)
+        assert 'no-such-harness' in unknown.stderr, unknown.stderr
+        refused = run('version-refusal', ['harness','install','opencode','--version','0.0.0'], False)
+        assert '0.0.0' in refused.stderr and version['label'] in refused.stderr, refused.stderr
         assert not (home / '.oxap' / 'opencode').exists(), 'refusal installed a file'
         run('install', ['harness','install','opencode','--version',version['label']], True)
         installed = home / '.oxap' / 'opencode' / version['admits'][0] / 'opencode'
         assert installed.is_file() and os.access(installed, os.X_OK), 'pinned executable missing'
-        actual = subprocess.run([str(installed), '--version'], cwd=root, env=env, capture_output=True, text=True, timeout=30)
+        installed_command = command[:-1] + [str(installed)]
+        actual = subprocess.run(installed_command + ['--version'], cwd=root, env=env, capture_output=True, text=True, timeout=30)
         assert actual.returncode == 0 and version['admits'][0] in actual.stdout, (actual.returncode, actual.stdout)
         repeat = run('repeat', ['harness','install','opencode'], True)
         assert 'already installed' in repeat.stdout, repeat.stdout
+        installed.write_text('corrupted fixture')
+        damaged = run('damaged', ['harness','install','opencode'], False)
+        assert 'sha256' in damaged.stderr and installed.read_text() == 'corrupted fixture', damaged.stderr
         print('PASS: refused unknown inputs, installed and ran the pinned harness, then reused it')
 
 if __name__ == '__main__': main()
