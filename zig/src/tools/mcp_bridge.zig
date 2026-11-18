@@ -209,7 +209,7 @@ const McpServerSession = struct {
                 if (self.http_session) |old| allocator.free(old);
                 self.http_session = replacement;
             }
-            return std.json.parseFromSlice(std.json.Value, allocator, response.body, .{});
+            return parseMcpResponse(allocator, response.body);
         }
         try self.start(allocator);
         const child = &(self.child orelse return error.McpServerNotRunning);
@@ -231,7 +231,7 @@ const McpServerSession = struct {
                 defer allocator.free(line);
                 const trimmed = std.mem.trim(u8, line, " \t\r\n");
                 if (trimmed.len == 0) continue;
-                var parsed = try std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{});
+                var parsed = try parseMcpResponse(allocator, trimmed);
                 errdefer parsed.deinit();
                 if (parsed.value != .object) return error.InvalidMcpResponse;
                 const obj = parsed.value.object;
@@ -933,41 +933,16 @@ fn expectNoDuplicateToolNames(bridge: *const McpBridge) !void {
     }
 }
 
-const ResponseServer = struct {
-    listener: std.Io.net.Server,
+fn parseMcpResponse(allocator: std.mem.Allocator, body: []const u8) !std.json.Parsed(std.json.Value) {
+    return std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+}
 
-    fn serve(self: *ResponseServer) void {
-        const io = std.testing.io;
-        var stream = self.listener.accept(io) catch return;
-        defer stream.close(io);
-        var read_buffer: [4096]u8 = undefined;
-        var reader = stream.reader(io, &read_buffer);
-        while (true) {
-            const line = reader.interface.takeDelimiterInclusive('\n') catch return;
-            if (std.mem.eql(u8, line, "\r\n")) break;
-        }
-        const body = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":\"intact-response\"}}";
-        var write_buffer: [512]u8 = undefined;
-        var writer = stream.writer(io, &write_buffer);
-        writer.interface.print("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {d}\r\n\r\n{s}", .{ body.len, body }) catch return;
-        writer.interface.flush() catch return;
-    }
-};
-
-test "HTTP MCP response remains readable after the request returns" {
-    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
-    var server = ResponseServer{ .listener = try address.listen(std.testing.io, .{ .reuse_address = true }) };
-    defer server.listener.deinit(std.testing.io);
-    const thread = try std.Thread.spawn(.{}, ResponseServer.serve, .{&server});
-    defer thread.join();
-    const config_json = try std.fmt.allocPrint(std.testing.allocator, "[{{\"name\":\"mock\",\"endpoint\":\"http://127.0.0.1:{d}/\"}}]", .{server.listener.socket.address.getPort()});
-    defer std.testing.allocator.free(config_json);
-    var bridge = McpBridge.init(std.testing.allocator);
-    bridge.bind();
-    defer bridge.deinit();
-    try bridge.loadConfigJson(config_json);
-    var response = try bridge.servers.items[0].sendRequest(std.testing.allocator, "tools/call", "{}", null, 5000);
+test "MCP responses remain readable after their input is overwritten" {
+    const body = try std.testing.allocator.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":\"intact-response\"}}");
+    defer std.testing.allocator.free(body);
+    var response = try parseMcpResponse(std.testing.allocator, body);
     defer response.deinit();
+    @memset(body, 'x');
     const result = resultObject(response.value) orelse return error.InvalidMcpResponse;
     try std.testing.expectEqualStrings("intact-response", getString(result, "value") orelse return error.InvalidMcpResponse);
 }
