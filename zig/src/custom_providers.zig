@@ -25,6 +25,8 @@ pub const ConfigError = error{
     InvalidBaseUrl,
     UnsupportedApi,
     InvalidAuthMode,
+    InvalidHeaderEnvironment,
+    MissingHeaderEnvironment,
 };
 
 pub const OverrideError = error{
@@ -580,11 +582,26 @@ fn parseHeaders(allocator: std.mem.Allocator, obj: *const std.json.ObjectMap) ![
     }
     var it = headers.iterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.* != .string) continue;
         if (entry.key_ptr.*.len == 0) continue;
         const name = try allocator.dupe(u8, entry.key_ptr.*);
         errdefer allocator.free(name);
-        const value = try allocator.dupe(u8, entry.value_ptr.*.string);
+        const value = switch (entry.value_ptr.*) {
+            .string => |literal| try allocator.dupe(u8, literal),
+            .object => |source| blk: {
+                const variable = source.get("env") orelse return ConfigError.InvalidHeaderEnvironment;
+                if (source.count() != 1 or variable != .string or variable.string.len == 0) return ConfigError.InvalidHeaderEnvironment;
+                const resolved = compat_mod.getEnvVarOwned(allocator, variable.string) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    else => return ConfigError.MissingHeaderEnvironment,
+                };
+                if (resolved.len == 0) {
+                    allocator.free(resolved);
+                    return ConfigError.MissingHeaderEnvironment;
+                }
+                break :blk resolved;
+            },
+            else => return ConfigError.InvalidHeaderEnvironment,
+        };
         errdefer allocator.free(value);
         try list.append(allocator, .{ .name = name, .value = value });
     }
@@ -1330,4 +1347,22 @@ test "a home holding only .oapx keeps reading its provider config there" {
 
 test "a home holding both state directories reads .oxap" {
     try expectConfigPathIn(&.{ ".oapx", ".oxap" }, ".oxap");
+}
+
+test "custom and override headers resolve environment values and reject missing ones" {
+    const expected = try compat_mod.getEnvVarOwned(testing.allocator, "HOME");
+    defer testing.allocator.free(expected);
+    var config = try parseConfig(testing.allocator,
+        \\{"providers":[{"id":"local","base_url":"http://localhost:8000","headers":{"X-Env":{"env":"HOME"}}}],
+        \\ "overrides":[{"id":"deepseek","headers":{"X-Env":{"env":"HOME"}}}]}
+    );
+    defer config.deinit(testing.allocator);
+    try testing.expect(std.mem.eql(u8, expected, config.providers[0].headers[0].value));
+    try testing.expect(std.mem.eql(u8, expected, config.overrides[0].headers[0].value));
+    try testing.expectError(ConfigError.MissingHeaderEnvironment, parseConfig(testing.allocator,
+        \\{"providers":[{"id":"local","base_url":"http://localhost:8000","headers":{"X-Env":{"env":"OXAP_TEST_HEADER_ABSENT_1849"}}}]}
+    ));
+    try testing.expectError(ConfigError.InvalidHeaderEnvironment, parseConfig(testing.allocator,
+        \\{"overrides":[{"id":"deepseek","headers":{"X-Env":{"env":""}}}]}
+    ));
 }
