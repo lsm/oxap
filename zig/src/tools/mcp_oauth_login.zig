@@ -11,21 +11,21 @@ const timeout_ms = 5000;
 const json_headers = [_]std.http.Header{.{ .name = "Content-Type", .value = "application/json" }};
 const form_headers = [_]std.http.Header{.{ .name = "Content-Type", .value = "application/x-www-form-urlencoded" }};
 
-fn string(value: std.json.Value, name: []const u8) ![]const u8 {
+pub fn string(value: std.json.Value, name: []const u8) ![]const u8 {
     if (value != .object) return error.InvalidOAuthResponse;
     const member = value.object.get(name) orelse return error.InvalidOAuthResponse;
     if (member != .string or member.string.len == 0) return error.InvalidOAuthResponse;
     return member.string;
 }
 
-fn post(a: std.mem.Allocator, url: []const u8, headers: []const std.http.Header, body: []const u8) !std.json.Parsed(std.json.Value) {
+pub fn post(a: std.mem.Allocator, url: []const u8, headers: []const std.http.Header, body: []const u8) !std.json.Parsed(std.json.Value) {
     var response = try compat.http.fetch(a, url, .{ .method = .POST, .extra_headers = headers, .body = body, .timeout_ms = timeout_ms, .max_response_bytes = max_response, .no_redirect = true });
     defer response.deinit(a);
     if (response.status < 200 or response.status >= 300) return error.OAuthRequestFailed;
     return std.json.parseFromSlice(std.json.Value, a, response.body, .{ .allocate = .alloc_always });
 }
 
-fn addParam(a: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: []const u8) !void {
+pub fn addParam(a: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, value: []const u8) !void {
     if (out.items.len != 0) try out.append(a, '&');
     try out.appendSlice(a, name);
     try out.append(a, '=');
@@ -39,7 +39,7 @@ fn addParam(a: std.mem.Allocator, out: *std.ArrayList(u8), name: []const u8, val
     }
 }
 
-fn key(a: std.mem.Allocator, endpoint: []const u8) ![]u8 {
+pub fn key(a: std.mem.Allocator, endpoint: []const u8) ![]u8 {
     return std.fmt.allocPrint(a, "mcp:{s}", .{endpoint});
 }
 

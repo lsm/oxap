@@ -7,6 +7,7 @@ const common = @import("tools/common");
 const build_options = @import("build_options");
 const mcp_http = @import("mcp_http");
 const mcp_oauth = @import("mcp_oauth");
+const mcp_credentials = @import("mcp_oauth_credentials");
 
 const mcp_client_info_json = std.fmt.comptimePrint("{{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"makai\",\"version\":\"{s}\"}}}}", .{build_options.version});
 
@@ -123,16 +124,21 @@ const McpServerSession = struct {
     mock_response: ?std.json.Value = null,
     http_session: ?[]u8 = null,
     http_initialized: bool = false,
+    http_access: ?[]u8 = null,
 
     fn deinit(self: *McpServerSession, allocator: std.mem.Allocator) void {
         if (self.config.endpoint) |endpoint| {
             if (self.http_session) |session| {
-                var response = mcp_http.call(allocator, endpoint, session, self.http_initialized, .DELETE, null, null, null, 1000) catch null;
+                var response = self.httpCall(allocator, endpoint, .DELETE, null, null, null, 1000) catch null;
                 if (response) |*value| value.deinit(allocator);
                 allocator.free(session);
             }
         }
         self.stop();
+        if (self.http_access) |access| {
+            std.crypto.secureZero(u8, access);
+            allocator.free(access);
+        }
         self.stdout_pending.deinit(allocator);
         self.config.deinit(allocator);
         self.stderr.deinit(allocator);
@@ -200,16 +206,11 @@ const McpServerSession = struct {
         defer allocator.free(request);
         if (std.mem.indexOfScalar(u8, request[0 .. request.len - 1], '\n') != null) return error.InvalidMcpRequest;
         if (self.config.endpoint) |endpoint| {
-            var response = mcp_http.call(allocator, endpoint, self.http_session, self.http_initialized, .POST, request, id, cancel_token, timeout_ms) catch |err| {
+            var response = self.httpCall(allocator, endpoint, .POST, request, id, cancel_token, timeout_ms) catch |err| {
                 if (err == error.Cancelled) self.notifyCancelled(allocator, id);
                 return err;
             };
             defer response.deinit(allocator);
-            if (response.challenge) |challenge| {
-                var metadata = try mcp_oauth.discover(allocator, endpoint, challenge);
-                metadata.deinit(allocator);
-                return error.McpHttpFailure;
-            }
             if (response.session) |session| {
                 const replacement = try allocator.dupe(u8, session);
                 if (self.http_session) |old| allocator.free(old);
@@ -268,6 +269,58 @@ const McpServerSession = struct {
         }
     }
 
+    fn httpCall(self: *McpServerSession, allocator: std.mem.Allocator, endpoint: []const u8, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel_token: ?ai_types.CancelToken, timeout_ms: ?u64) !mcp_http.Reply {
+        const access = try mcp_credentials.access(allocator, endpoint, null);
+        defer if (access) |value| {
+            std.crypto.secureZero(u8, value);
+            allocator.free(value);
+        };
+        var response = try mcp_http.callAuthorized(allocator, endpoint, self.http_session, self.http_initialized, method, body, id, cancel_token, timeout_ms, access);
+        if (response.unauthorized) {
+            if (access) |rejected| {
+                response.deinit(allocator);
+                const renewed = (try mcp_credentials.access(allocator, endpoint, rejected)) orelse return error.McpHttpFailure;
+                defer {
+                    std.crypto.secureZero(u8, renewed);
+                    allocator.free(renewed);
+                }
+                response = try mcp_http.callAuthorized(allocator, endpoint, self.http_session, self.http_initialized, method, body, id, cancel_token, timeout_ms, renewed);
+                if (response.unauthorized) {
+                    response.deinit(allocator);
+                    return error.McpHttpFailure;
+                }
+                self.rememberAccess(allocator, renewed) catch |err| {
+                    response.deinit(allocator);
+                    return err;
+                };
+                return response;
+            }
+            if (response.challenge) |challenge| {
+                var metadata = mcp_oauth.discover(allocator, endpoint, challenge) catch |err| {
+                    response.deinit(allocator);
+                    return err;
+                };
+                metadata.deinit(allocator);
+            }
+            response.deinit(allocator);
+            return error.McpHttpFailure;
+        }
+        self.rememberAccess(allocator, access) catch |err| {
+            response.deinit(allocator);
+            return err;
+        };
+        return response;
+    }
+
+    fn rememberAccess(self: *McpServerSession, allocator: std.mem.Allocator, access: ?[]const u8) !void {
+        const replacement = if (access) |value| try allocator.dupe(u8, value) else null;
+        if (self.http_access) |old| {
+            std.crypto.secureZero(u8, old);
+            allocator.free(old);
+        }
+        self.http_access = replacement;
+    }
+
     fn writeUnlessCancelled(child: *std.process.Child, request: []const u8, cancel_token: ?ai_types.CancelToken) !void {
         if (common.isCancelled(cancel_token)) return error.Cancelled;
         try child.stdin.?.writeStreamingAll(common.defaultIo(), request);
@@ -279,7 +332,7 @@ const McpServerSession = struct {
         if (self.config.endpoint) |endpoint| {
             const notification = std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{s}}}", .{params}) catch return;
             defer allocator.free(notification);
-            mcp_http.notify(endpoint, self.http_session, self.http_initialized, notification);
+            mcp_http.notifyAuthorized(endpoint, self.http_session, self.http_initialized, notification, self.http_access);
             return;
         }
         self.sendNotification(allocator, "notifications/cancelled", params) catch {};
@@ -292,7 +345,7 @@ const McpServerSession = struct {
         const notification = try std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"method\":{s},\"params\":{s}}}\n", .{ escaped_method, params_json });
         defer allocator.free(notification);
         if (self.config.endpoint) |endpoint| {
-            var response = try mcp_http.call(allocator, endpoint, self.http_session, self.http_initialized, .POST, notification, null, null, 5000);
+            var response = try self.httpCall(allocator, endpoint, .POST, notification, null, null, 5000);
             defer response.deinit(allocator);
             return;
         }

@@ -28,15 +28,19 @@ class Server(http.server.BaseHTTPRequestHandler):
     refreshes = 0
     reject_tool_once = True
     reject_open = False
+    redirect_open = False
     deny_refresh = False
+    ping_answered = threading.Event()
 
     def log_message(self, *args):
         pass
 
-    def reply(self, status, value):
+    def reply(self, status, value, session=False):
         payload = json.dumps(value).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
+        if session:
+            self.send_header('Mcp-Session-Id', 'fixture-session')
         self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -73,21 +77,34 @@ class Server(http.server.BaseHTTPRequestHandler):
         payload = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         if self.path == '/mcp':
             initialize = json.loads(payload)
-            method = initialize['method']
+            method = initialize.get('method')
             auth = self.headers.get('Authorization')
+            if self.served and auth and method == 'initialize' and self.redirect_open:
+                self.send_response(302)
+                self.send_header('Location', self.server.origin + '/leak')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             reject = not auth or (self.served and method == 'tools/call' and self.reject_tool_once) or (self.served and method == 'initialize' and self.reject_open)
             if reject:
                 if auth and method == 'tools/call':
                     Server.reject_tool_once = False
                 self.send_response(401)
-                challenge = f'Bearer resource_metadata="{self.server.origin}/resource-metadata"'
-                if self.scope_mode == 'challenge':
-                    challenge += ', scope="tools:read tools:call"'
-                self.send_header('WWW-Authenticate', challenge)
+                if not auth:
+                    challenge = f'Bearer resource_metadata="{self.server.origin}/resource-metadata"'
+                    if self.scope_mode == 'challenge':
+                        challenge += ', scope="tools:read tools:call"'
+                    self.send_header('WWW-Authenticate', challenge)
                 self.send_header('Content-Length', '0')
                 self.end_headers()
                 return
             assert self.served and auth == f'Bearer fixture-access-{self.refreshes}'
+            if method != 'initialize':
+                assert self.headers.get('Mcp-Session-Id') == 'fixture-session'
+            if method is None:
+                assert initialize == {'jsonrpc': '2.0', 'id': 'fixture-ping', 'result': {}}
+                self.ping_answered.set()
+                self.send_response(202); self.end_headers(); return
             if 'id' not in initialize:
                 self.send_response(202); self.end_headers(); return
             if method == 'initialize':
@@ -98,7 +115,16 @@ class Server(http.server.BaseHTTPRequestHandler):
                 result = {'content': [{'type': 'text', 'text': 'echoed:' + initialize['params']['arguments']['text']}]}
             else:
                 raise AssertionError(method)
-            self.reply(200, {'jsonrpc': '2.0', 'id': initialize['id'], 'result': result})
+            response = {'jsonrpc': '2.0', 'id': initialize['id'], 'result': result}
+            if method == 'tools/list':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                self.wfile.write(b'data: {"jsonrpc":"2.0","id":"fixture-ping","method":"ping"}\n\n'); self.wfile.flush()
+                assert self.ping_answered.wait(5), 'authenticated ping response missing'
+                self.wfile.write(b'data: ' + json.dumps(response).encode() + b'\n\n'); self.wfile.flush()
+            else:
+                self.reply(200, response, session=method == 'initialize')
         elif self.path == '/register':
             metadata = json.loads(payload)
             assert metadata['token_endpoint_auth_method'] == 'none'
@@ -126,6 +152,13 @@ class Server(http.server.BaseHTTPRequestHandler):
                 self.reply(200, {'access_token': 'fixture-access-0', 'refresh_token': 'fixture-refresh-0', 'token_type': 'Bearer', 'expires_in': 0 if self.served else 3600})
         else:
             self.send_error(404)
+
+    def do_DELETE(self):
+        self.requests.append(('DELETE', self.path))
+        assert self.served and self.headers.get('Authorization') == f'Bearer fixture-access-{self.refreshes - int(self.deny_refresh)}'
+        assert self.headers.get('Mcp-Session-Id') == 'fixture-session'
+        self.send_response(204)
+        self.end_headers()
 
 
 def main():
@@ -204,7 +237,7 @@ def served_journey(command, env, root, server):
     provider = http.server.ThreadingHTTPServer(('127.0.0.1', 0), stdio.Provider)
     thread = threading.Thread(target=provider.serve_forever)
     thread.start()
-    data = Path(env['HOME']) / '.oapx'
+    data = Path(env['HOME']) / '.oxap'
     data.mkdir(parents=True, exist_ok=True)
     (data / 'providers.json').write_text(json.dumps({'providers': [{'id': 'synthetic', 'api': 'openai-completions', 'base_url': f'http://127.0.0.1:{provider.server_port}/v1', 'auth': 'none', 'models': ['synthetic-model']}]}))
     (data / 'config.json').write_text(json.dumps({'model': 'synthetic-model', 'provider': 'synthetic', 'api': 'openai-completions', 'workspace': str(root)}))
@@ -221,7 +254,32 @@ def served_journey(command, env, root, server):
         stdio.base.submit(hub, 'oauth-proof', 'Call the echo tool with hello')
         assert 'echoed:hello' in json.dumps(stdio.Provider.requests[-1])
         assert Server.refreshes == 2, f'revoked access was not refreshed once: count={Server.refreshes}'
+        hub.stop(); hub = None
+        assert ('DELETE', '/mcp') in Server.requests, 'authenticated session deletion missing'
+        Server.ping_answered.clear()
+        hub = stdio.base.Hub(command, env, root, output, 'oauth-restart', flags=('--no-save-oapx-sessions',))
+        request['payload']['session_id'] = 'oauth-restart'
+        hub.call('open', adapter='loop', request=request)
+        assert Server.refreshes == 2, f'restarted process did not use saved refresh: count={Server.refreshes}'
+        Server.redirect_open = True
+        request['payload']['session_id'] = 'redirected-source'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('authenticated redirect was followed')
+        assert ('GET', '/leak') not in Server.requests, 'credential-bearing redirect was followed'
+        Server.redirect_open = False
         Server.reject_open = True
+        request['payload']['session_id'] = 'rejected-twice'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('repeatedly rejected access was accepted')
+        assert Server.refreshes == 3, f'access rejection retried unexpectedly: count={Server.refreshes}'
         Server.deny_refresh = True
         request['payload']['session_id'] = 'revoked-refresh'
         try:
@@ -230,8 +288,19 @@ def served_journey(command, env, root, server):
             assert isinstance(error.args[0], dict), error
         else:
             raise AssertionError('revoked refresh credential was accepted')
-        assert Server.refreshes == 3, f'revoked refresh was retried unexpectedly: count={Server.refreshes}'
-        print('PASS: expired credential refreshed, rejected access retried, revoked refresh refused; refreshes=3')
+        assert Server.refreshes == 4, f'revoked refresh was retried unexpectedly: count={Server.refreshes}'
+        request['payload']['session_id'] = 'revoked-again'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('revoked refresh credential was accepted on retry')
+        assert Server.refreshes == 4, f'revoked refresh was retried unexpectedly: count={Server.refreshes}'
+        assert Server.ping_answered.is_set()
+        hub.stop(); hub = None
+        assert ('DELETE', '/mcp') in Server.requests, 'authenticated session deletion missing'
+        print('PASS: expired credential refreshed, rejected access retried once, revoked refresh refused; refreshes=4; authenticated ping and deletion')
     finally:
         if hub:
             hub.stop()
