@@ -16,7 +16,7 @@ records the names and the compatibility rules.
 | TypeScript SDK | `npm install @oxap/sdk` |
 | Go library and Go SDK | `go get github.com/lsm/oxap@v0.1.0-alpha.34` |
 | TypeScript hub client | `npm install @oxap/client` |
-| Python SDK | `pip install oxap-sdk==0.1.0a34`, then `import oxap_sdk` |
+| Python SDK | `pip install oxap-sdk==0.1.0a34` (or `oxap`, which installs it), then `import oxap_sdk` |
 | Rust SDK | `cargo add oxap-sdk@0.1.0-alpha.34` |
 
 Alpha releases are pre-releases. Until a stable version ships, npm publishes
