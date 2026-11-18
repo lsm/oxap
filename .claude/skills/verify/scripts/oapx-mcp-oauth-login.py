@@ -170,7 +170,7 @@ def main():
     binary = Path(sys.argv[1]).resolve()
     Server.scope_mode = sys.argv[2] if len(sys.argv) > 2 else 'challenge'
     scenario = Server.scope_mode
-    Server.served = scenario in ('served', 'static', 'oauth-header')
+    Server.served = scenario in ('served', 'static', 'static-rejected', 'oauth-header')
     if Server.served:
         Server.scope_mode = 'challenge'
     assert Server.scope_mode in ('challenge', 'metadata', 'none')
@@ -220,8 +220,9 @@ def main():
             reader.join()
             assert code == 0, f'login exit={code}'
             if Server.served:
-                Server.static_auth = scenario == 'static'
-                Server.custom_header = scenario in ('static', 'oauth-header')
+                Server.static_auth = scenario in ('static', 'static-rejected')
+                Server.custom_header = scenario in ('static', 'static-rejected', 'oauth-header')
+                Server.reject_open = scenario == 'static-rejected'
                 if Server.static_auth: Server.reject_tool_once = False
                 served_journey(command, env, root, server)
                 return
@@ -259,6 +260,17 @@ def served_journey(command, env, root, server):
     try:
         hub = stdio.base.Hub(command, env, root, output, 'oauth-served', flags=('--no-save-oapx-sessions',))
         request = stdio.base.envelope('session.open.request', {'session_id': 'oauth-proof', 'tool_sources': [{'id': 'demo', 'kind': 'remote'}], 'metadata': {'oapx': {'permission_mode': 'bypass'}}})
+        if Server.static_auth and Server.reject_open:
+            try:
+                hub.call('open', adapter='loop', request=request)
+            except AssertionError as error:
+                assert isinstance(error.args[0], dict), error
+            else:
+                raise AssertionError('rejected static bearer was accepted')
+            assert Server.refreshes == 0, 'static rejection triggered OAuth refresh'
+            assert Server.requests.count(('GET', '/resource-metadata')) == 1, 'static rejection triggered OAuth discovery'
+            print('PASS: rejected static bearer did not trigger OAuth discovery or refresh')
+            return
         hub.call('open', adapter='loop', request=request)
         if Server.static_auth:
             assert Server.refreshes == 0, f'static auth unexpectedly refreshed OAuth: count={Server.refreshes}'
