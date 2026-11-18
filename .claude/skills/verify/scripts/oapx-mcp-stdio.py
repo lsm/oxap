@@ -121,11 +121,13 @@ def main():
             assert (root / 'closed').read_text() == 'closed', 'server did not exit on stdin EOF'
             initialize = base.envelope('protocol.initialize.request', {'protocol_versions':['0.1'], 'profiles':['open-agent-protocol.agent-control-core'], 'participant':{'id':'user'}})
             opens = [base.envelope('session.open.request', {'session_id':'duplicate-proof'}),
-                     base.envelope('session.open.request', {'session_id':'duplicate-proof', 'tool_sources':[{'id':'remote-example','kind':'remote'}]})]
+                     base.envelope('session.open.request', {'session_id':'duplicate-proof', 'tool_sources':[{'id':'remote-example','kind':'remote'}]}),
+                     base.envelope('session.open.request', {'session_id':'duplicate-proof', 'tool_sources':[{'id':'blocked','kind':'process','command':'/bin/true'}]})]
             direct = subprocess.run(command + ['serve', 'agent', '--backend', 'oapx', '--stdio'], input=''.join(json.dumps(x) + '\n' for x in [initialize, *opens]), text=True, cwd=root, env=environment, capture_output=True, timeout=30)
             (output / 'direct.jsonl').write_text(direct.stdout)
             frames = [json.loads(line) for line in direct.stdout.splitlines()]
             assert direct.returncode == 0 and any(x.get('payload', {}).get('error', {}).get('code') == 'session_exists' for x in frames), (direct.returncode, frames, direct.stderr)
+            assert any(x.get('payload', {}).get('error', {}).get('details', {}).get('source') == 'blocked' and x['payload']['error']['code'] == 'unsupported_feature' for x in frames), frames
             print('PASS: discovered and called stdio MCP tool')
         finally:
             if hub: hub.stop()
