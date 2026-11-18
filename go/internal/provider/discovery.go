@@ -89,6 +89,7 @@ type listingTarget struct {
 	baseURL   string
 	modelsURL string
 	region    string
+	headers   map[string]string
 }
 
 type listing struct {
@@ -122,6 +123,11 @@ func (d Discoverer) discoverRow(ctx context.Context, id string, mode DiscoveryMo
 	}
 	credential, held := providercatalog.LookupCredential(d.Catalog, d.Environment, stored, id)
 	if !held {
+		return
+	}
+	var err error
+	target.headers, err = providercatalog.ResolveHeaders(d.Catalog, d.Environment, id)
+	if err != nil {
 		return
 	}
 	models, keyRefused, dropped := d.discoverTarget(ctx, target, credential.Key, mode, credential.Source == providercatalog.SourceStored)
@@ -305,6 +311,11 @@ func (d Discoverer) fetchListing(ctx context.Context, target listingTarget, toke
 			request.Header.Set("anthropic-version", "2023-06-01")
 		} else {
 			request.Header.Set("authorization", BearerValue(token))
+		}
+	}
+	for name, value := range target.headers {
+		if _, exists := request.Header[http.CanonicalHeaderKey(name)]; !exists {
+			request.Header.Set(name, value)
 		}
 	}
 	client := d.Client

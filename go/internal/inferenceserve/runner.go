@@ -187,7 +187,14 @@ func (r *Runner) Create(ctx context.Context, requestID string, request CreateReq
 		options.ToolChoice, options.HasToolChoice = choice, true
 		anthropic.ToolChoiceType, anthropic.ToolChoiceName, anthropic.HasToolChoice = choice.Mode, choice.Function, true
 	}
-	r.stream(ctx, state, model, conversation, options, anthropic, credential.Key, emit)
+	headers, err := providercatalog.ResolveHeaders(r.Catalog, r.Environment, ref.ProviderID)
+	if err != nil {
+		if envelope, err := state.Failed(CodeInvalidRequest, err.Error()); err == nil {
+			emit(envelope)
+		}
+		return
+	}
+	r.stream(ctx, state, model, conversation, options, anthropic, credential.Key, headers, emit)
 }
 
 func present(raw json.RawMessage) bool {
@@ -424,7 +431,7 @@ func textOf(content json.RawMessage) (string, error) {
 	return joined.String(), nil
 }
 
-func (r *Runner) stream(ctx context.Context, state *State, model provider.Model, conversation provider.Context, options provider.StreamOptions, anthropic provider.AnthropicOptions, key string, emit func(Envelope)) {
+func (r *Runner) stream(ctx context.Context, state *State, model provider.Model, conversation provider.Context, options provider.StreamOptions, anthropic provider.AnthropicOptions, key string, extra map[string]string, emit func(Envelope)) {
 	sink := &provider.EventSink{OnEvent: func(event provider.Event) {
 		if event.Kind == provider.EventError && ctx.Err() != nil {
 			event.Reason = ReasonCancelled
@@ -445,6 +452,18 @@ func (r *Runner) stream(ctx context.Context, state *State, model provider.Model,
 	} else {
 		body = provider.BuildRequestBody(model, conversation, options)
 		headers = []provider.Header{{Name: "authorization", Value: provider.BearerValue(key)}}
+	}
+	for name, value := range extra {
+		present := strings.EqualFold(name, "content-type") || strings.EqualFold(name, "accept")
+		for _, header := range headers {
+			if strings.EqualFold(header.Name, name) {
+				present = true
+				break
+			}
+		}
+		if !present {
+			headers = append(headers, provider.Header{Name: name, Value: value})
+		}
 	}
 	url, ok := providercatalog.RequestURLForWire(r.Catalog, model.Provider, model.API, model.BaseURL)
 	if !ok {
