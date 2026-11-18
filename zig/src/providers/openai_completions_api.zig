@@ -1476,7 +1476,7 @@ fn runThread(ctx: *ThreadCtx) void {
     else
         null;
 
-    var attempts = retry.Attempts.init(if (retry_config) |rc| rc.max_retry_delay_ms else null);
+    var attempts = retry.Attempts.init(if (retry_config) |rc| rc.max_retry_delay_ms else null, if (retry_config) |rc| rc.max_rate_limit_retries else null);
 
     var response: compat_mod.http.Response = undefined;
     var head_buf: [4096]u8 = undefined;

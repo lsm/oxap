@@ -60,6 +60,7 @@ pub const HeaderPair = struct {
 
 pub const RetryConfig = struct {
     max_retry_delay_ms: ?u32 = 60_000,
+    max_rate_limit_retries: ?u32 = null,
 };
 
 pub const CancelToken = struct {
