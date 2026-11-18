@@ -1206,13 +1206,10 @@ fn runThread(ctx: *ThreadCtx) void {
     };
     const headers = header_set.headers.items;
 
-    const MAX_RETRIES: u8 = 3;
-    const BASE_DELAY_MS: u32 = 1000;
-    const max_delay_ms: u32 = if (retry_options) |ro| ro.max_retry_delay_ms orelse 60000 else 60000;
+    var attempts = retry_util.Attempts.init(if (retry_options) |ro| ro.max_retry_delay_ms else null);
 
     var response: compat.http.Response = undefined;
     var head_buf: [4096]u8 = undefined;
-    var retry_attempt: u8 = 0;
     var last_error: ?[]u8 = null;
     defer if (last_error) |e| allocator.free(e);
     var req: compat.http.Request = undefined;
@@ -1244,12 +1241,8 @@ fn runThread(ctx: *ThreadCtx) void {
             .accept_encoding = "identity",
             .user_agent = if (sessionHeaderFor(model) != null) client_user_agent else null,
         }) catch {
-            if (retry_attempt < MAX_RETRIES) {
-                const delay = retry_util.calculateDelay(retry_attempt, BASE_DELAY_MS, max_delay_ms);
-                if (retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) {
-                    retry_attempt += 1;
-                    continue;
-                }
+            if (attempts.afterTransportError()) |delay| {
+                if (retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) continue;
                 ctx.deinit();
                 stream.completeWithError("request cancelled");
                 return;
@@ -1261,12 +1254,8 @@ fn runThread(ctx: *ThreadCtx) void {
         req_initialized = true;
 
         compat.http.sendRequest(&req, request_body) catch {
-            if (retry_attempt < MAX_RETRIES) {
-                const delay = retry_util.calculateDelay(retry_attempt, BASE_DELAY_MS, max_delay_ms);
-                if (retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) {
-                    retry_attempt += 1;
-                    continue;
-                }
+            if (attempts.afterTransportError()) |delay| {
+                if (retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) continue;
                 ctx.deinit();
                 stream.completeWithError("request cancelled");
                 return;
@@ -1283,12 +1272,8 @@ fn runThread(ctx: *ThreadCtx) void {
         }
 
         response = compat.http.receiveResponse(&req, &head_buf) catch {
-            if (retry_attempt < MAX_RETRIES) {
-                const delay = retry_util.calculateDelay(retry_attempt, BASE_DELAY_MS, max_delay_ms);
-                if (retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) {
-                    retry_attempt += 1;
-                    continue;
-                }
+            if (attempts.afterTransportError()) |delay| {
+                if (retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) continue;
                 ctx.deinit();
                 stream.completeWithError("request cancelled");
                 return;
@@ -1303,46 +1288,12 @@ fn runThread(ctx: *ThreadCtx) void {
         }
 
         const status_code: u16 = @intFromEnum(response.head.status);
-        const should_retry = retry_util.isRetryable(status_code) and retry_attempt < MAX_RETRIES;
-
-        if (should_retry) {
-            const error_text: []const u8 = &.{};
-
-            const is_retryable_error = retry_util.isRetryableError(error_text);
-
-            var delay = retry_util.calculateDelay(retry_attempt, BASE_DELAY_MS, max_delay_ms);
-
-            if (std.mem.find(u8, response.head.bytes, "\r\n") != null) {
-                var retry_after_iter = response.head.iterateHeaders();
-                while (retry_after_iter.next()) |header| {
-                    if (std.ascii.eqlIgnoreCase(header.name, "retry-after")) {
-                        if (retry_util.extractRetryDelayFromHeader(header.value)) |server_delay| {
-                            if (server_delay <= max_delay_ms) {
-                                delay = server_delay;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-
-            if (retry_util.extractRetryDelayFromBody(error_text)) |body_delay| {
-                if (body_delay <= max_delay_ms) {
-                    delay = body_delay;
-                }
-            }
-
-            if (!is_retryable_error and !retry_util.isRetryable(status_code)) {
-                break;
-            }
-
+        if (attempts.afterStatus(status_code, retry_util.retryAfter(&response.head))) |delay| {
             if (!retry_util.sleepMs(delay, if (cancel_token) |ct| ct.cancelled else null)) {
                 ctx.deinit();
                 stream.completeWithError("request cancelled");
                 return;
             }
-
-            retry_attempt += 1;
             continue;
         }
 

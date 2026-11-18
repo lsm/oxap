@@ -54,6 +54,46 @@ pub fn calculateDelay(attempt: u8, base_delay_ms: u32, max_delay_ms: u32) u64 {
     return @min(exp_delay, max_delay_ms);
 }
 
+pub const Attempts = struct {
+    config: RetryConfig,
+    taken: u32 = 0,
+
+    pub fn init(max_delay_ms: ?u32) Attempts {
+        return .{ .config = .{ .max_delay_ms = max_delay_ms orelse 60000, .jitter_factor = 0 } };
+    }
+
+    pub fn afterTransportError(self: *Attempts) ?u64 {
+        if (self.taken >= self.config.max_retries) return null;
+        const delay = self.backoff();
+        self.taken += 1;
+        return delay;
+    }
+
+    pub fn afterStatus(self: *Attempts, status: u16, retry_after: ?[]const u8) ?u64 {
+        if (!isRetryable(status) or self.taken >= self.config.max_retries) return null;
+        var delay = self.backoff();
+        if (extractRetryDelayFromHeader(retry_after)) |server_delay| {
+            if (server_delay <= self.config.max_delay_ms) delay = server_delay;
+        }
+        self.taken += 1;
+        return delay;
+    }
+
+    fn backoff(self: *const Attempts) u64 {
+        const shift: u6 = @intCast(@min(self.taken, 63));
+        return @min(self.config.base_delay_ms *% (@as(u64, 1) << shift), self.config.max_delay_ms);
+    }
+};
+
+pub fn retryAfter(head: anytype) ?[]const u8 {
+    if (std.mem.find(u8, head.bytes, "\r\n") == null) return null;
+    var headers = head.iterateHeaders();
+    while (headers.next()) |header| {
+        if (std.ascii.eqlIgnoreCase(header.name, "retry-after")) return header.value;
+    }
+    return null;
+}
+
 pub fn extractRetryDelayFromHeader(header_value: ?[]const u8) ?u64 {
     const value = header_value orelse return null;
     const trimmed = std.mem.trim(u8, value, " \t\r\n");
@@ -666,4 +706,41 @@ test "httpStatus reads the first status and ignores the rest" {
     try std.testing.expectEqual(@as(?u16, 403), httpStatus("kimi request failed: HTTP 403 (HTTP 500 inside)"));
     try std.testing.expectEqual(@as(?u16, null), httpStatus("no status here"));
     try std.testing.expectEqual(@as(?u16, null), httpStatus("HTTP nope"));
+}
+
+test "Attempts backs off 1, 2 and 4 seconds after transport errors, then gives up" {
+    var attempts = Attempts.init(null);
+    try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
+    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterTransportError());
+    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterTransportError());
+    try std.testing.expectEqual(@as(?u64, null), attempts.afterTransportError());
+}
+
+test "Attempts caps the backoff at the configured maximum delay" {
+    var attempts = Attempts.init(1500);
+    try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
+    try std.testing.expectEqual(@as(?u64, 1500), attempts.afterTransportError());
+}
+
+test "Attempts retries only retryable statuses and shares one budget with transport errors" {
+    var attempts = Attempts.init(null);
+    try std.testing.expectEqual(@as(?u64, null), attempts.afterStatus(400, null));
+    try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
+    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(503, null));
+    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterStatus(429, null));
+    try std.testing.expectEqual(@as(?u64, null), attempts.afterStatus(429, null));
+}
+
+test "Attempts takes Retry-After within the maximum and ignores it beyond" {
+    var attempts = Attempts.init(10000);
+    try std.testing.expectEqual(@as(?u64, 7000), attempts.afterStatus(429, "7"));
+    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(429, "30"));
+    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterStatus(429, "soon"));
+}
+
+test "retryAfter reads the first Retry-After header of a response head" {
+    const head = try std.http.Client.Response.Head.parse("HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nretry-after: 12\r\nRetry-After: 99\r\n\r\n");
+    try std.testing.expectEqualStrings("12", retryAfter(&head).?);
+    const none = try std.http.Client.Response.Head.parse("HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\n\r\n");
+    try std.testing.expectEqual(@as(?[]const u8, null), retryAfter(&none));
 }
