@@ -5757,3 +5757,20 @@ test "an open whose oxap and oapx settings disagree on anything is refused befor
         try testing.expectEqualStrings("metadata carries oxap and oapx settings that disagree; send one of them", refusal.message);
     }
 }
+
+test "attached source descriptions survive reuse of the open request buffer" {
+    var keep = std.heap.ArenaAllocator.init(testing.allocator);
+    defer keep.deinit();
+    var request = std.heap.ArenaAllocator.init(testing.allocator);
+    defer request.deinit();
+    var bridge = local_tools.mcp_bridge.McpBridge.init(testing.allocator);
+    defer bridge.deinit();
+    const raw = try request.allocator().dupe(u8, "[{\"id\":\"files\",\"kind\":\"process\",\"command\":\"/bin/true\",\"display_name\":\"Files\",\"protocol\":\"mcp\",\"endpoint\":\"stdio:files\"}]");
+    var refusal = contract.Refusal{};
+    const sources = try attachMcp(keep.allocator(), request.allocator(), raw, &bridge, &refusal);
+    @memset(raw, 'x');
+    try testing.expectEqualStrings("files", sources[1].id);
+    try testing.expectEqualStrings("Files", sources[1].display_name.?);
+    try testing.expectEqualStrings("mcp", sources[1].protocol.?);
+    try testing.expectEqualStrings("stdio:files", sources[1].endpoint.?);
+}
