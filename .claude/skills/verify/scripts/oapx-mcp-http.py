@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import ssl
+import subprocess
 import sys
 import tempfile
 import time
@@ -66,6 +67,11 @@ class Mcp(http.server.BaseHTTPRequestHandler):
         self.send_response(204); self.end_headers()
 
 
+class Unconfigured(Mcp):
+    methods = []
+    ping_answered = threading.Event()
+
+
 def main():
     output = Path(sys.argv[1]).resolve(); output.mkdir(parents=True, exist_ok=False)
     with tempfile.TemporaryDirectory(prefix='oap-mcp-http-') as temporary:
@@ -73,13 +79,14 @@ def main():
         binary = root / 'oxap'; shutil.copy2(base.ROOT / 'zig/zig-out/bin/oxap', binary)
         provider = http.server.ThreadingHTTPServer(('127.0.0.1', 0), stdio.Provider)
         mcp = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Mcp)
+        unconfigured = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Unconfigured)
         scheme = 'http'
         if os.environ.get('OAP_VERIFY_TLS_CERT'):
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(os.environ['OAP_VERIFY_TLS_CERT'], os.environ['OAP_VERIFY_TLS_KEY'])
             mcp.socket = context.wrap_socket(mcp.socket, server_side=True)
             scheme = 'https'
-        threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (provider, mcp)]
+        threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (provider, mcp, unconfigured)]
         for thread in threads: thread.start()
         url = f'http://127.0.0.1:{provider.server_port}/v1'
         (data / 'providers.json').write_text(json.dumps({'providers':[{'id':'synthetic','api':'openai-completions','base_url':url,'auth':'none','models':['synthetic-model']}]}))
@@ -94,6 +101,15 @@ def main():
         hub = None
         try:
             hub = base.Hub(command, environment, root, output, 'http', flags=('--no-save-oapx-sessions',))
+            rejected = base.envelope('session.open.request', {'session_id':'wire-source','tool_sources':[{'id':'unconfigured','kind':'remote','endpoint':f'http://127.0.0.1:{unconfigured.server_port}/mcp'}]})
+            try:
+                hub.call('open', adapter='loop', request=rejected)
+            except AssertionError as error:
+                response = error.args[0]
+                assert isinstance(response, dict) and response['error']['code'] == 'unsupported_feature' and response['error']['details'].get('source') == 'unconfigured', response
+            else:
+                raise AssertionError('unconfigured remote source was accepted')
+            assert not Unconfigured.methods, Unconfigured.methods
             feature = hub.call('capabilities', adapter='loop')['payload']['features']['action.tool_sources.attach']
             assert 'remote' in feature['modes'] and 'remote' in feature['limits']['transports'], feature
             request = base.envelope('session.open.request', {'session_id':'http-proof','tool_sources':[{'id':'demo','kind':'remote'}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
@@ -121,6 +137,11 @@ def main():
             else: raise AssertionError('run did not return to idle')
             assert 'echoed:hello' in json.dumps(stdio.Provider.requests[-1]), stdio.Provider.requests
             hub.stop(); hub = None
+            initialize = base.envelope('protocol.initialize.request', {'protocol_versions':['0.1'], 'profiles':['open-agent-protocol.agent-control-core'], 'participant':{'id':'user'}})
+            direct = subprocess.run(command + ['serve', 'agent', '--backend', 'loop', '--config', str(root / 'hub.json'), '--stdio'], input=''.join(json.dumps(x) + '\n' for x in [initialize, rejected]), text=True, cwd=root, env=environment, capture_output=True, timeout=30)
+            frames = [json.loads(line) for line in direct.stdout.splitlines()]
+            assert direct.returncode == 0 and any(frame.get('payload', {}).get('error', {}).get('details', {}).get('source') == 'unconfigured' for frame in frames), (direct.returncode, frames, direct.stderr)
+            assert not Unconfigured.methods, Unconfigured.methods
             assert Mcp.ping_answered.is_set()
             expected = ['initialize','notifications/initialized','tools/list','tools/call']
             if Mcp.stateful: expected.append('DELETE')
@@ -128,7 +149,7 @@ def main():
             print(f'PASS: {len(Mcp.methods)} {scheme.upper()} lifecycle messages; tool result reached model')
         finally:
             if hub: hub.stop()
-            for server in (provider, mcp): server.shutdown(); server.server_close()
+            for server in (provider, mcp, unconfigured): server.shutdown(); server.server_close()
             for thread in threads: thread.join()
 
 if __name__ == '__main__': main()
