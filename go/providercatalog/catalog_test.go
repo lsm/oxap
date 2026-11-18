@@ -37,6 +37,17 @@ func TestLoadReadsTheCheckedInCatalog(t *testing.T) {
 	}
 }
 
+func TestCatalogAcceptsLiteralAndEnvironmentHeaders(t *testing.T) {
+	schema, err := CompileSchema(providers.Files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Parse(schema, "catalog", []byte(`{"providers":[{"id":"example","headers":{"X-Mode":"on","X-Token":{"env":"EXAMPLE_HEADER"}}}]}`))
+	if err != nil {
+		t.Fatalf("catalog headers: %v", err)
+	}
+}
+
 func TestLoadRefusesAnUnknownMemberAndAnEmptyCatalog(t *testing.T) {
 	schema := []byte(`{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"catalog.schema.json","type":"object","required":["providers"],"properties":{"providers":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/provider"}}},"additionalProperties":false,"$defs":{"provider":{"type":"object","required":["id"],"properties":{"id":{"type":"string","minLength":1}},"additionalProperties":false}}}`)
 	files := func(catalog string) fstest.MapFS {
