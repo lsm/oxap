@@ -1203,6 +1203,7 @@ dependencies = [
  "jsonschema",
  "oxap-adapter",
  "oxap-adapter-acp",
+ "oxap-adapter-codex-appserver",
  "oxap-adapter-deepseek",
  "oxap-binding",
  "oxap-protocol",

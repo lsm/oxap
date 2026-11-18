@@ -71,6 +71,9 @@ struct AdapterEntry {
     provider: String,
     model: String,
     max_tokens: Option<i64>,
+    approval_policy: String,
+    sandbox: String,
+    endpoint: String,
 }
 
 #[derive(serde::Deserialize, Default)]
@@ -182,6 +185,33 @@ impl Registry {
                     )
                     .map_err(|err| refuse(err.to_string()))?,
                 ),
+                "codex" => {
+                    if !entry.endpoint.is_empty() {
+                        return Err(refuse(
+                            "a codex \"endpoint\" relays to Codex's shared app-server, which only oapx serves"
+                                .into(),
+                        ));
+                    }
+                    Arc::new(
+                        oxap_adapter_codex_appserver::adapter::Adapter::new(
+                            oxap_adapter_codex_appserver::adapter::Config {
+                                process: oxap_adapter_codex_appserver::process::ProcessConfig {
+                                    path: entry.executable,
+                                    args: entry.args,
+                                    dir: entry.working_directory.clone(),
+                                    env: Some(environment),
+                                    ..Default::default()
+                                },
+                                model: entry.model,
+                                approval_policy: entry.approval_policy,
+                                sandbox: entry.sandbox,
+                                journal_capacity: entry.journal_capacity as usize,
+                                ..Default::default()
+                            },
+                        )
+                        .map_err(|err| refuse(err.to_string()))?,
+                    )
+                }
                 harness if HARNESS_TYPES.contains(&harness) => {
                     return Err(refuse(format!(
                         "type {harness:?} is not built in the Rust tree yet"
