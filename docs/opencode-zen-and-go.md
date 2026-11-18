@@ -42,7 +42,7 @@ oapx reaches those models only through an OpenCode server it runs, never by
 presenting itself as OpenCode's client from its own loop.
 
 The terminal UI is that route: when an `opencode` it has been tested with is
-available (the one `oapx opencode install` fetched, else `opencode` on `PATH`),
+available (the one `oxap harness install opencode` fetched, else `opencode` on `PATH`),
 it starts that server in the background and lists the models the server reports
 in `/model` under `opencode-server`, free ones included. Picking one opens a new
 session on OpenCode's own loop and tools.

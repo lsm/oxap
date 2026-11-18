@@ -267,7 +267,7 @@ sequenceDiagram
         O->>S: GET /api/info
     end
     alt version not admitted by the catalog
-        O-->>C: refuse, naming the tested version and oxap opencode install
+        O-->>C: refuse, naming the tested version and oxap harness install opencode
     else admitted
         C->>O: session.open / session.message.submit
         O->>S: create session, prompt
@@ -280,14 +280,18 @@ sequenceDiagram
 To run the terminal UI over OpenCode:
 
 ```sh
-oxap opencode install
+oxap harness install opencode
 oxap tui --backend opencode
 ```
 
-`oxap opencode install` downloads the OpenCode build the catalog pins for this
-platform (`v2.2.7`), checks its sha256, and unpacks it under
+`oxap harness install opencode` downloads the OpenCode build the catalog pins for this
+platform (`v2.2.7`) from the official OpenCode distribution, checks the archive
+and executable sha256, and unpacks it under
 `~/.oxap/opencode/<version>`. `oxap tui --backend opencode` then starts that
-server, runs the terminal UI over it, and stops it on exit. With
+server, runs the terminal UI over it, and stops it on exit. An optional
+`--version <v>` must name the current catalog pin; `oxap opencode install`
+remains an alias. An existing executable is checked again, and a mismatch is
+refused without replacing it. Other harness installers will follow. With
 `--config <path>` it takes the registry entry named `opencode` instead, and an
 entry naming an `endpoint` attaches to a server that is already running.
 
@@ -336,7 +340,7 @@ as a `user.input` gate. `--config <path>` takes the entry of that name from a
 registry shaped like [`examples/oap-serve.json`](examples/oap-serve.json):
 unknown members are refused and `environment` is an explicit allowlist.
 `--backend opencode` with no `endpoint` starts its own `opencode serve` (the
-entry's `executable`, else the one `oxap opencode install` put under
+entry's `executable`, else the one `oxap harness install opencode` put under
 `~/.oxap/opencode/<version>`, else `opencode` from `PATH`) on a loopback port under a fresh password,
 logs it to `~/.oxap/opencode/<entry>.log`, refuses a server whose `/api/info`
 reports a version the catalog does not admit, and stops it on exit; an entry
