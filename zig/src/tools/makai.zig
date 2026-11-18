@@ -3949,7 +3949,42 @@ fn buildOapInferenceModel(
     const from_file = if (file) |found| auth_resolver.overrideApplies(allocator, found, served.provider, model.base_url) else false;
     if (from_file and file.?.base_url.len > 0) model.carries_version = file.?.carries_version;
     if (from_file and file.?.headers.len > 0) {
-        const headers = try dupeHeaderPairs(allocator, file.?.headers);
+        var combined: std.ArrayList(ai_types.HeaderPair) = .empty;
+        defer combined.deinit(allocator);
+        try combined.appendSlice(allocator, file.?.headers);
+        if (model.headers) |previous| {
+            for (previous) |header| {
+                var present = false;
+                for (combined.items) |current| {
+                    if (std.ascii.eqlIgnoreCase(current.name, header.name)) present = true;
+                }
+                if (!present) try combined.append(allocator, header);
+            }
+        }
+        const headers = try dupeHeaderPairs(allocator, combined.items);
+        if (model.headers) |previous| {
+            for (previous) |header| {
+                allocator.free(header.name);
+                allocator.free(header.value);
+            }
+            allocator.free(previous);
+        }
+        model.headers = headers;
+    }
+    const catalog_headers = try provider_catalog.resolveHeaders(allocator, served.provider);
+    defer provider_catalog.freeResolvedHeaders(allocator, catalog_headers);
+    if (catalog_headers.len > 0) {
+        var combined: std.ArrayList(ai_types.HeaderPair) = .empty;
+        defer combined.deinit(allocator);
+        if (model.headers) |previous| try combined.appendSlice(allocator, previous);
+        for (catalog_headers) |header| {
+            var present = false;
+            for (combined.items) |current| {
+                if (std.ascii.eqlIgnoreCase(current.name, header.name)) present = true;
+            }
+            if (!present) try combined.append(allocator, header);
+        }
+        const headers = try dupeHeaderPairs(allocator, combined.items);
         if (model.headers) |previous| {
             for (previous) |header| {
                 allocator.free(header.name);

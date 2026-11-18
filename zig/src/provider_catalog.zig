@@ -8,6 +8,7 @@ pub const AuthKind = data.AuthKind;
 pub const Offering = data.Offering;
 pub const Status = data.Status;
 pub const Endpoint = data.Endpoint;
+pub const Header = data.Header;
 pub const Model = data.Model;
 pub const OAuthOrigin = data.OAuthOrigin;
 pub const Provider = data.Provider;
@@ -16,6 +17,43 @@ pub const Pinned = data.Pinned;
 pub const all = data.providers;
 
 pub const pinned = data.pinned;
+
+pub fn resolveHeaders(allocator: std.mem.Allocator, id: []const u8) ![]const ai_types.HeaderPair {
+    const row = provider(id) orelse return &.{};
+    var result: std.ArrayList(ai_types.HeaderPair) = .empty;
+    errdefer {
+        for (result.items) |header| {
+            allocator.free(header.name);
+            allocator.free(header.value);
+        }
+        result.deinit(allocator);
+    }
+    for (row.headers) |header| {
+        const name = try allocator.dupe(u8, header.name);
+        errdefer allocator.free(name);
+        const value = if (header.literal) |literal|
+            try allocator.dupe(u8, literal)
+        else if (header.env) |variable|
+            compat.getEnvVarOwned(allocator, variable) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.MissingHeaderEnvironment,
+            }
+        else
+            return error.InvalidHeaderEnvironment;
+        errdefer allocator.free(value);
+        if (header.env != null and value.len == 0) return error.MissingHeaderEnvironment;
+        try result.append(allocator, .{ .name = name, .value = value });
+    }
+    return try result.toOwnedSlice(allocator);
+}
+
+pub fn freeResolvedHeaders(allocator: std.mem.Allocator, headers: []const ai_types.HeaderPair) void {
+    for (headers) |header| {
+        allocator.free(header.name);
+        allocator.free(header.value);
+    }
+    allocator.free(headers);
+}
 
 pub const catalog_loader_rows = [_][]const u8{
     "deepseek",

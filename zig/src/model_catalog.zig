@@ -427,6 +427,9 @@ fn fetchCopilotModelsCatalog(allocator: std.mem.Allocator, token: []const u8, ba
     try headers.append(allocator, .{ .name = "editor-plugin-version", .value = github_copilot.COPILOT_HEADERS.editor_plugin_version });
     try headers.append(allocator, .{ .name = "copilot-integration-id", .value = github_copilot.COPILOT_HEADERS.copilot_integration_id });
     try headers.append(allocator, .{ .name = "x-github-api-version", .value = github_copilot.COPILOT_HEADERS.api_version });
+    const catalog_headers = try provider_catalog.resolveHeaders(allocator, github_copilot_provider_id);
+    defer provider_catalog.freeResolvedHeaders(allocator, catalog_headers);
+    try appendOverrideHeaders(allocator, &headers, catalog_headers);
 
     const models_url = try std.fmt.allocPrint(allocator, "{s}/models", .{std.mem.trimEnd(u8, base_url, "/")});
     defer allocator.free(models_url);
@@ -1002,13 +1005,14 @@ fn rowDropsOnRefusal(id: []const u8) bool {
 fn appendCatalogTargetModels(
     allocator: std.mem.Allocator,
     out: *std.ArrayList(ai_types.Model),
-    target: CatalogEndpoint,
+    source: CatalogEndpoint,
     storage: ?*oauth_storage.AuthStorage,
     mode: CatalogLoadMode,
     provenance: ?*std.ArrayList(ModelProvenance),
     models_dev: *ModelsDev,
     refusals: ?*KeyRefusals,
 ) !void {
+    var target = source;
     const environment = try catalogEnvironment(allocator, target.id);
     defer freeEnvironment(allocator, environment);
 
@@ -1020,6 +1024,16 @@ fn appendCatalogTargetModels(
             found = null;
         };
     } else if (found == null) return;
+
+    const catalog_headers = try provider_catalog.resolveHeaders(allocator, target.id);
+    defer provider_catalog.freeResolvedHeaders(allocator, catalog_headers);
+    var combined: std.ArrayList(ai_types.HeaderPair) = .empty;
+    defer combined.deinit(allocator);
+    try combined.appendSlice(allocator, target.headers);
+    for (catalog_headers) |header| {
+        if (!headerNamed(combined.items, header.name)) try combined.append(allocator, header);
+    }
+    target.headers = combined.items;
 
     const token = if (found) |credential| credential.key else "";
     const honour_marker = if (found) |credential| credential.source == .stored else false;
@@ -1061,7 +1075,7 @@ fn appendCatalogTargetModels(
                     const spec = allowlistSpec(target.allowlist, model.id) orelse continue;
                     shapeBySpec(&shaped, spec);
                 }
-                var built = try catalogModel(allocator, target, shaped);
+                var built = try catalogModel(allocator, source, shaped);
                 var built_owned = true;
                 errdefer if (built_owned) built.deinit(allocator);
                 try out.append(allocator, built);
@@ -1077,7 +1091,7 @@ fn appendCatalogTargetModels(
             if (servedOnlyInsideOpenCode(target, spec.id)) continue;
             var shaped = DiscoveredModel{ .id = spec.id };
             shapeBySpec(&shaped, spec);
-            var built = try catalogModel(allocator, target, shaped);
+            var built = try catalogModel(allocator, source, shaped);
             var built_owned = true;
             errdefer if (built_owned) built.deinit(allocator);
             try out.append(allocator, built);
@@ -1088,7 +1102,7 @@ fn appendCatalogTargetModels(
     }
 
     for (provider_catalog.modelsFor(target.id)) |declared| {
-        var built = try catalogModel(allocator, target, .{ .id = declared.id });
+        var built = try catalogModel(allocator, source, .{ .id = declared.id });
         var built_owned = true;
         errdefer if (built_owned) built.deinit(allocator);
         try out.append(allocator, built);
@@ -2332,6 +2346,9 @@ fn fetchAnthropicModelsCatalog(allocator: std.mem.Allocator, token: []const u8) 
     } else {
         try headers.append(allocator, .{ .name = "x-api-key", .value = token });
     }
+    const catalog_headers = try provider_catalog.resolveHeaders(allocator, anthropic_provider_id);
+    defer provider_catalog.freeResolvedHeaders(allocator, catalog_headers);
+    try appendOverrideHeaders(allocator, &headers, catalog_headers);
 
     const models_url = try std.fmt.allocPrint(allocator, "{s}/v1/models?limit=100", .{anthropic_base_url});
     defer allocator.free(models_url);
@@ -2611,6 +2628,9 @@ fn fetchCodexModelsCatalog(
     if (account_id) |id| {
         try headers.append(allocator, .{ .name = "ChatGPT-Account-ID", .value = id });
     }
+    const catalog_headers = try provider_catalog.resolveHeaders(allocator, openai_codex_provider_id);
+    defer provider_catalog.freeResolvedHeaders(allocator, catalog_headers);
+    try appendOverrideHeaders(allocator, &headers, catalog_headers);
 
     const fetched = compat.http.fetch(allocator, url, .{
         .method = .GET,

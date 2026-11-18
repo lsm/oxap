@@ -293,6 +293,12 @@ fn runThread(ctx: *ThreadCtx) void {
     headers.append(ctx.allocator, .{ .name = "content-type", .value = "application/json" }) catch {
         return ctx.stream.completeWithError("oom headers");
     };
+    if (ctx.model.headers) |extra| for (extra) |header| {
+        if (compat.http.headerPresent(headers.items, header.name)) continue;
+        headers.append(ctx.allocator, .{ .name = header.name, .value = header.value }) catch {
+            return ctx.stream.completeWithError("oom headers");
+        };
+    };
 
     var req = client.openRequest(.POST, uri, .{ .extra_headers = headers.items }) catch {
         ctx.stream.completeWithError("request failed");
@@ -320,7 +326,7 @@ fn runThread(ctx: *ThreadCtx) void {
         const detail = if (error_body) |eb| error_detail.describe(ctx.allocator, eb) catch null else null;
         defer if (detail) |text| ctx.allocator.free(text);
 
-        const status_code: u16 = @intFromEnum(response.head.status);
+        const status_code: u16 = @backingInt(response.head.status);
         const error_msg = std.fmt.allocPrint(ctx.allocator, "azure request failed: HTTP {d}{s}", .{
             status_code,
             detail orelse "",

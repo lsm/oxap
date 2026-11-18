@@ -42,9 +42,13 @@ func TestCatalogAcceptsLiteralAndEnvironmentHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Parse(schema, "catalog", []byte(`{"providers":[{"id":"example","headers":{"X-Mode":"on","X-Token":{"env":"EXAMPLE_HEADER"}}}]}`))
+	catalog, err := Parse(schema, "catalog", []byte(`{"providers":[{"id":"example","headers":{"X-Mode":"on","X-Token":{"env":"EXAMPLE_HEADER"}}}]}`))
 	if err != nil {
 		t.Fatalf("catalog headers: %v", err)
+	}
+	mode := catalog.Providers[0].Headers["X-Mode"]
+	if mode.Literal == nil || *mode.Literal != "on" || catalog.Providers[0].Headers["X-Token"].Env != "EXAMPLE_HEADER" {
+		t.Fatal("catalog header values were not preserved")
 	}
 }
 

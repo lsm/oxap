@@ -4,7 +4,7 @@ mod baseurl;
 mod credential;
 mod row;
 
-use std::sync::OnceLock;
+use std::{collections::BTreeMap, sync::OnceLock};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,6 +45,13 @@ pub struct Catalog {
     pub providers: Vec<Provider>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum HeaderValue {
+    Literal(String),
+    Environment { env: String },
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Provider {
@@ -71,6 +78,8 @@ pub struct Provider {
     pub base_url_source: String,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub endpoints: Vec<Endpoint>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, HeaderValue>,
     #[serde(rename = "models_endpoint", skip_serializing_if = "String::is_empty")]
     pub models_path: String,
     #[serde(skip_serializing_if = "String::is_empty")]
