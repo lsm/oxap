@@ -204,6 +204,7 @@ const McpServerSession = struct {
                 return err;
             };
             defer response.deinit(allocator);
+            if (response.challenge != null) return error.McpHttpFailure;
             if (response.session) |session| {
                 const replacement = try allocator.dupe(u8, session);
                 if (self.http_session) |old| allocator.free(old);
