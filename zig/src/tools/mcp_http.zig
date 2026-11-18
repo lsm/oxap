@@ -22,10 +22,12 @@ fn sharedIo() !std.Io {
 pub const Reply = struct {
     body: []u8,
     session: ?[]u8,
+    challenge: ?[]u8 = null,
 
     pub fn deinit(self: *Reply, a: std.mem.Allocator) void {
         a.free(self.body);
         if (self.session) |s| a.free(s);
+        if (self.challenge) |s| a.free(s);
     }
 };
 
