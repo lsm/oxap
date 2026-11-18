@@ -43,6 +43,7 @@ const Job = struct {
     method: std.http.Method,
     result: ?[]u8 = null,
     new_session: ?[]u8 = null,
+    challenge: ?[]u8 = null,
     failure: ?anyerror = null,
 
     fn release(self: *Job) void {
@@ -52,6 +53,7 @@ const Job = struct {
         if (self.body) |s| alloc.free(s);
         if (self.result) |s| alloc.free(s);
         if (self.new_session) |s| alloc.free(s);
+        if (self.challenge) |s| alloc.free(s);
         alloc.destroy(self);
     }
 
@@ -93,6 +95,15 @@ const Job = struct {
         var redirect: [8192]u8 = undefined;
         var response = try compat.http.receiveResponse(&request, &redirect);
         const status = @backingInt(response.head.status);
+        if (status == 401 and primary) {
+            var auth_headers = response.head.iterateHeaders();
+            while (auth_headers.next()) |header| {
+                if (std.ascii.eqlIgnoreCase(header.name, "www-authenticate")) {
+                    self.challenge = try alloc.dupe(u8, header.value);
+                    return;
+                }
+            }
+        }
         if (status < 200 or status >= 300) return error.McpHttpFailure;
         var is_sse = false;
         var iterator = response.head.iterateHeaders();
@@ -215,5 +226,7 @@ pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initial
     if (job.failure) |err| return err;
     const result = try a.dupe(u8, job.result orelse "");
     errdefer a.free(result);
-    return .{ .body = result, .session = if (job.new_session) |s| try a.dupe(u8, s) else null };
+    const new_session = if (job.new_session) |s| try a.dupe(u8, s) else null;
+    errdefer if (new_session) |s| a.free(s);
+    return .{ .body = result, .session = new_session, .challenge = if (job.challenge) |s| try a.dupe(u8, s) else null };
 }
