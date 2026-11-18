@@ -38,6 +38,7 @@ class Provider(base.Provider):
 SERVER = '''import json,os,signal,sys
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 assert os.environ.get("EXAMPLE_ALLOWED") == "fixture"
+assert os.environ.get("EXAMPLE_CLIENT") == "approved"
 assert "EXAMPLE_PRIVATE" not in os.environ
 open(os.environ["EXAMPLE_START"], "a").write("start")
 for line in sys.stdin:
@@ -64,7 +65,7 @@ def main():
         url = f'http://127.0.0.1:{server.server_port}/v1'
         (data / 'providers.json').write_text(json.dumps({'providers':[{'id':'synthetic','api':'openai-completions','base_url':url,'auth':'none','models':['synthetic-model']}]}))
         (data / 'config.json').write_text(json.dumps({'model':'synthetic-model','provider':'synthetic','api':'openai-completions','workspace':str(root)}))
-        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx'}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','display_name':'Synthetic MCP service','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture', 'EXAMPLE_MARKER=' + str(root / 'closed'), 'EXAMPLE_START=' + str(root / 'started')]}}}))
+        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx', 'environment':['EXAMPLE_CLIENT=approved']}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','display_name':'Synthetic MCP service','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture', 'EXAMPLE_MARKER=' + str(root / 'closed'), 'EXAMPLE_START=' + str(root / 'started')]}}}))
         environment = {'PATH':'/usr/bin:/bin','HOME':str(home),'TMPDIR':str(root),'NODE_ENV':'test','EXAMPLE_PRIVATE':'must-not-inherit','OAPX_KEYCHAIN_SERVICE':'oap-verify-'+str(uuid.uuid4())}
         command = [str(binary)]
         if sys.platform == 'darwin':
@@ -88,7 +89,7 @@ def main():
             except AssertionError as error:
                 assert isinstance(error.args[0], dict), error
             assert not (root / 'started').exists(), 'invalid open started the MCP server'
-            request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process'}], 'tools':[{'name':'host_lookup','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
+            request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process','environment':['EXAMPLE_CLIENT']}], 'tools':[{'name':'host_lookup','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             result = hub.call('open', adapter='loop', request=request)
             assert 'error' not in result.get('payload', {}), result
             assert any(source['id'] == 'demo' for source in result['payload']['sources']), result
