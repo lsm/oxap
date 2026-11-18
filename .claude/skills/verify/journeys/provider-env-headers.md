@@ -9,4 +9,5 @@ NODE_ENV=test python3 .claude/skills/verify/scripts/provider-env-headers.py /tmp
 Require exit 0 and `PASS`. An isolated served session uses a synthetic loopback
 provider; the server checks the resolved and literal headers without recording
 header values. The journey also checks the retained artifacts and configuration
-do not contain the environment value.
+do not contain the environment value. An unset reference must refuse the turn
+without sending a provider request.

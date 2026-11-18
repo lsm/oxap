@@ -17,8 +17,13 @@ spec.loader.exec_module(base)
 
 class Provider(base.Provider):
     observed = []
+    def record(self):
+        self.observed.append((self.command, self.headers.get('X-Example') == 'fixture-tenant-value', self.headers.get('X-Literal') == 'literal'))
+    def do_GET(self):
+        self.record()
+        super().do_GET()
     def do_POST(self):
-        self.observed.append((self.headers.get('X-Example') == 'fixture-tenant-value', self.headers.get('X-Literal') == 'literal'))
+        self.record()
         super().do_POST()
 
 
@@ -53,12 +58,26 @@ def main():
             base.submit(hub, 'headers-proof', 'synthetic header turn')
             transcript = hub.call('work.read', session_id='headers-proof')
             assert base.REPLY in json.dumps(transcript), transcript
-            assert Provider.observed and all(all(pair) for pair in Provider.observed), Provider.observed
+            assert Provider.observed and any(row[0] == 'POST' for row in Provider.observed) and all(row[1] and row[2] for row in Provider.observed), Provider.observed
             hub.stop(); hub = None
             for artifact in output.iterdir():
                 assert 'fixture-tenant-value' not in artifact.read_text(), artifact.name
             assert 'fixture-tenant-value' not in (data / 'providers.json').read_text()
-            print(f'PASS: {len(Provider.observed)} provider requests carried both headers')
+            count = len(Provider.observed)
+            config['providers'][0]['headers']['X-Example']['env'] = 'OXAP_TEST_HEADER_ABSENT_1849'
+            (data / 'providers.json').write_text(json.dumps(config))
+            hub = base.Hub(command, environment, root, output, 'missing', flags=('--no-save-oapx-sessions',))
+            try:
+                base.open_session(hub, 'missing-header')
+                base.submit(hub, 'missing-header', 'synthetic missing header turn')
+            except AssertionError as error:
+                response = error.args[0]
+                assert isinstance(response, dict) and response.get('error', {}).get('code') == 'internal', response
+            else:
+                raise AssertionError('missing environment was accepted')
+            hub.stop(); hub = None
+            assert len(Provider.observed) == count, 'missing environment sent a provider request'
+            print(f'PASS: {count} provider requests carried both headers; missing environment sent none')
         finally:
             if hub: hub.stop()
             server.shutdown(); server.server_close(); thread.join()

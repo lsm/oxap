@@ -72,7 +72,7 @@ declared it says so and names `/provider add` rather than printing an empty list
 | `api` | no | `openai-completions` (default), `openai-responses` or `anthropic-messages`. |
 | `name` | no | Display name; defaults to the id. |
 | `auth` | no | Either `{ "env": "VAR" }` naming a non-empty environment variable, or the string `"none"` to send no credential at all. Anything else is a load error, including an object with no `env`, a non-string `env`, an empty `env`, and any other string. Omitting `auth` is fine and means the key comes from the keychain. |
-| `headers` | no | Extra request headers, as a flat object of strings. |
+| `headers` | no | Extra request headers; values are strings or `{ "env": "NAME" }` references. |
 | `models` | no | Allowlist and fallback list; strings, or objects with `id`, `name`, `context_window`, `max_tokens`. |
 | `capabilities` | no | Overrides for what the endpoint supports; see below. |
 | `reasoning` | no | Whether models expose reasoning. Default `false`. |
@@ -466,7 +466,14 @@ the model's base URL exactly as if no block had been sent.
 
 ## Headers
 
-`headers` entries are sent on every request to that provider. A header whose
+`headers` entries are sent on every request to that provider. Use a string for a
+literal value or an object such as `"X-Tenant": { "env": "TENANT_ID" }` to
+read a non-empty value from the named environment variable when the file loads.
+This works for custom providers and overrides. A malformed reference or a missing
+or empty variable rejects the configuration; the resolved value is not written
+to the file.
+
+A header whose
 name already exists is skipped rather than duplicated, so an `Authorization` or
 `anthropic-version` in configuration cannot shadow the credential the runtime
 resolved or the API version it requires.
