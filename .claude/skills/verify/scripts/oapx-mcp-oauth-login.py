@@ -94,7 +94,7 @@ class Server(http.server.BaseHTTPRequestHandler):
                 if auth and method == 'tools/call':
                     Server.reject_tool_once = False
                 self.send_response(401)
-                if not auth:
+                if not auth or self.static_auth:
                     challenge = f'Bearer resource_metadata="{self.server.origin}/resource-metadata"'
                     if self.scope_mode == 'challenge':
                         challenge += ', scope="tools:read tools:call"'
