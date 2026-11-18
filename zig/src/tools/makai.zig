@@ -1372,7 +1372,8 @@ fn printUsage(file: std.Io.File) !void {
         \\  oxap tui [--context-window <tokens>]           The terminal UI, over OAP through the in-process endpoint; what oxap alone starts
         \\                                                   --context-window takes a whole number, optionally with k or m
         \\  oxap tui --attach <url> [--adapter <name>]     The terminal UI over a running oxap serve's HTTP wire; adapter defaults to oapx
-        \\  oxap opencode install                            Download the OpenCode oxap is tested with into ~/.oxap/opencode
+        \\  oxap harness install opencode [--version <v>]   Install the catalog-pinned OpenCode
+        \\  oxap opencode install                            Alias for oxap harness install opencode
         \\  oxap tui --backend opencode [--config <path>]  The terminal UI over an OpenCode server oxap starts, or the entry's endpoint
         \\  oxap run [--backend <name>] [--config <path>] [--model <id>] [--system <text>] [--json] [--approve] ["<prompt>"]
         \\  oxap serve agent [--stdio] [--model <model-ref>]
@@ -1857,12 +1858,32 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    if (std.mem.eql(u8, args[1], "harness")) {
+        if (args.len < 4 or !std.mem.eql(u8, args[2], "install") or (args.len != 4 and args.len != 6) or (args.len == 6 and !std.mem.eql(u8, args[4], "--version"))) {
+            try compat.stdio.writeAll(stderr, "usage: oxap harness install <id> [--version <v>]\n");
+            std.process.exit(1);
+        }
+        if (!std.mem.eql(u8, args[3], "opencode")) {
+            try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(init.arena.allocator(), "oxap harness install: no pinned installable artifact for {s}\n", .{args[3]}));
+            std.process.exit(1);
+        }
+        if (args.len == 6 and !std.mem.eql(u8, args[5], opencode_install.label) and !std.mem.eql(u8, args[5], opencode_install.version)) {
+            try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(init.arena.allocator(), "oxap harness install: version {s} is unavailable; the catalog pins {s}\n", .{ args[5], opencode_install.label }));
+            std.process.exit(1);
+        }
+        installOpenCode(allocator, stdout, stderr, "oxap harness install") catch |err| {
+            if (err == error.InstallRefused) std.process.exit(1);
+            return err;
+        };
+        return;
+    }
+
     if (std.mem.eql(u8, args[1], "opencode")) {
         if (args.len != 3 or !std.mem.eql(u8, args[2], "install")) {
             try printUsage(stderr);
             return error.InvalidArgument;
         }
-        installOpenCode(allocator, stdout, stderr) catch |err| {
+        installOpenCode(allocator, stdout, stderr, "oxap opencode install") catch |err| {
             if (err == error.InstallRefused) std.process.exit(1);
             return err;
         };
@@ -5501,28 +5522,32 @@ fn deepseekBackendConfig(
     };
 }
 
-fn installOpenCode(allocator: std.mem.Allocator, stdout: std.Io.File, stderr: std.Io.File) !void {
+fn installOpenCode(allocator: std.mem.Allocator, stdout: std.Io.File, stderr: std.Io.File, command: []const u8) !void {
     var arena_state = std.heap.ArenaAllocator.init(allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const home = compat.getEnvVarOwned(arena, "HOME") catch "";
     if (home.len == 0) {
-        try compat.stdio.writeAll(stderr, "oxap opencode install: HOME is not set\n");
+        try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(arena, "{s}: HOME is not set\n", .{command}));
         return error.InstallRefused;
     }
+    const pinned = opencode_install.artifact orelse {
+        try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(arena, "{s}: oxap has not been tested with an OpenCode build for this platform\n", .{command}));
+        return error.InstallRefused;
+    };
     if (try opencode_install.installed(arena, home)) |path| {
+        if (!opencode_install.matchesPinnedBinary(path, pinned)) {
+            try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(arena, "{s}: installed executable does not match the catalog sha256: {s}\n", .{ command, path }));
+            return error.InstallRefused;
+        }
         try compat.stdio.writeAll(stdout, try std.fmt.allocPrint(arena, "OpenCode {s} is already installed at {s}\n", .{ opencode_install.version, path }));
         return;
     }
-    const pinned = opencode_install.artifact orelse {
-        try compat.stdio.writeAll(stderr, "oxap opencode install: oxap has not been tested with an OpenCode build for this platform\n");
-        return error.InstallRefused;
-    };
     try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(arena, "downloading OpenCode {s} ({s}, {d} MB)\n", .{ opencode_install.version, pinned.name, pinned.bytes / (1024 * 1024) }));
     var why: []const u8 = "";
     const path = opencode_install.install(allocator, arena, home, &why) catch |err| {
         if (err != error.InstallRefused) return err;
-        try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(arena, "oxap opencode install: {s}\n", .{why}));
+        try compat.stdio.writeAll(stderr, try std.fmt.allocPrint(arena, "{s}: {s}\n", .{ command, why }));
         return error.InstallRefused;
     };
     try compat.stdio.writeAll(stdout, try std.fmt.allocPrint(arena, "OpenCode {s} is installed at {s}\n", .{ opencode_install.version, path }));
@@ -5551,7 +5576,7 @@ fn opencodeBackendConfig(
     const wanted = if (entry.executable.len > 0) entry.executable else "opencode";
     const fetched = if (entry.executable.len > 0) null else try opencode_install.installed(arena, home);
     const executable = fetched orelse try adapter_config.resolveExecutable(arena, backendIo(), wanted, environ.get("PATH") orelse "") orelse {
-        try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; run oxap opencode install, or name one with \"executable\", or a running server with \"endpoint\", in a --config entry", .{ wanted, surface.noun, entry.name });
+        try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; run oxap harness install opencode, or name one with \"executable\", or a running server with \"endpoint\", in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
     var why: []const u8 = "";

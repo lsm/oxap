@@ -5,6 +5,7 @@ const compat = @import("compat");
 
 pub const download_base = "https://opencode.ai/files/bin/";
 pub const version = harness_pins.opencode_admits[0];
+pub const label = harness_pins.opencode_label;
 
 pub const Archive = enum { zip, tar_gz };
 
@@ -48,6 +49,27 @@ pub fn installedPath(arena: std.mem.Allocator, home: []const u8) ![]const u8 {
 pub fn installed(arena: std.mem.Allocator, home: []const u8) !?[]const u8 {
     const path = try installedPath(arena, home);
     return if (compat.fs.fileKind(compat.fs.getCwd(), path) == .file) path else null;
+}
+
+pub fn matchesPinnedBinary(path: []const u8, pinned: Artifact) bool {
+    const io = compat.fs.defaultIo();
+    const file = compat.fs.getCwd().openFile(io, path, .{}) catch return false;
+    defer file.close(io);
+    const stat = file.stat(io) catch return false;
+    if (stat.size != pinned.binary_bytes) return false;
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var buffer: [64 * 1024]u8 = undefined;
+    while (true) {
+        const count = file.readStreaming(io, &.{&buffer}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return false,
+        };
+        if (count == 0) break;
+        hash.update(buffer[0..count]);
+    }
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    return std.mem.eql(u8, &std.fmt.bytesToHex(digest, .lower), pinned.binary_sha256);
 }
 
 fn hex(bytes: []const u8) [64]u8 {

@@ -49,9 +49,13 @@ def main():
         assert actual.returncode == 0 and version['admits'][0] in actual.stdout, (actual.returncode, actual.stdout)
         repeat = run('repeat', ['harness','install','opencode'], True)
         assert 'already installed' in repeat.stdout, repeat.stdout
+        alias = run('alias', ['opencode','install'], True)
+        assert 'already installed' in alias.stdout, alias.stdout
         installed.write_text('corrupted fixture')
         damaged = run('damaged', ['harness','install','opencode'], False)
         assert 'sha256' in damaged.stderr and installed.read_text() == 'corrupted fixture', damaged.stderr
-        print('PASS: refused unknown inputs, installed and ran the pinned harness, then reused it')
+        legacy_damaged = run('damaged-alias', ['opencode','install'], False)
+        assert 'sha256' in legacy_damaged.stderr and installed.read_text() == 'corrupted fixture', legacy_damaged.stderr
+        print('PASS: 9 checks; installed and ran the pinned harness, and refused the damaged file')
 
 if __name__ == '__main__': main()
