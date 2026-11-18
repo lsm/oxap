@@ -1,6 +1,99 @@
 const std = @import("std");
+const compat = @import("compat");
+const endpoint_client = @import("endpoint_client");
 
 pub const profile = "open-agent-protocol.agent-control-core";
+
+const envelope_overhead: usize = 4096;
+const exit_grace_ms: i64 = 5000;
+
+pub fn run(allocator: std.mem.Allocator, self_path: []const u8, args: []const []const u8, stdin: std.Io.File, stdout: std.Io.File, stderr: std.Io.File) !u8 {
+    var failure: ArgError = .none;
+    var message: [512]u8 = undefined;
+    const options = parseArgs(args, &failure) catch {
+        try compat.stdio.writeLine(stderr, describe(failure, &message));
+        return 2;
+    };
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const too_long = "oxap run: the prompt and --system text must fit one 1 MiB envelope line";
+    const prompt = if (options.prompt == null or std.mem.eql(u8, options.prompt.?, "-")) readAll(arena, stdin) catch |err| switch (err) {
+        error.PromptTooLong => {
+            try compat.stdio.writeLine(stderr, too_long);
+            return 2;
+        },
+        else => return err,
+    } else options.prompt.?;
+    if (std.mem.trim(u8, prompt, " \t\r\n").len == 0) {
+        try compat.stdio.writeLine(stderr, "oxap run: no prompt; pass one as an argument or on stdin");
+        return 2;
+    }
+    if (!fitsOneLine(prompt, options.system)) {
+        try compat.stdio.writeLine(stderr, too_long);
+        return 2;
+    }
+
+    var client = try endpoint_client.Client.spawn(allocator, .{ .command = self_path, .args = try serveArgs(arena, options) });
+    defer client.deinit();
+    var driver = Driver.init(arena, options, prompt);
+    try client.write(try driver.start());
+
+    const outcome: Outcome = while (true) {
+        const frame = client.next(.none) catch |err| break .{ .failed = @errorName(err) };
+        const line = switch (frame orelse break .{ .failed = "the endpoint exited before the run ended" }) {
+            .envelope => |line| line,
+            .control => continue,
+        };
+        var scratch_state = std.heap.ArenaAllocator.init(allocator);
+        defer scratch_state.deinit();
+        const step = try driver.handle(scratch_state.allocator(), line);
+        if (step.print) |text| {
+            try compat.stdio.writeAll(stdout, text);
+            if (options.json) try compat.stdio.writeAll(stdout, "\n");
+        }
+        if (step.outcome) |ended| break ended;
+        if (step.send) |sent| client.write(sent) catch |err| break .{ .failed = @errorName(err) };
+    };
+    if (!options.json) try compat.stdio.writeAll(stdout, driver.finalText());
+    client.closeStdin();
+    _ = client.waitExit(exit_grace_ms) catch {};
+    switch (outcome) {
+        .completed => return 0,
+        .failed => |reason| {
+            const said = std.fmt.bufPrint(&message, "oxap run: {s}", .{reason}) catch reason;
+            try compat.stdio.writeLine(stderr, said);
+            return 1;
+        },
+    }
+}
+
+fn readAll(arena: std.mem.Allocator, stdin: std.Io.File) ![]const u8 {
+    var collected = std.ArrayList(u8).empty;
+    var buffer: [64 * 1024]u8 = undefined;
+    while (true) {
+        const count = compat.stdio.read(stdin, &buffer) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        if (count == 0) break;
+        if (collected.items.len + count > endpoint_client.max_line_bytes) return error.PromptTooLong;
+        try collected.appendSlice(arena, buffer[0..count]);
+    }
+    return collected.items;
+}
+
+fn fitsOneLine(prompt: []const u8, system: ?[]const u8) bool {
+    const escaped = escapedLength(prompt) +| if (system) |text| escapedLength(text) else 0;
+    return escaped +| envelope_overhead < endpoint_client.max_line_bytes;
+}
+
+fn escapedLength(text: []const u8) usize {
+    var counter = std.Io.Writer.Discarding.init(&.{});
+    std.json.Stringify.encodeJsonString(text, .{}, &counter.writer) catch return endpoint_client.max_line_bytes;
+    return @intCast(counter.fullCount());
+}
 
 pub const Options = struct {
     prompt: ?[]const u8 = null,
@@ -11,6 +104,83 @@ pub const Options = struct {
     json: bool = false,
     approve: bool = false,
 };
+
+pub const ArgError = union(enum) {
+    none,
+    missing_value: []const u8,
+    repeated_option: []const u8,
+    unknown_option: []const u8,
+    unexpected_argument: []const u8,
+    config_without_backend,
+};
+
+pub fn parseArgs(args: []const []const u8, failure: *ArgError) error{InvalidArgument}!Options {
+    var options = Options{};
+    var index: usize = 0;
+    while (index < args.len) : (index += 1) {
+        const arg = args[index];
+        if (std.mem.eql(u8, arg, "--json")) {
+            options.json = true;
+        } else if (std.mem.eql(u8, arg, "--approve")) {
+            options.approve = true;
+        } else if (valueSlot(&options, arg)) |slot| {
+            if (slot.* != null) {
+                failure.* = .{ .repeated_option = arg };
+                return error.InvalidArgument;
+            }
+            if (index + 1 >= args.len or std.mem.startsWith(u8, args[index + 1], "--")) {
+                failure.* = .{ .missing_value = arg };
+                return error.InvalidArgument;
+            }
+            index += 1;
+            slot.* = args[index];
+        } else if (std.mem.startsWith(u8, arg, "--")) {
+            failure.* = .{ .unknown_option = arg };
+            return error.InvalidArgument;
+        } else if (options.prompt != null) {
+            failure.* = .{ .unexpected_argument = arg };
+            return error.InvalidArgument;
+        } else {
+            options.prompt = arg;
+        }
+    }
+    if (options.config != null and options.backend == null) {
+        failure.* = .config_without_backend;
+        return error.InvalidArgument;
+    }
+    return options;
+}
+
+fn valueSlot(options: *Options, arg: []const u8) ?*?[]const u8 {
+    if (std.mem.eql(u8, arg, "--backend")) return &options.backend;
+    if (std.mem.eql(u8, arg, "--config")) return &options.config;
+    if (std.mem.eql(u8, arg, "--model")) return &options.model;
+    if (std.mem.eql(u8, arg, "--system")) return &options.system;
+    return null;
+}
+
+pub fn describe(failure: ArgError, buffer: []u8) []const u8 {
+    return switch (failure) {
+        .none => "oxap run: invalid arguments",
+        .missing_value => |flag| std.fmt.bufPrint(buffer, "oxap run: {s} needs a value", .{flag}) catch flag,
+        .repeated_option => |flag| std.fmt.bufPrint(buffer, "oxap run: {s} given twice", .{flag}) catch flag,
+        .unknown_option => |flag| std.fmt.bufPrint(buffer, "oxap run: unknown option {s}", .{flag}) catch flag,
+        .unexpected_argument => |arg| std.fmt.bufPrint(buffer, "oxap run: one prompt only; quote it, or pipe it on stdin: {s}", .{arg}) catch arg,
+        .config_without_backend => "oxap run: --config names a backend's registry entry, so it needs --backend",
+    };
+}
+
+pub fn serveArgs(allocator: std.mem.Allocator, options: Options) ![]const []const u8 {
+    var argv = std.ArrayList([]const u8).empty;
+    errdefer argv.deinit(allocator);
+    try argv.appendSlice(allocator, &.{ "serve", "agent", "--stdio" });
+    if (options.backend) |backend| try argv.appendSlice(allocator, &.{ "--backend", backend });
+    if (options.config) |config| try argv.appendSlice(allocator, &.{ "--config", config });
+    if (options.backend == null) {
+        if (options.model) |model| try argv.appendSlice(allocator, &.{ "--model", model });
+    }
+    return argv.toOwnedSlice(allocator);
+}
 
 pub const Outcome = union(enum) {
     completed,
@@ -259,6 +429,19 @@ test "a run initializes, opens, submits the prompt with its system text, and pri
     try testing.expectEqualStrings("\n", driver.finalText());
 }
 
+test "the built-in loop takes its model from serve agent, and a backend from the submit" {
+    const allocator = testing.allocator;
+    const builtin_loop = try serveArgs(allocator, .{ .model = "zai-coding-plan/anthropic-messages@glm-5" });
+    defer allocator.free(builtin_loop);
+    try testing.expectEqual(@as(usize, 5), builtin_loop.len);
+    try testing.expectEqualStrings("--model", builtin_loop[3]);
+    const harness = try serveArgs(allocator, .{ .backend = "claude", .config = "oap-serve.json", .model = "sonnet" });
+    defer allocator.free(harness);
+    try testing.expectEqual(@as(usize, 7), harness.len);
+    try testing.expectEqualStrings("claude", harness[4]);
+    try testing.expectEqualStrings("oap-serve.json", harness[6]);
+}
+
 test "json mode prints every line as it came, and the submit names no model for the built-in loop" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -392,4 +575,36 @@ test "a refusal, a failed run, a cancelled run and a question each end the run a
     _ = try drive(arena, &rejected, open_reply);
     const not_accepted = try drive(arena, &rejected, "{\"type\":\"session.message.submit.response\",\"in_reply_to\":\"oxap-run-3\",\"payload\":{\"accepted\":false}}");
     try testing.expectEqualStrings("the endpoint did not accept the prompt", not_accepted.outcome.?.failed);
+}
+
+test "a prompt must fit one envelope line once escaped, counting the system text" {
+    const allocator = testing.allocator;
+    const plain = try allocator.alloc(u8, 900 * 1024);
+    defer allocator.free(plain);
+    @memset(plain, 'a');
+    try testing.expect(fitsOneLine(plain, null));
+    try testing.expect(!fitsOneLine(plain, plain[0 .. 200 * 1024]));
+    const controls = try allocator.alloc(u8, 300 * 1024);
+    defer allocator.free(controls);
+    @memset(controls, 1);
+    try testing.expect(!fitsOneLine(controls, null));
+}
+
+test "arguments take one prompt, value options once each, and --config only beside --backend" {
+    var failure: ArgError = .none;
+    const parsed = try parseArgs(&.{ "--backend", "claude", "hello", "--json", "--approve", "--system", "s" }, &failure);
+    try testing.expectEqualStrings("hello", parsed.prompt.?);
+    try testing.expectEqualStrings("claude", parsed.backend.?);
+    try testing.expect(parsed.json and parsed.approve);
+    try testing.expect((try parseArgs(&.{}, &failure)).prompt == null);
+    try testing.expectError(error.InvalidArgument, parseArgs(&.{ "a", "b" }, &failure));
+    try testing.expectEqualStrings("b", failure.unexpected_argument);
+    try testing.expectError(error.InvalidArgument, parseArgs(&.{ "--model", "a", "--model", "b" }, &failure));
+    try testing.expectEqualStrings("--model", failure.repeated_option);
+    try testing.expectError(error.InvalidArgument, parseArgs(&.{ "--model", "--json" }, &failure));
+    try testing.expectEqualStrings("--model", failure.missing_value);
+    try testing.expectError(error.InvalidArgument, parseArgs(&.{"--agent"}, &failure));
+    try testing.expectEqualStrings("--agent", failure.unknown_option);
+    try testing.expectError(error.InvalidArgument, parseArgs(&.{ "--config", "x.json" }, &failure));
+    try testing.expect(failure == .config_without_backend);
 }
