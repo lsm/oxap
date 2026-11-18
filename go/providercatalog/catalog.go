@@ -27,6 +27,32 @@ type HeaderValue struct {
 	Env     string
 }
 
+func ResolveHeaders(catalog Catalog, env []EnvironmentValue, id string) (map[string]string, error) {
+	row, ok := findProvider(catalog, id)
+	if !ok {
+		return nil, nil
+	}
+	headers := make(map[string]string, len(row.Headers))
+	for name, source := range row.Headers {
+		if source.Literal != nil {
+			headers[name] = *source.Literal
+			continue
+		}
+		value := ""
+		for _, item := range env {
+			if item.Name == source.Env {
+				value = item.Value
+				break
+			}
+		}
+		if value == "" {
+			return nil, errors.New("a required provider header environment variable is missing or empty")
+		}
+		headers[name] = value
+	}
+	return headers, nil
+}
+
 func (h *HeaderValue) UnmarshalJSON(data []byte) error {
 	var literal string
 	if len(data) > 0 && data[0] == '"' {

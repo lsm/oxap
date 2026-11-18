@@ -55,4 +55,14 @@ func TestCatalogHeadersReachDiscoveryAndInference(t *testing.T) {
 	if len(methods) != 2 || methods[0] != "GET" || methods[1] != "POST" {
 		t.Fatalf("requests = %v, want discovery and inference", methods)
 	}
+	missing := env[:1]
+	without := (provider.Discoverer{Catalog: catalog, Environment: missing, Stored: stored}).Discover(context.Background(), provider.DiscoverForceFetch)
+	if len(without.Models) != 0 || len(methods) != 2 {
+		t.Fatal("missing header environment allowed model discovery")
+	}
+	runner.Environment = missing
+	out = runnerOutcome(t, runner, parityModelRef, `[{"role":"user","content":"hi"}]`)
+	if len(out) != 2 || out[1].Type != "inference.failed" || len(methods) != 2 {
+		t.Fatalf("missing header environment did not fail inference without a request: %v", typesOf(out))
+	}
 }

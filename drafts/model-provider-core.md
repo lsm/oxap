@@ -446,6 +446,8 @@ Provider catalog rows may state request `headers` as literal strings or as
 provider is used; a missing or empty value prevents its request. Catalog headers
 accompany model discovery and inference. An explicit model or endpoint override
 header of the same name takes precedence, case-insensitively.
+The Go discovery and inference runtime applies the same catalog headers and
+refuses a provider request when an environment-backed value is missing or empty.
 
 OpenCode Zen and OpenCode Go serve each model on the wire its models.dev entry
 names through the entry's own `provider.npm`, and `oapx` reads that for those two
