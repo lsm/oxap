@@ -8,6 +8,7 @@ const auth_protocol_server = @import("auth_server");
 const protocol_server = @import("protocol_server");
 const auth_cli = @import("auth_cli");
 const oauth_storage = @import("oauth/storage");
+const mcp_oauth_login = @import("mcp_oauth_login");
 const event_stream = @import("event_stream");
 const agent_loop = @import("agent_loop");
 const agent_bridge = @import("agent_bridge");
@@ -1394,6 +1395,8 @@ fn printUsage(file: std.Io.File) !void {
         \\                   not each line, so unrelated frames cannot extend it.
         \\  oxap auth providers [--json]
         \\  oxap auth login --provider <id> [--json]
+        \\  oxap auth mcp-login --endpoint <url>
+        \\  oxap auth mcp-status --endpoint <url>
         \\  oxap --version                                Print the release name, oxap-<version>-<os>-<arch>
         \\
         \\Commands:
@@ -1436,6 +1439,8 @@ fn printUsage(file: std.Io.File) !void {
         \\                   non-zero on any failed check.
         \\  auth providers   List oauth-capable providers
         \\  auth login       Run OAuth flow and persist credentials
+        \\  auth mcp-login   Sign in to a remote MCP source
+        \\  auth mcp-status  Check whether MCP credentials are current
         \\  --version        Print the release name
         \\
         \\Superseded flags, still accepted: -p, --oap, --oap-provider
@@ -1602,6 +1607,20 @@ fn handleAuthWithOptions(
     defer file_io.deinit();
     const io = file_io.io();
 
+    if (std.mem.eql(u8, args[0], "mcp-login") or std.mem.eql(u8, args[0], "mcp-status")) {
+        if (args.len != 3 or !std.mem.eql(u8, args[1], "--endpoint")) return error.InvalidArgument;
+        if (std.mem.eql(u8, args[0], "mcp-status")) {
+            const status = try mcp_oauth_login.status(allocator, args[2]);
+            if (!status.authenticated) return error.AuthLoginFailed;
+            try io.writeOut(if (status.refreshable) "authenticated (refreshable)\n" else "authenticated\n");
+        } else {
+            var context = io;
+            try mcp_oauth_login.login(allocator, args[2], &context, showMcpAuthorizationUrl);
+            try io.writeOut("authenticated\n");
+        }
+        return;
+    }
+
     if (std.mem.eql(u8, args[0], "providers")) {
         var json_mode = false;
         if (args.len > 1) {
@@ -1643,6 +1662,12 @@ fn handleAuthWithOptions(
     }
 
     return error.InvalidArgument;
+}
+
+fn showMcpAuthorizationUrl(ctx: *anyopaque, url: []const u8) !void {
+    const io: *auth_cli.AuthCliIo = @ptrCast(@alignCast(ctx));
+    try io.writeOut(url);
+    try io.writeOut("\n");
 }
 
 test "the hub's wall clock is in nanoseconds, which is the unit the hub divides" {

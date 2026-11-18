@@ -291,6 +291,7 @@ zig/src/compat/random.zig|pub fn secureIntRangeLessThan(comptime T: type, upper_
 zig/src/oauth/pkce.zig|    return generatePKCEWithRandom(compat.random.fillSecureBytes);
 zig/src/protocol/provider/types.zig|    return generateSessionIdWithRandomInt(compat.random.secureIntRangeLessThan);
 zig/src/protocol/provider/types.zig|    return generateUlidWithRandom(compat.random.fillSecureBytes);
+zig/src/tools/mcp_oauth_login.zig|    compat.random.fillSecureBytes(&state_bytes);
 zig/src/transports/websocket.zig|        compat.random.fillSecureBytes(&mask);
 zig/src/transports/websocket.zig|    compat.random.fillSecureBytes(&nonce);
 zig/src/tui/app.zig|    compat.random.fillSecureBytes(&random_bytes);

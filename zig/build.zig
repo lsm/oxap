@@ -2037,6 +2037,9 @@ pub fn build(b: *std.Build) void {
     const install_mcp_http_probe = b.addInstallArtifact(mcp_http_probe, .{});
     b.step("mcp-challenge-probe", "Build the MCP authorization challenge probe").dependOn(&install_mcp_http_probe.step);
     const mcp_oauth_mod = b.createModule(.{ .root_source_file = b.path("src/tools/mcp_oauth.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "compat", .module = compat_mod }} });
+    tools_mcp_bridge_mod.addImport("mcp_http", mcp_http_mod);
+    tools_mcp_bridge_mod.addImport("mcp_oauth", mcp_oauth_mod);
+    const mcp_oauth_login_mod = b.createModule(.{ .root_source_file = b.path("src/tools/mcp_oauth_login.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "compat", .module = compat_mod }, .{ .name = "mcp_oauth", .module = mcp_oauth_mod }, .{ .name = "mcp_http", .module = mcp_http_mod }, .{ .name = "oauth/loopback", .module = oauth_loopback_mod }, .{ .name = "oauth/pkce", .module = oauth_pkce_mod }, .{ .name = "oauth/storage", .module = oauth_storage_mod } } });
     const mcp_oauth_probe_mod = b.createModule(.{ .root_source_file = b.path("../.claude/skills/verify/scripts/mcp-oauth-discovery-probe.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "mcp_oauth", .module = mcp_oauth_mod }} });
     const mcp_oauth_probe = b.addExecutable(.{ .name = "mcp-oauth-discovery-probe", .root_module = mcp_oauth_probe_mod });
     const install_mcp_oauth_probe = b.addInstallArtifact(mcp_oauth_probe, .{});
@@ -2847,6 +2850,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "oauth/github_copilot", .module = github_copilot_mod },
             .{ .name = "oauth/storage", .module = oauth_storage_mod },
             .{ .name = "register_builtins", .module = register_builtins_mod },
+            .{ .name = "mcp_oauth_login", .module = mcp_oauth_login_mod },
             .{ .name = "protocol_server", .module = protocol_server_mod },
             .{ .name = "protocol_runtime", .module = protocol_runtime_mod },
             .{ .name = "protocol_envelope", .module = protocol_envelope_mod },
