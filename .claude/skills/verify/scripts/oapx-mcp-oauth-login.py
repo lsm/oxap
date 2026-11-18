@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import http.server
+import importlib.util
 import json
 import queue
 import re
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import urllib.request
 import uuid
@@ -22,14 +24,23 @@ class Server(http.server.BaseHTTPRequestHandler):
     challenge = None
     redirect = None
     scope_mode = 'challenge'
+    served = False
+    refreshes = 0
+    reject_tool_once = True
+    reject_open = False
+    redirect_open = False
+    deny_refresh = False
+    ping_answered = threading.Event()
 
     def log_message(self, *args):
         pass
 
-    def reply(self, status, value):
+    def reply(self, status, value, session=False):
         payload = json.dumps(value).encode()
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
+        if session:
+            self.send_header('Mcp-Session-Id', 'fixture-session')
         self.send_header('Content-Length', str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -66,14 +77,54 @@ class Server(http.server.BaseHTTPRequestHandler):
         payload = self.rfile.read(int(self.headers.get('Content-Length', '0')))
         if self.path == '/mcp':
             initialize = json.loads(payload)
-            assert initialize['method'] == 'initialize' and initialize['params']['protocolVersion'] == '2025-03-26'
-            self.send_response(401)
-            challenge = f'Bearer resource_metadata="{self.server.origin}/resource-metadata"'
-            if self.scope_mode == 'challenge':
-                challenge += ', scope="tools:read tools:call"'
-            self.send_header('WWW-Authenticate', challenge)
-            self.send_header('Content-Length', '0')
-            self.end_headers()
+            method = initialize.get('method')
+            auth = self.headers.get('Authorization')
+            if self.served and auth and method == 'initialize' and self.redirect_open:
+                self.send_response(302)
+                self.send_header('Location', self.server.origin + '/leak')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            reject = not auth or (self.served and method == 'tools/call' and self.reject_tool_once) or (self.served and method == 'initialize' and self.reject_open)
+            if reject:
+                if auth and method == 'tools/call':
+                    Server.reject_tool_once = False
+                self.send_response(401)
+                if not auth:
+                    challenge = f'Bearer resource_metadata="{self.server.origin}/resource-metadata"'
+                    if self.scope_mode == 'challenge':
+                        challenge += ', scope="tools:read tools:call"'
+                    self.send_header('WWW-Authenticate', challenge)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            assert self.served and auth == f'Bearer fixture-access-{self.refreshes}'
+            if method != 'initialize':
+                assert self.headers.get('Mcp-Session-Id') == 'fixture-session'
+            if method is None:
+                assert initialize == {'jsonrpc': '2.0', 'id': 'fixture-ping', 'result': {}}
+                self.ping_answered.set()
+                self.send_response(202); self.end_headers(); return
+            if 'id' not in initialize:
+                self.send_response(202); self.end_headers(); return
+            if method == 'initialize':
+                result = {'protocolVersion': '2025-03-26', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'fixture', 'version': '1'}}
+            elif method == 'tools/list':
+                result = {'tools': [{'name': 'echo', 'description': 'Echo input', 'inputSchema': {'type': 'object', 'properties': {'text': {'type': 'string'}}}}]}
+            elif method == 'tools/call':
+                result = {'content': [{'type': 'text', 'text': 'echoed:' + initialize['params']['arguments']['text']}]}
+            else:
+                raise AssertionError(method)
+            response = {'jsonrpc': '2.0', 'id': initialize['id'], 'result': result}
+            if method == 'tools/list':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream')
+                self.end_headers()
+                self.wfile.write(b'data: {"jsonrpc":"2.0","id":"fixture-ping","method":"ping"}\n\n'); self.wfile.flush()
+                assert self.ping_answered.wait(5), 'authenticated ping response missing'
+                self.wfile.write(b'data: ' + json.dumps(response).encode() + b'\n\n'); self.wfile.flush()
+            else:
+                self.reply(200, response, session=method == 'initialize')
         elif self.path == '/register':
             metadata = json.loads(payload)
             assert metadata['token_endpoint_auth_method'] == 'none'
@@ -85,20 +136,37 @@ class Server(http.server.BaseHTTPRequestHandler):
             self.reply(201, {'client_id': 'fixture-client', 'token_endpoint_auth_method': 'none'})
         elif self.path == '/token':
             form = urllib.parse.parse_qs(payload.decode())
-            assert form['grant_type'] == ['authorization_code'] and form['code'] == ['fixture-code']
-            assert form['client_id'] == ['fixture-client'] and form['redirect_uri'] == [self.redirect]
+            assert form['client_id'] == ['fixture-client']
             assert form['resource'] == [self.server.origin + '/mcp']
-            verifier = form['code_verifier'][0]
-            actual = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
-            assert actual == self.challenge
-            self.reply(200, {'access_token': 'fixture-access', 'refresh_token': 'fixture-refresh', 'token_type': 'Bearer', 'expires_in': 3600})
+            if form['grant_type'] == ['refresh_token']:
+                assert self.served and form['refresh_token'] == [f'fixture-refresh-{self.refreshes}']
+                Server.refreshes += 1
+                if self.deny_refresh:
+                    self.reply(400, {'error': 'invalid_grant'}); return
+                self.reply(200, {'access_token': f'fixture-access-{self.refreshes}', 'refresh_token': f'fixture-refresh-{self.refreshes}', 'token_type': 'Bearer', 'expires_in': 3600})
+            else:
+                assert form['grant_type'] == ['authorization_code'] and form['code'] == ['fixture-code'] and form['redirect_uri'] == [self.redirect]
+                verifier = form['code_verifier'][0]
+                actual = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+                assert actual == self.challenge
+                self.reply(200, {'access_token': 'fixture-access-0', 'refresh_token': 'fixture-refresh-0', 'token_type': 'Bearer', 'expires_in': 0 if self.served else 3600})
         else:
             self.send_error(404)
+
+    def do_DELETE(self):
+        self.requests.append(('DELETE', self.path))
+        assert self.served and self.headers.get('Authorization') == f'Bearer fixture-access-{self.refreshes - int(self.deny_refresh)}'
+        assert self.headers.get('Mcp-Session-Id') == 'fixture-session'
+        self.send_response(204)
+        self.end_headers()
 
 
 def main():
     binary = Path(sys.argv[1]).resolve()
     Server.scope_mode = sys.argv[2] if len(sys.argv) > 2 else 'challenge'
+    Server.served = Server.scope_mode == 'served'
+    if Server.served:
+        Server.scope_mode = 'challenge'
     assert Server.scope_mode in ('challenge', 'metadata', 'none')
     with tempfile.TemporaryDirectory(prefix='oap-mcp-login-') as temporary:
         root = Path(temporary)
@@ -145,6 +213,9 @@ def main():
             code = process.wait(timeout=30)
             reader.join()
             assert code == 0, f'login exit={code}'
+            if Server.served:
+                served_journey(command, env, root, server)
+                return
             status = subprocess.run(command + ['auth', 'mcp-status', '--endpoint', server.origin + '/mcp'], env=env, cwd=root, capture_output=True, text=True, timeout=15)
             assert status.returncode == 0 and status.stdout.strip() == 'authenticated (refreshable)', (status.returncode, status.stdout, status.stderr)
             expected = [('POST', '/mcp'), ('GET', '/resource-metadata'), ('GET', '/.well-known/oauth-authorization-server'), ('POST', '/register'), ('GET', '/authorize'), ('POST', '/token')]
@@ -157,6 +228,83 @@ def main():
             server.shutdown()
             server.server_close()
             thread.join()
+
+
+def served_journey(command, env, root, server):
+    spec = importlib.util.spec_from_file_location('stdio_journey', Path(__file__).with_name('oapx-mcp-stdio.py'))
+    stdio = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stdio)
+    provider = http.server.ThreadingHTTPServer(('127.0.0.1', 0), stdio.Provider)
+    thread = threading.Thread(target=provider.serve_forever)
+    thread.start()
+    data = Path(env['HOME']) / '.oxap'
+    data.mkdir(parents=True, exist_ok=True)
+    (data / 'providers.json').write_text(json.dumps({'providers': [{'id': 'synthetic', 'api': 'openai-completions', 'base_url': f'http://127.0.0.1:{provider.server_port}/v1', 'auth': 'none', 'models': ['synthetic-model']}]}))
+    (data / 'config.json').write_text(json.dumps({'model': 'synthetic-model', 'provider': 'synthetic', 'api': 'openai-completions', 'workspace': str(root)}))
+    (root / 'hub.json').write_text(json.dumps({'adapters': {'loop': {'type': 'oapx'}}, 'tool_sources': {'demo': {'kind': 'remote', 'protocol': 'mcp', 'endpoint': server.origin + '/mcp'}}}))
+    output = root / 'evidence'; output.mkdir()
+    hub = None
+    try:
+        hub = stdio.base.Hub(command, env, root, output, 'oauth-served', flags=('--no-save-oapx-sessions',))
+        request = stdio.base.envelope('session.open.request', {'session_id': 'oauth-proof', 'tool_sources': [{'id': 'demo', 'kind': 'remote'}], 'metadata': {'oapx': {'permission_mode': 'bypass'}}})
+        hub.call('open', adapter='loop', request=request)
+        assert Server.refreshes == 1, f'expired login did not refresh: count={Server.refreshes}'
+        catalog = hub.call('tools', session_id='oauth-proof')
+        assert any(tool['name'] == 'mcp_demo_echo' for tool in catalog['payload']['tools'])
+        stdio.base.submit(hub, 'oauth-proof', 'Call the echo tool with hello')
+        assert 'echoed:hello' in json.dumps(stdio.Provider.requests[-1])
+        assert Server.refreshes == 2, f'revoked access was not refreshed once: count={Server.refreshes}'
+        hub.stop(); hub = None
+        assert ('DELETE', '/mcp') in Server.requests, 'authenticated session deletion missing'
+        Server.ping_answered.clear()
+        hub = stdio.base.Hub(command, env, root, output, 'oauth-restart', flags=('--no-save-oapx-sessions',))
+        request['payload']['session_id'] = 'oauth-restart'
+        hub.call('open', adapter='loop', request=request)
+        assert Server.refreshes == 2, f'restarted process did not use saved refresh: count={Server.refreshes}'
+        Server.redirect_open = True
+        request['payload']['session_id'] = 'redirected-source'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('authenticated redirect was followed')
+        assert ('GET', '/leak') not in Server.requests, 'credential-bearing redirect was followed'
+        Server.redirect_open = False
+        Server.reject_open = True
+        request['payload']['session_id'] = 'rejected-twice'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('repeatedly rejected access was accepted')
+        assert Server.refreshes == 3, f'access rejection retried unexpectedly: count={Server.refreshes}'
+        Server.deny_refresh = True
+        request['payload']['session_id'] = 'revoked-refresh'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('revoked refresh credential was accepted')
+        assert Server.refreshes == 4, f'revoked refresh was retried unexpectedly: count={Server.refreshes}'
+        request['payload']['session_id'] = 'revoked-again'
+        try:
+            hub.call('open', adapter='loop', request=request)
+        except AssertionError as error:
+            assert isinstance(error.args[0], dict), error
+        else:
+            raise AssertionError('revoked refresh credential was accepted on retry')
+        assert Server.refreshes == 4, f'revoked refresh was retried unexpectedly: count={Server.refreshes}'
+        assert Server.ping_answered.is_set()
+        hub.stop(); hub = None
+        assert ('DELETE', '/mcp') in Server.requests, 'authenticated session deletion missing'
+        print('PASS: expired credential refreshed, rejected access retried once, revoked refresh refused; refreshes=4; authenticated ping and deletion')
+    finally:
+        if hub:
+            hub.stop()
+        provider.shutdown(); provider.server_close(); thread.join()
 
 
 if __name__ == '__main__':

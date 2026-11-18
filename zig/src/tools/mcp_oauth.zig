@@ -32,7 +32,7 @@ pub fn safeUrl(value: []const u8, allow_loopback: bool) !std.Uri {
     return uri;
 }
 
-fn isLoopback(uri: std.Uri) bool {
+pub fn isLoopback(uri: std.Uri) bool {
     const host = if (uri.host) |component| component.percent_encoded else return false;
     return std.ascii.eqlIgnoreCase(host, "localhost") or std.mem.eql(u8, host, "127.0.0.1") or std.mem.eql(u8, host, "[::1]");
 }

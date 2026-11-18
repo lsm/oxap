@@ -2040,6 +2040,8 @@ pub fn build(b: *std.Build) void {
     tools_mcp_bridge_mod.addImport("mcp_http", mcp_http_mod);
     tools_mcp_bridge_mod.addImport("mcp_oauth", mcp_oauth_mod);
     const mcp_oauth_login_mod = b.createModule(.{ .root_source_file = b.path("src/tools/mcp_oauth_login.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "compat", .module = compat_mod }, .{ .name = "mcp_oauth", .module = mcp_oauth_mod }, .{ .name = "mcp_http", .module = mcp_http_mod }, .{ .name = "oauth/loopback", .module = oauth_loopback_mod }, .{ .name = "oauth/pkce", .module = oauth_pkce_mod }, .{ .name = "oauth/storage", .module = oauth_storage_mod } } });
+    const mcp_oauth_credentials_mod = b.createModule(.{ .root_source_file = b.path("src/tools/mcp_oauth_credentials.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "compat", .module = compat_mod }, .{ .name = "mcp_oauth", .module = mcp_oauth_mod }, .{ .name = "mcp_oauth_login", .module = mcp_oauth_login_mod }, .{ .name = "oauth/storage", .module = oauth_storage_mod } } });
+    tools_mcp_bridge_mod.addImport("mcp_oauth_credentials", mcp_oauth_credentials_mod);
     const mcp_oauth_probe_mod = b.createModule(.{ .root_source_file = b.path("../.claude/skills/verify/scripts/mcp-oauth-discovery-probe.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "mcp_oauth", .module = mcp_oauth_mod }} });
     const mcp_oauth_probe = b.addExecutable(.{ .name = "mcp-oauth-discovery-probe", .root_module = mcp_oauth_probe_mod });
     const install_mcp_oauth_probe = b.addInstallArtifact(mcp_oauth_probe, .{});
