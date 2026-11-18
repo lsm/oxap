@@ -5,6 +5,19 @@ const sse = @import("sse_parser");
 
 const alloc = std.heap.smp_allocator;
 const limit = 4 * 1024 * 1024;
+var runtime_lock: std.atomic.Mutex = .unlocked;
+var runtime: ?*std.Io.Threaded = null;
+
+fn sharedIo() !std.Io {
+    while (!runtime_lock.tryLock()) std.atomic.spinLoopHint();
+    defer runtime_lock.unlock();
+    if (runtime == null) {
+        const instance = try alloc.create(std.Io.Threaded);
+        instance.* = std.Io.Threaded.init(alloc, .{});
+        runtime = instance;
+    }
+    return runtime.?.io();
+}
 
 pub const Reply = struct {
     body: []u8,
@@ -40,17 +53,18 @@ const Job = struct {
         alloc.destroy(self);
     }
 
-    fn run(self: *Job) void {
+    fn run(self: *Job, io: std.Io) void {
         defer self.release();
-        self.perform() catch |err| {
+        self.perform(io) catch |err| {
             self.failure = err;
         };
-        self.event.set(std.Io.Threaded.global_single_threaded.io());
+        self.event.set(io);
     }
 
-    fn perform(self: *Job) !void {
+    fn perform(self: *Job, io: std.Io) !void {
         var client = try compat.http.HttpClient.initWithDefaultProxies(alloc);
         defer client.deinit();
+        client.client.io = io;
         try self.exchange(&client, self.method, self.body, self.id, true);
     }
 
@@ -155,7 +169,7 @@ fn create(url: []const u8, session: ?[]const u8, initialized: bool, method: std.
 
 pub fn notify(url: []const u8, session: ?[]const u8, initialized: bool, body: []const u8) void {
     const job = create(url, session, initialized, .POST, body, null) catch return;
-    const thread = std.Thread.spawn(.{}, Job.run, .{job}) catch {
+    const thread = std.Thread.spawn(.{}, notifyRun, .{job}) catch {
         job.release();
         job.release();
         return;
@@ -164,24 +178,32 @@ pub fn notify(url: []const u8, session: ?[]const u8, initialized: bool, body: []
     job.release();
 }
 
+fn notifyRun(job: *Job) void {
+    defer job.release();
+    var response = call(alloc, job.url, job.session, job.initialized, .POST, job.body, null, null, 5000) catch return;
+    response.deinit(alloc);
+}
+
 pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64) !Reply {
+    const io = try sharedIo();
     const job = try create(url, session, initialized, method, body, id);
-    const thread = std.Thread.spawn(.{}, Job.run, .{job}) catch |err| {
+    var future = io.concurrent(Job.run, .{ job, io }) catch |err| {
         job.release();
         job.release();
         return err;
     };
-    thread.detach();
     defer job.release();
-    const io = std.Io.Threaded.global_single_threaded.io();
+    defer _ = future.await(io);
     const start = std.Io.Timestamp.now(io, .boot).toMilliseconds();
     while (true) {
         if (cancel) |token| if (token.isCancelled()) {
             job.cancelled.store(true, .release);
+            _ = future.cancel(io);
             return error.Cancelled;
         };
         if (timeout_ms) |deadline_ms| if (std.Io.Timestamp.now(io, .boot).toMilliseconds() - start >= deadline_ms) {
             job.cancelled.store(true, .release);
+            _ = future.cancel(io);
             return error.Timeout;
         };
         const interval: std.Io.Timeout = .{ .duration = .{ .raw = std.Io.Duration.fromMilliseconds(50), .clock = .boot } };

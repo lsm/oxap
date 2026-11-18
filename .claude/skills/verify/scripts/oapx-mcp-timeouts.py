@@ -22,8 +22,18 @@ class Hanging(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
     def do_POST(self):
-        self.rfile.read(int(self.headers['Content-Length']))
+        request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         type(self).requests += 1
+        mode = os.environ.get('OAP_VERIFY_MCP_HANG')
+        if mode in ('notification', 'sse') and request['method'] == 'initialize':
+            body = json.dumps({'jsonrpc':'2.0','id':request['id'],'result':{'protocolVersion':'2025-03-26','capabilities':{'tools':{}},'serverInfo':{'name':'fixture','version':'1'}}}).encode()
+            self.send_response(200); self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+            return
+        if mode == 'sse' and request['method'] == 'notifications/initialized':
+            self.send_response(202); self.end_headers(); return
+        if mode == 'sse' and request['method'] == 'tools/list':
+            self.send_response(200); self.send_header('Content-Type', 'text/event-stream'); self.end_headers(); self.wfile.flush()
         self.release.wait(40)
 
 
@@ -52,8 +62,8 @@ def main():
         hub = None
         try:
             hub = base.Hub(command, environment, root, output, 'timeouts', flags=('--no-save-oapx-sessions',))
-            before = threads(hub.process.pid)
-            for number in range(4):
+            before = None
+            for number in range(5):
                 request = base.envelope('session.open.request', {'session_id':f'timeout-{number}','tool_sources':[{'id':'hang','kind':'remote'}]})
                 try:
                     hub.call('open', adapter='loop', request=request)
@@ -62,8 +72,10 @@ def main():
                     assert isinstance(response, dict) and response['error']['code'] == 'probe_failed', response
                 else:
                     raise AssertionError('hanging server was accepted')
+                if number == 0: before = threads(hub.process.pid)
             after = threads(hub.process.pid)
-            assert Hanging.requests == 4, Hanging.requests
+            expected = {'notification':10, 'sse':15}.get(os.environ.get('OAP_VERIFY_MCP_HANG'), 5)
+            assert Hanging.requests == expected, Hanging.requests
             assert after <= before + 1, f'threads before={before}, after={after}'
             print(f'PASS: 4 timeouts; threads before={before}, after={after}')
         finally:
