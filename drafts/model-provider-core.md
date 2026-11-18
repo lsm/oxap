@@ -441,6 +441,12 @@ same projection, since it is applied after the listing is read, from the
 models.dev copy that load used: a cached listing carries no status of its own,
 so a refresh cannot revive one.
 
+Provider catalog rows may state request `headers` as literal strings or as
+`{"env":"NAME"}` references. `oapx` resolves environment references when the
+provider is used; a missing or empty value prevents its request. Catalog headers
+accompany model discovery and inference. An explicit model or endpoint override
+header of the same name takes precedence, case-insensitively.
+
 OpenCode Zen and OpenCode Go serve each model on the wire its models.dev entry
 names through the entry's own `provider.npm`, and `oapx` reads that for those two
 rows only. `@ai-sdk/openai` publishes the model on `openai-responses`,

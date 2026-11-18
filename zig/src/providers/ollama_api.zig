@@ -616,6 +616,15 @@ fn runThread(ctx: *ThreadCtx) void {
         };
     }
 
+    if (model.headers) |extra| for (extra) |header| {
+        if (compat.http.headerPresent(headers.items, header.name)) continue;
+        headers.append(allocator, .{ .name = header.name, .value = header.value }) catch {
+            ctx.deinit();
+            stream.completeWithError("oom headers");
+            return;
+        };
+    };
+
     const MAX_RETRIES: u8 = 3;
     const BASE_DELAY_MS: u32 = 1000;
     const max_delay_ms: u32 = if (retry_opts) |rc| rc.max_retry_delay_ms orelse 60000 else 60000;
@@ -694,7 +703,7 @@ fn runThread(ctx: *ThreadCtx) void {
             break;
         }
 
-        const status_code: u16 = @intFromEnum(response.head.status);
+        const status_code: u16 = @backingInt(response.head.status);
         const should_retry = retry_util.isRetryable(status_code) and retry_attempt < MAX_RETRIES;
 
         if (should_retry) {
@@ -742,7 +751,7 @@ fn runThread(ctx: *ThreadCtx) void {
     }
 
     if (response.head.status != .ok) {
-        const status_code = @intFromEnum(response.head.status);
+        const status_code = @backingInt(response.head.status);
         var error_transfer_buf: [4096]u8 = undefined;
         const error_reader = compat.http.responseReader(&response, &error_transfer_buf);
         const error_body = compat.http.allocRemainingResponse(allocator, error_reader, 8192) catch null;

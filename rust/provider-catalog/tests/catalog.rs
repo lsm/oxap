@@ -1,6 +1,22 @@
-use oxap_provider_catalog::{Catalog, Error};
+use oxap_provider_catalog::{Catalog, Error, HeaderValue};
 
 const SCHEMA: &str = r##"{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"catalog.schema.json","type":"object","required":["providers"],"properties":{"providers":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/provider"}}},"additionalProperties":false,"$defs":{"provider":{"type":"object","required":["id"],"properties":{"id":{"type":"string","minLength":1},"endpoints":{"type":"array","items":{"type":"object","required":["wire","base_url"],"properties":{"wire":{"type":"string","minLength":1},"base_url":{"type":"string","minLength":1},"region":{"type":"string","minLength":1}},"additionalProperties":false}}},"additionalProperties":false}}}"##;
+
+#[test]
+fn catalog_preserves_literal_and_environment_headers() {
+    let schema = include_str!("../../../providers/catalog.schema.json");
+    let catalog = Catalog::load(schema, r#"{"providers":[{"id":"example","headers":{"X-Mode":"on","X-Token":{"env":"EXAMPLE_HEADER"}}}]}"#).unwrap();
+    assert_eq!(
+        catalog.providers[0].headers["X-Mode"],
+        HeaderValue::Literal("on".into())
+    );
+    assert_eq!(
+        catalog.providers[0].headers["X-Token"],
+        HeaderValue::Environment {
+            env: "EXAMPLE_HEADER".into()
+        }
+    );
+}
 
 #[test]
 fn load_reads_a_row_and_its_endpoints() {

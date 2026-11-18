@@ -69,7 +69,7 @@ pub const HttpClient = struct {
             .keep_alive = options.keep_alive,
             .headers = .{
                 .accept_encoding = acceptEncoding(options.accept_encoding),
-                .user_agent = if (options.user_agent) |value| .{ .override = value } else .default,
+                .user_agent = if (headerPresent(options.extra_headers, "user-agent")) .omit else if (options.user_agent) |value| .{ .override = value } else .default,
             },
         });
     }
@@ -505,7 +505,7 @@ const FetchJob = struct {
 
         var redirect_buf: [8192]u8 = undefined;
         var response = receiveResponse(&request, &redirect_buf) catch return false;
-        status_out.* = @intFromEnum(response.head.status);
+        status_out.* = @backingInt(response.head.status);
 
         var transfer_buf: [8192]u8 = undefined;
         const reader = responseReader(&response, &transfer_buf);

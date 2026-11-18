@@ -22,28 +22,64 @@ type Catalog struct {
 	Providers []Provider
 }
 
+type HeaderValue struct {
+	Literal *string
+	Env     string
+}
+
+func (h *HeaderValue) UnmarshalJSON(data []byte) error {
+	var literal string
+	if len(data) > 0 && data[0] == '"' {
+		if err := json.Unmarshal(data, &literal); err != nil {
+			return err
+		}
+		*h = HeaderValue{Literal: &literal}
+		return nil
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(data, &source); err != nil || len(source) != 1 {
+		return errors.New("header value must be a string or an environment reference")
+	}
+	var env string
+	if err := json.Unmarshal(source["env"], &env); err != nil || env == "" {
+		return errors.New("header environment reference must be nonempty")
+	}
+	*h = HeaderValue{Env: env}
+	return nil
+}
+
+func (h HeaderValue) MarshalJSON() ([]byte, error) {
+	if h.Literal != nil {
+		return json.Marshal(*h.Literal)
+	}
+	return json.Marshal(struct {
+		Env string `json:"env"`
+	}{Env: h.Env})
+}
+
 type Provider struct {
-	ID               string       `json:"id"`
-	DisplayName      string       `json:"display_name,omitempty"`
-	Auth             []string     `json:"auth,omitempty"`
-	Offering         string       `json:"offering,omitempty"`
-	Status           string       `json:"status,omitempty"`
-	CredentialEnv    []string     `json:"credential_env,omitempty"`
-	BaseURLEnv       []string     `json:"base_url_env,omitempty"`
-	RegionEnv        string       `json:"region_env,omitempty"`
-	DefaultRegion    string       `json:"default_region,omitempty"`
-	Wires            []string     `json:"wires,omitempty"`
-	BaseURLSource    string       `json:"base_url_source,omitempty"`
-	Endpoints        []Endpoint   `json:"endpoints,omitempty"`
-	ModelsPath       string       `json:"models_endpoint,omitempty"`
-	ModelsDev        string       `json:"models_dev,omitempty"`
-	CredentialGroup  string       `json:"credential_group,omitempty"`
-	ContextWindow    int          `json:"context_window,omitempty"`
-	MaxContextWindow int          `json:"max_context_window,omitempty"`
-	MaxTokens        int          `json:"max_tokens,omitempty"`
-	Models           []Model      `json:"models,omitempty"`
-	OAuthOrigin      *OAuthOrigin `json:"oauth_origin,omitempty"`
-	Docs             string       `json:"docs,omitempty"`
+	ID               string                 `json:"id"`
+	DisplayName      string                 `json:"display_name,omitempty"`
+	Auth             []string               `json:"auth,omitempty"`
+	Offering         string                 `json:"offering,omitempty"`
+	Status           string                 `json:"status,omitempty"`
+	CredentialEnv    []string               `json:"credential_env,omitempty"`
+	BaseURLEnv       []string               `json:"base_url_env,omitempty"`
+	RegionEnv        string                 `json:"region_env,omitempty"`
+	DefaultRegion    string                 `json:"default_region,omitempty"`
+	Wires            []string               `json:"wires,omitempty"`
+	BaseURLSource    string                 `json:"base_url_source,omitempty"`
+	Endpoints        []Endpoint             `json:"endpoints,omitempty"`
+	Headers          map[string]HeaderValue `json:"headers,omitempty"`
+	ModelsPath       string                 `json:"models_endpoint,omitempty"`
+	ModelsDev        string                 `json:"models_dev,omitempty"`
+	CredentialGroup  string                 `json:"credential_group,omitempty"`
+	ContextWindow    int                    `json:"context_window,omitempty"`
+	MaxContextWindow int                    `json:"max_context_window,omitempty"`
+	MaxTokens        int                    `json:"max_tokens,omitempty"`
+	Models           []Model                `json:"models,omitempty"`
+	OAuthOrigin      *OAuthOrigin           `json:"oauth_origin,omitempty"`
+	Docs             string                 `json:"docs,omitempty"`
 }
 
 type Model struct {

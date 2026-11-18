@@ -882,12 +882,14 @@ const EffectiveModel = struct {
     defaulted_base_url: ?[]const u8 = null,
     override: auth_resolver.OverrideLookup = .none,
     merged_headers: ?[]ai_types.HeaderPair = null,
+    catalog_headers: []const ai_types.HeaderPair = &.{},
 
     fn deinit(self: *EffectiveModel, allocator: std.mem.Allocator) void {
         if (self.defaulted_base_url) |base| allocator.free(base);
         self.defaulted_base_url = null;
         if (self.merged_headers) |headers| allocator.free(headers);
         self.merged_headers = null;
+        provider_catalog.freeResolvedHeaders(allocator, self.catalog_headers);
         self.override.deinit(allocator);
     }
 };
@@ -979,7 +981,14 @@ fn modelWithProtocolDefaults(
         effective.compat = try provider_base_url.transparentProxyCompat(allocator, model.provider);
     }
 
-    return .{ .model = effective, .defaulted_base_url = defaulted_base, .override = lookup, .merged_headers = merged };
+    const catalog_headers = try provider_catalog.resolveHeaders(allocator, model.provider);
+    errdefer provider_catalog.freeResolvedHeaders(allocator, catalog_headers);
+    if (try withOverrideHeaders(allocator, effective.headers, catalog_headers)) |joined| {
+        if (merged) |previous| allocator.free(previous);
+        merged = joined;
+        effective.headers = joined;
+    }
+    return .{ .model = effective, .defaulted_base_url = defaulted_base, .override = lookup, .merged_headers = merged, .catalog_headers = catalog_headers };
 }
 
 fn withOverrideHeaders(allocator: std.mem.Allocator, current: ?[]const ai_types.HeaderPair, extra: []const ai_types.HeaderPair) !?[]ai_types.HeaderPair {
