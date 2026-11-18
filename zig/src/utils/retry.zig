@@ -765,7 +765,7 @@ test "Attempts jitters a 429 wait within 20 percent and never past the cap" {
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
         const delay = attempts.afterStatus(429, null).?;
-        const base = @min(@as(u64, 1000) << @intCast(i), 10000);
+        const base: u64 = @min(@as(u64, 1000) << @intCast(i), 10000);
         try std.testing.expect(delay >= base * 8 / 10 and delay <= @min(base * 12 / 10, 10000));
     }
 }
