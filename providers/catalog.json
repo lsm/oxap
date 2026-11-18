@@ -674,6 +674,26 @@
         }
       ],
       "docs": "https://ai.google.dev/api"
+    },
+    {
+      "id": "command-code",
+      "display_name": "Command Code",
+      "auth": ["api_key"],
+      "offering": "api_key",
+      "status": "supported",
+      "credential_env": ["CMD_API_KEY", "COMMAND_CODE_API_KEY"],
+      "wires": ["openai-completions"],
+      "base_url_source": "static",
+      "endpoints": [
+        {
+          "wire": "openai-completions",
+          "base_url": "https://api.commandcode.ai/provider/v1",
+          "carries_version": true
+        }
+      ],
+      "headers": {"User-Agent": "oxap/1", "x-cmd-zdr": "1"},
+      "models_endpoint": "/models",
+      "docs": "https://commandcode.ai/docs/provider"
     }
   ]
 }

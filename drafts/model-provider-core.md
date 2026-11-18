@@ -449,6 +449,11 @@ header of the same name takes precedence, case-insensitively.
 The Go discovery and inference runtime applies the same catalog headers and
 refuses a provider request when an environment-backed value is missing or empty.
 
+Command Code lists only models advertising `/chat/completions` for its
+OpenAI-compatible row. The row sends `x-cmd-zdr: 1` and identifies the client
+on model discovery and inference. Models requiring other endpoints are not
+offered on that row.
+
 OpenCode Zen and OpenCode Go serve each model on the wire its models.dev entry
 names through the entry's own `provider.npm`, and `oapx` reads that for those two
 rows only. `@ai-sdk/openai` publishes the model on `openai-responses`,

@@ -1073,6 +1073,7 @@ fn appendCatalogTargetModels(
             }
             for (models) |model| {
                 if (model.unservable or servedOnlyInsideOpenCode(target, model.id)) continue;
+                if (std.mem.eql(u8, target.id, "command-code") and !model.chat_endpoint) continue;
                 var shaped = model;
                 if (target.allowlist.len > 0) {
                     const spec = allowlistSpec(target.allowlist, model.id) orelse continue;
@@ -1770,6 +1771,7 @@ const DiscoveredModel = struct {
     deprecated: bool = false,
     wire: ?[]const u8 = null,
     unservable: bool = false,
+    chat_endpoint: bool = false,
 
     fn deinit(self: DiscoveredModel, allocator: std.mem.Allocator) void {
         allocator.free(self.id);
@@ -2012,6 +2014,11 @@ fn parseCatalogModels(allocator: std.mem.Allocator, data: []const u8) ![]Discove
         if (id.len == 0) continue;
         var model = DiscoveredModel{ .id = try allocator.dupe(u8, id) };
         errdefer model.deinit(allocator);
+        if (item.object.get("supported_endpoints")) |endpoints| {
+            if (endpoints == .array) for (endpoints.array.items) |endpoint| {
+                if (endpoint == .string and std.mem.eql(u8, endpoint.string, "/chat/completions")) model.chat_endpoint = true;
+            };
+        }
         if (objectString(&item.object, "display_name")) |name| {
             if (name.len > 0) model.name = try allocator.dupe(u8, name);
         }
@@ -5173,6 +5180,7 @@ test "the production loader enables deepseek, every gateway, every coding plan a
         "opencode-go",
         "vercel",
         "zenmux",
+        "command-code",
         "deepinfra",
         "zai-coding-plan",
         "alibaba-coding-plan",

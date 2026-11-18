@@ -9,6 +9,7 @@ var CatalogLoaderRows = []string{
 	"opencode-go",
 	"vercel",
 	"zenmux",
+	"command-code",
 	"deepinfra",
 	"zai-coding-plan",
 	"alibaba-coding-plan",
