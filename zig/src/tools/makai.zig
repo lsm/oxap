@@ -131,8 +131,10 @@ fn modelFromCanonicalRef(allocator: std.mem.Allocator, ref: []const u8) !ai_type
         try defaultBaseUrlForRef(allocator, parsed.provider_id, parsed.api);
     errdefer allocator.free(base_url);
 
-    const input = try allocator.alloc([]const u8, 0);
+    const input = try allocator.alloc([]const u8, 1);
     errdefer allocator.free(input);
+    input[0] = try allocator.dupe(u8, "text");
+    errdefer allocator.free(input[0]);
 
     const compat_options = try transparentProxyCompat(allocator, parsed.provider_id);
 
@@ -144,6 +146,7 @@ fn modelFromCanonicalRef(allocator: std.mem.Allocator, ref: []const u8) !ai_type
         .base_url = base_url,
         .reasoning = isReasoningModelRef(parsed.provider_id, parsed.model_id),
         .input = input,
+        .image_input_known = true,
         .cost = .{ .input = 0, .output = 0, .cache_read = 0, .cache_write = 0 },
         .context_window = 200_000,
         .max_tokens = 4_096,
@@ -2104,6 +2107,15 @@ test "modelFromCanonicalRef applies default base URL for non-catalog refs" {
         defer legacy_model.deinit(allocator);
         try std.testing.expect(!legacy_model.reasoning);
     }
+}
+
+test "a model missing from the catalog is text-only, so images become a note instead of a request the provider rejects" {
+    const allocator = std.testing.allocator;
+    var model = try modelFromCanonicalRef(allocator, "anthropic/anthropic-messages@claude-test-model");
+    defer model.deinit(allocator);
+    try std.testing.expect(model.image_input_known);
+    try std.testing.expectEqual(@as(usize, 1), model.input.len);
+    try std.testing.expectEqualStrings("text", model.input[0]);
 }
 
 test "OAP model wire reference resolves to local API without changing provider identity" {
