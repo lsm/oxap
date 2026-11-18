@@ -4,6 +4,7 @@ const overflow = @import("overflow");
 
 pub const RetryConfig = struct {
     max_retries: u32 = 3,
+    max_rate_limit_retries: u32 = 8,
     base_delay_ms: u64 = 1000,
     max_delay_ms: u64 = 60000,
     jitter_factor: f32 = 0.2,
@@ -57,30 +58,39 @@ pub fn calculateDelay(attempt: u8, base_delay_ms: u32, max_delay_ms: u32) u64 {
 pub const Attempts = struct {
     config: RetryConfig,
     taken: u32 = 0,
+    rate_limited: u32 = 0,
 
-    pub fn init(max_delay_ms: ?u32) Attempts {
-        return .{ .config = .{ .max_delay_ms = max_delay_ms orelse 60000, .jitter_factor = 0 } };
+    pub fn init(max_delay_ms: ?u32, max_rate_limit_retries: ?u32) Attempts {
+        return .{ .config = .{
+            .max_delay_ms = max_delay_ms orelse 60000,
+            .max_rate_limit_retries = max_rate_limit_retries orelse 8,
+        } };
     }
 
     pub fn afterTransportError(self: *Attempts) ?u64 {
         if (self.taken >= self.config.max_retries) return null;
-        const delay = self.backoff();
+        const delay = self.backoff(self.taken);
         self.taken += 1;
         return delay;
     }
 
     pub fn afterStatus(self: *Attempts, status: u16, retry_after: ?[]const u8) ?u64 {
-        if (!isRetryable(status) or self.taken >= self.config.max_retries) return null;
-        var delay = self.backoff();
+        if (!isRetryable(status)) return null;
+        const rate_limit = status == 429;
+        const used = if (rate_limit) self.rate_limited else self.taken;
+        const budget = if (rate_limit) self.config.max_rate_limit_retries else self.config.max_retries;
+        if (used >= budget) return null;
+        var delay = self.backoff(used);
+        if (rate_limit) delay = self.config.nextDelay(0, delay) orelse delay;
         if (extractRetryDelayFromHeader(retry_after)) |server_delay| {
             if (server_delay <= self.config.max_delay_ms) delay = server_delay;
         }
-        self.taken += 1;
+        if (rate_limit) self.rate_limited += 1 else self.taken += 1;
         return delay;
     }
 
-    fn backoff(self: *const Attempts) u64 {
-        const shift: u6 = @intCast(@min(self.taken, 63));
+    fn backoff(self: *const Attempts, used: u32) u64 {
+        const shift: u6 = @intCast(@min(used, 63));
         return @min(self.config.base_delay_ms *% (@as(u64, 1) << shift), self.config.max_delay_ms);
     }
 };
@@ -709,7 +719,7 @@ test "httpStatus reads the first status and ignores the rest" {
 }
 
 test "Attempts backs off 1, 2 and 4 seconds after transport errors, then gives up" {
-    var attempts = Attempts.init(null);
+    var attempts = Attempts.init(null, null);
     try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
     try std.testing.expectEqual(@as(?u64, 2000), attempts.afterTransportError());
     try std.testing.expectEqual(@as(?u64, 4000), attempts.afterTransportError());
@@ -717,25 +727,55 @@ test "Attempts backs off 1, 2 and 4 seconds after transport errors, then gives u
 }
 
 test "Attempts caps the backoff at the configured maximum delay" {
-    var attempts = Attempts.init(1500);
+    var attempts = Attempts.init(1500, null);
     try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
     try std.testing.expectEqual(@as(?u64, 1500), attempts.afterTransportError());
 }
 
-test "Attempts retries only retryable statuses and shares one budget with transport errors" {
-    var attempts = Attempts.init(null);
+test "Attempts shares one budget between transport errors and 5xx statuses and refuses a 400" {
+    var attempts = Attempts.init(null, null);
     try std.testing.expectEqual(@as(?u64, null), attempts.afterStatus(400, null));
     try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
     try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(503, null));
-    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterStatus(429, null));
+    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterStatus(502, null));
+    try std.testing.expectEqual(@as(?u64, null), attempts.afterStatus(500, null));
+}
+
+test "Attempts gives HTTP 429 its own eight-try budget, doubling to the cap" {
+    var attempts = Attempts.init(null, null);
+    attempts.config.jitter_factor = 0;
+    const expected = [_]u64{ 1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000 };
+    for (expected) |ms| try std.testing.expectEqual(@as(?u64, ms), attempts.afterStatus(429, null));
     try std.testing.expectEqual(@as(?u64, null), attempts.afterStatus(429, null));
+    try std.testing.expectEqual(@as(?u64, 1000), attempts.afterTransportError());
+}
+
+test "Attempts keeps 429 retries from spending the 5xx budget and the reverse" {
+    var attempts = Attempts.init(null, 2);
+    attempts.config.jitter_factor = 0;
+    try std.testing.expectEqual(@as(?u64, 1000), attempts.afterStatus(503, null));
+    try std.testing.expectEqual(@as(?u64, 1000), attempts.afterStatus(429, null));
+    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(429, null));
+    try std.testing.expectEqual(@as(?u64, null), attempts.afterStatus(429, null));
+    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(503, null));
+}
+
+test "Attempts jitters a 429 wait within 20 percent and never past the cap" {
+    var attempts = Attempts.init(10000, 8);
+    var i: u32 = 0;
+    while (i < 8) : (i += 1) {
+        const delay = attempts.afterStatus(429, null).?;
+        const base: u64 = @min(@as(u64, 1000) << @intCast(i), 10000);
+        try std.testing.expect(delay >= base * 8 / 10 and delay <= @min(base * 12 / 10, 10000));
+    }
 }
 
 test "Attempts takes Retry-After within the maximum and ignores it beyond" {
-    var attempts = Attempts.init(10000);
-    try std.testing.expectEqual(@as(?u64, 7000), attempts.afterStatus(429, "7"));
-    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(429, "30"));
-    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterStatus(429, "soon"));
+    var attempts = Attempts.init(10000, null);
+    try std.testing.expectEqual(@as(?u64, 7000), attempts.afterStatus(503, "7"));
+    try std.testing.expectEqual(@as(?u64, 2000), attempts.afterStatus(503, "30"));
+    try std.testing.expectEqual(@as(?u64, 4000), attempts.afterStatus(503, "soon"));
+    try std.testing.expectEqual(@as(?u64, 9000), attempts.afterStatus(429, "9"));
 }
 
 test "retryAfter reads the first Retry-After header of a response head" {

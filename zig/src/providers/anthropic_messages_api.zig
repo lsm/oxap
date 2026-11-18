@@ -1206,7 +1206,7 @@ fn runThread(ctx: *ThreadCtx) void {
     };
     const headers = header_set.headers.items;
 
-    var attempts = retry_util.Attempts.init(if (retry_options) |ro| ro.max_retry_delay_ms else null);
+    var attempts = retry_util.Attempts.init(if (retry_options) |ro| ro.max_retry_delay_ms else null, if (retry_options) |ro| ro.max_rate_limit_retries else null);
 
     var response: compat.http.Response = undefined;
     var head_buf: [4096]u8 = undefined;
