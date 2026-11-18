@@ -85,6 +85,8 @@ backend:
 - its own agent loop, which reaches any catalogued model provider;
 - a third-party harness, translated by a pinned adapter.
 
+[Two ways oxap runs a model](docs/two-layers.md) says when to pick which.
+
 ```mermaid
 flowchart TB
     subgraph clients["Clients"]
