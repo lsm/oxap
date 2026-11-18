@@ -238,10 +238,6 @@ pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initial
     return callWithCredentials(a, url, session, initialized, method, body, id, cancel, timeout_ms, null, &.{});
 }
 
-pub fn callAuthorized(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64, access: ?[]const u8) !Reply {
-    return callWithCredentials(a, url, session, initialized, method, body, id, cancel, timeout_ms, access, &.{});
-}
-
 pub fn callWithCredentials(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64, access: ?[]const u8, headers: []const std.http.Header) !Reply {
     const io = try sharedIo();
     const job = try create(url, session, initialized, method, body, id, access, headers);

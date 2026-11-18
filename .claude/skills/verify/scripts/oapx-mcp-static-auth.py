@@ -83,7 +83,7 @@ class Server(http.server.BaseHTTPRequestHandler):
 def main():
     output = Path(sys.argv[1]).resolve()
     output.mkdir(parents=True, exist_ok=False)
-    for mode in ('env', 'literal', 'headers-only', 'token-only', 'redirect', 'missing-header', 'missing-token', 'empty-header', 'empty-token', 'invalid-value', 'auth-conflict'):
+    for mode in ('env', 'literal', 'headers-only', 'token-only', 'null', 'redirect', 'missing-header', 'missing-token', 'empty-header', 'empty-token', 'invalid-value', 'auth-conflict'):
         with tempfile.TemporaryDirectory(prefix='oap-mcp-static-') as temporary:
             root = Path(temporary); home = root / 'home'; data = home / '.oapx'; data.mkdir(parents=True)
             binary = root / 'oxap'; shutil.copy2(base.ROOT / 'zig/zig-out/bin/oxap', binary)
@@ -96,6 +96,7 @@ def main():
             source = {'kind': 'remote', 'protocol': 'mcp', 'endpoint': f'http://127.0.0.1:{mcp.server_port}/mcp', 'headers': {'X-Literal': 'literal-value', 'X-From-Env': {'env': 'MCP_HEADER_VALUE'}}, 'auth': 'static-token' if mode == 'literal' else {'env': 'MCP_TOKEN_VALUE'}}
             if mode == 'headers-only': del source['auth']
             if mode == 'token-only': del source['headers']
+            if mode == 'null': source.update(headers=None, auth=None)
             if mode == 'invalid-value': source['headers']['X-Injected'] = 'bad\r\nInjected: value'
             if mode == 'auth-conflict': source['headers']['authorization'] = 'other'
             (root / 'hub.json').write_text(json.dumps({'adapters': {'loop': {'type': 'oapx'}}, 'tool_sources': {'demo': source}}))
@@ -111,8 +112,8 @@ def main():
                 command = ['/usr/bin/sandbox-exec', '-f', str(profile), str(binary)]
             Server.requests = 0
             Server.redirect = mode == 'redirect'
-            Server.require_headers = mode != 'token-only'
-            Server.require_auth = mode != 'headers-only'
+            Server.require_headers = mode not in ('token-only', 'null')
+            Server.require_auth = mode not in ('headers-only', 'null')
             Server.ping_answered.clear()
             stdio.Provider.requests = []
             hub = None

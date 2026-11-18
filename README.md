@@ -688,7 +688,8 @@ Each header value and the token may be a literal string or an environment
 reference, for example `"headers":{"X-Region":"west"}` and
 `"auth":{"env":"MCP_TOKEN"}`. Missing or empty referenced variables stop
 the daemon before it contacts the source. These values are not published in
-the source catalog.
+the source catalog. Requests with configured headers do not follow redirects,
+to avoid sending their values to an unintended destination.
 
 The daemon binds `127.0.0.1` by default and has no authentication: v0 is a
 single-user local service, and pointing it at an external interface is

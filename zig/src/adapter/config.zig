@@ -232,7 +232,7 @@ fn readToolSource(reader: Reader, id: []const u8, value: std.json.Value, environ
     const environment = try resolveEnvironment(reader, where, declared, environ, true);
     const args = try reader.strings(object, where, "args") orelse &.{};
     var headers: std.ArrayList(std.http.Header) = .empty;
-    if (object.get("headers")) |raw| {
+    if (object.get("headers")) |raw| if (raw != .null) {
         if (!std.mem.eql(u8, kind, "remote") or raw != .object) return reader.refuse("{s}: headers require a remote source and an object", .{where});
         var entries = raw.object.iterator();
         while (entries.next()) |entry| {
@@ -243,14 +243,14 @@ fn readToolSource(reader: Reader, id: []const u8, value: std.json.Value, environ
             if (!validHeaderValue(resolved)) return reader.refuse("{s}: invalid header value", .{where});
             try headers.append(reader.arena, .{ .name = name, .value = resolved });
         }
-    }
-    if (object.get("auth")) |raw| {
+    };
+    if (object.get("auth")) |raw| if (raw != .null) {
         if (!std.mem.eql(u8, kind, "remote")) return reader.refuse("{s}: auth requires a remote source", .{where});
         for (headers.items) |header| if (std.ascii.eqlIgnoreCase(header.name, "authorization")) return reader.refuse("{s}: auth conflicts with the authorization header", .{where});
         const bearer = try headerValue(reader, where, raw, environ);
         if (!validBearer(bearer)) return reader.refuse("{s}: invalid bearer token", .{where});
         try headers.append(reader.arena, .{ .name = "Authorization", .value = try std.fmt.allocPrint(reader.arena, "Bearer {s}", .{bearer}) });
-    }
+    };
     return .{
         .id = id,
         .kind = kind,
