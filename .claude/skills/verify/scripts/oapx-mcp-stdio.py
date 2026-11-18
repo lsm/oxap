@@ -65,7 +65,7 @@ def main():
         url = f'http://127.0.0.1:{server.server_port}/v1'
         (data / 'providers.json').write_text(json.dumps({'providers':[{'id':'synthetic','api':'openai-completions','base_url':url,'auth':'none','models':['synthetic-model']}]}))
         (data / 'config.json').write_text(json.dumps({'model':'synthetic-model','provider':'synthetic','api':'openai-completions','workspace':str(root)}))
-        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx', 'environment':['EXAMPLE_CLIENT=approved']}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','display_name':'Synthetic MCP service','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture', 'EXAMPLE_MARKER=' + str(root / 'closed'), 'EXAMPLE_START=' + str(root / 'started')]}}}))
+        (root / 'hub.json').write_text(json.dumps({'adapters':{'loop':{'type':'oapx', 'environment':['EXAMPLE_CLIENT=approved','EXAMPLE_ALLOWED=wrong']}},'tool_sources':{'demo':{'kind':'process','protocol':'mcp','display_name':'Synthetic MCP service','command':'/usr/bin/python3','args':[str(root / 'server.py')], 'environment':['EXAMPLE_ALLOWED=fixture', 'EXAMPLE_MARKER=' + str(root / 'closed'), 'EXAMPLE_START=' + str(root / 'started')]}}}))
         environment = {'PATH':'/usr/bin:/bin','HOME':str(home),'TMPDIR':str(root),'NODE_ENV':'test','EXAMPLE_PRIVATE':'must-not-inherit','OAPX_KEYCHAIN_SERVICE':'oap-verify-'+str(uuid.uuid4())}
         command = [str(binary)]
         if sys.platform == 'darwin':
@@ -82,6 +82,14 @@ def main():
             except AssertionError as error:
                 response = error.args[0]
                 assert isinstance(response, dict) and response['error']['details'].get('source') == 'remote-example', response
+            denied = base.envelope('session.open.request', {'session_id':'denied-env','tool_sources':[{'id':'demo','kind':'process','environment':['EXAMPLE_PRIVATE']}]})
+            try:
+                hub.call('open', adapter='loop', request=denied)
+                raise AssertionError('unallowed environment was accepted')
+            except AssertionError as error:
+                response = error.args[0]
+                assert isinstance(response, dict) and response['error']['details'].get('source') == 'demo' and response['error']['details'].get('field') == 'EXAMPLE_PRIVATE', response
+            assert not (root / 'started').exists(), 'unallowed environment started the server'
             invalid = base.envelope('session.open.request', {'session_id':'invalid-model','tool_sources':[{'id':'demo','kind':'process'}], 'metadata':{'oapx':{'model':'unknown-model'}}})
             try:
                 hub.call('open', adapter='loop', request=invalid)
@@ -89,7 +97,7 @@ def main():
             except AssertionError as error:
                 assert isinstance(error.args[0], dict), error
             assert not (root / 'started').exists(), 'invalid open started the MCP server'
-            request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process','environment':['EXAMPLE_CLIENT']}], 'tools':[{'name':'host_lookup','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
+            request = base.envelope('session.open.request', {'session_id':'mcp-proof','tool_sources':[{'id':'demo','kind':'process','environment':['EXAMPLE_CLIENT','EXAMPLE_ALLOWED']}], 'tools':[{'name':'host_lookup','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}], 'metadata':{'oapx':{'permission_mode':'bypass'}}})
             result = hub.call('open', adapter='loop', request=request)
             assert 'error' not in result.get('payload', {}), result
             assert any(source['id'] == 'demo' for source in result['payload']['sources']), result
@@ -98,7 +106,7 @@ def main():
             catalog = hub.call('tools', session_id='mcp-proof')
             assert any(tool['name'] == 'mcp_demo_echo' and tool['source'] == 'demo' for tool in catalog['payload']['tools']), catalog
             assert any(tool['name'] == 'host_lookup' and tool['source'] == 'demo' for tool in catalog['payload']['tools']), catalog
-            collision = base.envelope('session.open.request', {'session_id':'collision', 'tool_sources':[{'id':'demo','kind':'process'}], 'tools':[{'name':'mcp_demo_echo','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}]})
+            collision = base.envelope('session.open.request', {'session_id':'collision', 'tool_sources':[{'id':'demo','kind':'process','environment':['EXAMPLE_CLIENT']}], 'tools':[{'name':'mcp_demo_echo','execution_owner':'user','source':'demo','input_schema':{'type':'object'}}]})
             try:
                 hub.call('open', adapter='loop', request=collision)
                 raise AssertionError('colliding tool was accepted')
@@ -123,12 +131,14 @@ def main():
             initialize = base.envelope('protocol.initialize.request', {'protocol_versions':['0.1'], 'profiles':['open-agent-protocol.agent-control-core'], 'participant':{'id':'user'}})
             opens = [base.envelope('session.open.request', {'session_id':'duplicate-proof'}),
                      base.envelope('session.open.request', {'session_id':'duplicate-proof', 'tool_sources':[{'id':'remote-example','kind':'remote'}]}),
-                     base.envelope('session.open.request', {'session_id':'duplicate-proof', 'tool_sources':[{'id':'blocked','kind':'process','command':'/bin/true'}]})]
-            direct = subprocess.run(command + ['serve', 'agent', '--backend', 'oapx', '--stdio'], input=''.join(json.dumps(x) + '\n' for x in [initialize, *opens]), text=True, cwd=root, env=environment, capture_output=True, timeout=30)
+                     base.envelope('session.open.request', {'session_id':'duplicate-proof', 'tool_sources':[{'id':'blocked','kind':'process','command':'/bin/true'}]}),
+                     base.envelope('session.open.request', {'session_id':'direct-env', 'tool_sources':[{'id':'demo','kind':'process','environment':['EXAMPLE_CLIENT']}]})]
+            direct = subprocess.run(command + ['serve', 'agent', '--backend', 'loop', '--config', str(root / 'hub.json'), '--stdio'], input=''.join(json.dumps(x) + '\n' for x in [initialize, *opens]), text=True, cwd=root, env=environment, capture_output=True, timeout=30)
             (output / 'direct.jsonl').write_text(direct.stdout)
             frames = [json.loads(line) for line in direct.stdout.splitlines()]
             assert direct.returncode == 0 and any(x.get('payload', {}).get('error', {}).get('code') == 'session_exists' for x in frames), (direct.returncode, frames, direct.stderr)
             assert any(x.get('payload', {}).get('error', {}).get('details', {}).get('source') == 'blocked' and x['payload']['error']['code'] == 'unsupported_feature' for x in frames), frames
+            assert any(x.get('type') == 'session.open.response' and x.get('payload', {}).get('session_id') == 'direct-env' for x in frames), frames
             print('PASS: discovered and called stdio MCP tool')
         finally:
             if hub: hub.stop()

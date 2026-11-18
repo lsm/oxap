@@ -321,7 +321,9 @@ source the loop declares or the session attaches (Decision 0048). An absent or
 unknown source is refused. At session open, a configured stdio MCP source can
 be attached to the served loop. Its tools are discovered, listed with their
 source, and called through the same lifecycle and permission policy. Remote
-MCP transports are not yet supported.
+MCP transports are not yet supported. Caller-supplied environment names resolve
+only against the adapter entry's environment; source entries take precedence.
+An unallowlisted name is refused before the server starts.
 
 ## What stays on the TUI side of the line
 
