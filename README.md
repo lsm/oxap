@@ -1336,3 +1336,17 @@ The repository is dedicated under CC0-1.0 so any presentation layer, control
 layer, agent loop, model provider, tool executor, resource provider, tool
 source, or SDK adapter can implement the protocol without project-specific
 licensing friction.
+
+### Alpine runner image
+
+Build the x64 Linux runner and image from a checkout:
+
+```sh
+zig build --build-file zig/build.zig -Dtarget=x86_64-linux -Doptimize=ReleaseSafe
+docker build --platform linux/amd64 -t oxap-alpine .
+```
+
+The image runs the built-in loop and accepts the usual `oxap` arguments. Mount
+configuration and state at runtime; do not put credentials in the image. It does
+not bundle external harnesses: the pinned OpenCode Linux binary does not run on
+Alpine's `gcompat`. Musl-native harness artifacts are tracked in #1874.
