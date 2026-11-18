@@ -33,7 +33,8 @@ jobs:
       - name: Build image
         run: docker build --platform linux/amd64 -t oxap-alpine:verify .
       - name: Record image size
-        run: docker image inspect oxap-alpine:verify --format "Image size: {{.Size}} bytes"
+        run: |
+          docker image inspect oxap-alpine:verify --format "Image size: {{.Size}} bytes"
       - name: Run image journey
         run: NODE_ENV=test python3 .claude/skills/verify/scripts/alpine-image.py "$RUNNER_TEMP/alpine-evidence"
       - uses: actions/upload-artifact@v4
