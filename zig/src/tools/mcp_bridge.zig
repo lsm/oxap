@@ -934,7 +934,7 @@ fn expectNoDuplicateToolNames(bridge: *const McpBridge) !void {
 }
 
 fn parseMcpResponse(allocator: std.mem.Allocator, body: []const u8) !std.json.Parsed(std.json.Value) {
-    return std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    return std.json.parseFromSlice(std.json.Value, allocator, body, .{ .allocate = .alloc_always });
 }
 
 test "MCP responses remain readable after their input is overwritten" {
