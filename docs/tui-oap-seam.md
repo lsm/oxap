@@ -318,10 +318,13 @@ interaction the opener settles with `action.call.resolve.request` while the
 loop's tool waits. Its limits are 64 tools, names matching
 `^[a-zA-Z0-9_-]{1,64}$`, and JSON Schema 2020-12; a definition must name a
 source the loop declares or the session attaches (Decision 0048). An absent or
-unknown source is refused. At session open, a configured stdio MCP source can
+unknown source is refused. At session open, a configured stdio or Streamable HTTP MCP source can
 be attached to the served loop. Its tools are discovered, listed with their
 source, and called through the same lifecycle and permission policy. Remote
-MCP transports are not yet supported. Caller-supplied environment names resolve
+sources use an `http` or `https` endpoint and do not yet support authentication.
+The loop refuses a remote source unless its id and endpoint match the operator's
+configuration, including when an unconfigured descriptor reaches the adapter.
+Caller-supplied environment names resolve
 only against the adapter entry's environment; source entries take precedence.
 An unallowlisted name is refused before the server starts.
 

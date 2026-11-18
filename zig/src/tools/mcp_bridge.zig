@@ -5,6 +5,7 @@ const ai_types = @import("ai_types");
 const agent = @import("agent");
 const common = @import("tools/common");
 const build_options = @import("build_options");
+const mcp_http = @import("mcp_http.zig");
 
 const mcp_client_info_json = std.fmt.comptimePrint("{{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"makai\",\"version\":\"{s}\"}}}}", .{build_options.version});
 
@@ -13,12 +14,14 @@ pub const tool_prefix = "mcp_";
 pub const McpServerConfig = struct {
     name: []u8,
     command: []u8,
+    endpoint: ?[]u8 = null,
     args: [][]u8 = &.{},
     env: []EnvVar = &.{},
 
     pub fn deinit(self: *McpServerConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.command);
+        if (self.endpoint) |endpoint| allocator.free(endpoint);
         for (self.args) |arg| allocator.free(arg);
         allocator.free(self.args);
         for (self.env) |*entry| entry.deinit(allocator);
@@ -117,8 +120,17 @@ const McpServerSession = struct {
     stdout_pending: std.ArrayList(u8) = .empty,
     stderr: std.ArrayList(u8) = .empty,
     mock_response: ?std.json.Value = null,
+    http_session: ?[]u8 = null,
+    http_initialized: bool = false,
 
     fn deinit(self: *McpServerSession, allocator: std.mem.Allocator) void {
+        if (self.config.endpoint) |endpoint| {
+            if (self.http_session) |session| {
+                var response = mcp_http.call(allocator, endpoint, session, self.http_initialized, .DELETE, null, null, null, 1000) catch null;
+                if (response) |*value| value.deinit(allocator);
+                allocator.free(session);
+            }
+        }
         self.stop();
         self.stdout_pending.deinit(allocator);
         self.config.deinit(allocator);
@@ -179,8 +191,6 @@ const McpServerSession = struct {
         if (self.mock_response) |value| {
             return std.json.parseFromValue(std.json.Value, allocator, value, .{});
         }
-        try self.start(allocator);
-        const child = &(self.child orelse return error.McpServerNotRunning);
         const id = self.next_id;
         self.next_id += 1;
         const escaped_method = try std.json.Stringify.valueAlloc(allocator, method, .{});
@@ -188,6 +198,21 @@ const McpServerSession = struct {
         const request = try std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"id\":{d},\"method\":{s},\"params\":{s}}}\n", .{ id, escaped_method, params_json });
         defer allocator.free(request);
         if (std.mem.indexOfScalar(u8, request[0 .. request.len - 1], '\n') != null) return error.InvalidMcpRequest;
+        if (self.config.endpoint) |endpoint| {
+            var response = mcp_http.call(allocator, endpoint, self.http_session, self.http_initialized, .POST, request, id, cancel_token, timeout_ms) catch |err| {
+                if (err == error.Cancelled) self.notifyCancelled(allocator, id);
+                return err;
+            };
+            defer response.deinit(allocator);
+            if (response.session) |session| {
+                const replacement = try allocator.dupe(u8, session);
+                if (self.http_session) |old| allocator.free(old);
+                self.http_session = replacement;
+            }
+            return parseMcpResponse(allocator, response.body);
+        }
+        try self.start(allocator);
+        const child = &(self.child orelse return error.McpServerNotRunning);
         try writeUnlessCancelled(child, request, cancel_token);
 
         var threaded = std.Io.Threaded.init(allocator, .{});
@@ -206,7 +231,7 @@ const McpServerSession = struct {
                 defer allocator.free(line);
                 const trimmed = std.mem.trim(u8, line, " \t\r\n");
                 if (trimmed.len == 0) continue;
-                var parsed = try std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{});
+                var parsed = try parseMcpResponse(allocator, trimmed);
                 errdefer parsed.deinit();
                 if (parsed.value != .object) return error.InvalidMcpResponse;
                 const obj = parsed.value.object;
@@ -245,17 +270,28 @@ const McpServerSession = struct {
     fn notifyCancelled(self: *McpServerSession, allocator: std.mem.Allocator, id: u64) void {
         const params = std.fmt.allocPrint(allocator, "{{\"requestId\":{d},\"reason\":\"cancelled\"}}", .{id}) catch return;
         defer allocator.free(params);
+        if (self.config.endpoint) |endpoint| {
+            const notification = std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{s}}}", .{params}) catch return;
+            defer allocator.free(notification);
+            mcp_http.notify(endpoint, self.http_session, self.http_initialized, notification);
+            return;
+        }
         self.sendNotification(allocator, "notifications/cancelled", params) catch {};
     }
 
     fn sendNotification(self: *McpServerSession, allocator: std.mem.Allocator, method: []const u8, params_json: []const u8) !void {
         if (self.mock_response != null) return;
-        try self.start(allocator);
-        const child = &(self.child orelse return error.McpServerNotRunning);
         const escaped_method = try std.json.Stringify.valueAlloc(allocator, method, .{});
         defer allocator.free(escaped_method);
         const notification = try std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"method\":{s},\"params\":{s}}}\n", .{ escaped_method, params_json });
         defer allocator.free(notification);
+        if (self.config.endpoint) |endpoint| {
+            var response = try mcp_http.call(allocator, endpoint, self.http_session, self.http_initialized, .POST, notification, null, null, 5000);
+            defer response.deinit(allocator);
+            return;
+        }
+        try self.start(allocator);
+        const child = &(self.child orelse return error.McpServerNotRunning);
         try child.stdin.?.writeStreamingAll(common.defaultIo(), notification);
     }
 
@@ -338,9 +374,16 @@ pub const McpBridge = struct {
 
     pub fn discover(self: *McpBridge) !void {
         for (self.servers.items, 0..) |*server, server_index| {
-            var initialize_response = try server.sendRequest(self.allocator, "initialize", mcp_client_info_json, null, mcp_discovery_timeout_ms);
+            const client_info = if (server.config.endpoint != null) std.fmt.comptimePrint("{{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"makai\",\"version\":\"{s}\"}}}}", .{build_options.version}) else mcp_client_info_json;
+            var initialize_response = try server.sendRequest(self.allocator, "initialize", client_info, null, mcp_discovery_timeout_ms);
             defer initialize_response.deinit();
             try validateRpcResult(initialize_response.value);
+            if (server.config.endpoint != null) {
+                const result = resultObject(initialize_response.value) orelse return error.InvalidMcpResponse;
+                const version = getString(result, "protocolVersion") orelse return error.InvalidMcpResponse;
+                if (!std.mem.eql(u8, version, "2025-03-26")) return error.UnsupportedMcpVersion;
+                server.http_initialized = true;
+            }
             try server.sendNotification(self.allocator, "notifications/initialized", "{}");
             var list_params = try self.allocator.dupe(u8, "{}");
             var list_params_owned = true;
@@ -478,11 +521,14 @@ fn executeWithContext(ctx: ?*anyopaque, tool_call_id: []const u8, args_json: []c
 fn parseServerConfig(allocator: std.mem.Allocator, value: std.json.Value) !McpServerConfig {
     if (value != .object) return error.InvalidMcpConfig;
     const obj = value.object;
-    var cfg = McpServerConfig{
-        .name = try allocator.dupe(u8, getString(obj, "name") orelse return error.InvalidMcpConfig),
-        .command = try allocator.dupe(u8, getString(obj, "command") orelse return error.InvalidMcpConfig),
+    var cfg: McpServerConfig = blk: {
+        const name = try allocator.dupe(u8, getString(obj, "name") orelse return error.InvalidMcpConfig);
+        errdefer allocator.free(name);
+        const command = try allocator.dupe(u8, getString(obj, "command") orelse if (getString(obj, "endpoint") != null) "" else return error.InvalidMcpConfig);
+        break :blk .{ .name = name, .command = command };
     };
     errdefer cfg.deinit(allocator);
+    if (getString(obj, "endpoint")) |endpoint| cfg.endpoint = try allocator.dupe(u8, endpoint);
     if (obj.get("args")) |args_value| {
         if (args_value != .array) return error.InvalidMcpConfig;
         cfg.args = try allocator.alloc([]u8, args_value.array.items.len);
@@ -709,7 +755,6 @@ test "MCP config parser rejects malformed arg and env types" {
     try std.testing.expectError(error.InvalidMcpConfig, bridge.loadConfigJson("[{\"name\":\"mock\",\"command\":\"mock\",\"env\":{\"A\":1}}]"));
 }
 
-
 test "MCP config parser does not retain partial servers after malformed entry" {
     var bridge = McpBridge.init(std.testing.allocator);
     bridge.bind();
@@ -888,6 +933,34 @@ fn expectNoDuplicateToolNames(bridge: *const McpBridge) !void {
     }
 }
 
+fn parseMcpResponse(allocator: std.mem.Allocator, body: []const u8) !std.json.Parsed(std.json.Value) {
+    return std.json.parseFromSlice(std.json.Value, allocator, body, .{ .allocate = .alloc_always });
+}
+
+test "MCP responses remain readable after their input is overwritten" {
+    const body = try std.testing.allocator.dupe(u8, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"value\":\"intact-response\"}}");
+    defer std.testing.allocator.free(body);
+    var response = try parseMcpResponse(std.testing.allocator, body);
+    defer response.deinit();
+    @memset(body, 'x');
+    const result = resultObject(response.value) orelse return error.InvalidMcpResponse;
+    try std.testing.expectEqualStrings("intact-response", getString(result, "value") orelse return error.InvalidMcpResponse);
+}
+
+test "stdio MCP response remains readable after the request returns" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const config_json = try makeShellConfigJson(std.testing.allocator, "python3 -u -c 'import json,sys; msg=json.loads(sys.stdin.readline()); print(json.dumps({\"jsonrpc\":\"2.0\",\"id\":msg[\"id\"],\"result\":{\"value\":\"intact-response\"}}),flush=True)'");
+    defer std.testing.allocator.free(config_json);
+    var bridge = McpBridge.init(std.testing.allocator);
+    bridge.bind();
+    defer bridge.deinit();
+    try bridge.loadConfigJson(config_json);
+    var response = try bridge.servers.items[0].sendRequest(std.testing.allocator, "tools/call", "{}", null, 5000);
+    defer response.deinit();
+    const result = resultObject(response.value) orelse return error.InvalidMcpResponse;
+    try std.testing.expectEqualStrings("intact-response", getString(result, "value") orelse return error.InvalidMcpResponse);
+}
+
 test "MCP discover responds to inbound ping and accepts matching response only" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const config_json = try makeShellConfigJson(std.testing.allocator, fakeMcpServerScript());
@@ -900,7 +973,6 @@ test "MCP discover responds to inbound ping and accepts matching response only" 
     try std.testing.expectEqual(@as(usize, 1), bridge.tools.items.len);
     try std.testing.expectEqualStrings("echo", bridge.tools.items[0].mcp_name);
 }
-
 
 test "MCP discover drains buffered inbound after matching response" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
@@ -915,7 +987,6 @@ test "MCP discover drains buffered inbound after matching response" {
     try std.testing.expectEqualStrings("echo", bridge.tools.items[0].mcp_name);
 }
 
-
 test "MCP discover returns method-not-found for unsupported inbound request" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const config_json = try makeShellConfigJson(std.testing.allocator, unsupportedInboundMethodScript());
@@ -928,7 +999,6 @@ test "MCP discover returns method-not-found for unsupported inbound request" {
     try std.testing.expectEqual(@as(usize, 1), bridge.tools.items.len);
     try std.testing.expectEqualStrings("echo", bridge.tools.items[0].mcp_name);
 }
-
 
 test "MCP preserves partial buffered frame across requests" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
@@ -953,7 +1023,6 @@ test "MCP preserves partial buffered frame across requests" {
     try std.testing.expectEqual(@as(usize, 0), server.stdout_pending.items.len);
 }
 
-
 test "MCP initialize rejects error or missing result" {
     var bridge = McpBridge.init(std.testing.allocator);
     bridge.bind();
@@ -971,7 +1040,6 @@ test "MCP initialize rejects error or missing result" {
     try std.testing.expectError(error.InvalidMcpResponse, bridge.discover());
 }
 
-
 test "MCP execution honors cancellation while waiting" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const config_json = try makeShellConfigJson(std.testing.allocator, hangingMcpServerScript());
@@ -985,7 +1053,6 @@ test "MCP execution honors cancellation while waiting" {
     const token = ai_types.CancelToken{ .cancelled = &cancelled };
     try std.testing.expectError(error.Cancelled, tool.runtime_execute.?(tool.runtime_ctx, "call_1", "{}", token, null, null, std.testing.allocator));
 }
-
 
 fn cancelOnceTheServerHasTheRequest(dir: std.Io.Dir, cancelled: *std.atomic.Value(bool)) void {
     const by = common.nowMs() + 5_000;
@@ -1099,7 +1166,6 @@ test "MCP discovery times out when server never responds" {
     try std.testing.expectError(error.Timeout, bridge.discover());
 }
 
-
 test "MCP discovery follows paginated tools list cursors" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     const config_json = try makeShellConfigJson(std.testing.allocator, paginatedToolsListScript());
@@ -1113,7 +1179,6 @@ test "MCP discovery follows paginated tools list cursors" {
     try std.testing.expectEqualStrings("first", bridge.tools.items[0].mcp_name);
     try std.testing.expectEqualStrings("second", bridge.tools.items[1].mcp_name);
 }
-
 
 test "MCP sendRequest drains pending response before timeout" {
     var bridge = McpBridge.init(std.testing.allocator);
@@ -1129,7 +1194,6 @@ test "MCP sendRequest drains pending response before timeout" {
     defer response.deinit();
     try validateRpcResult(response.value);
 }
-
 
 test "MCP tools/call arguments are compacted to one JSON-RPC line" {
     var bridge = McpBridge.init(std.testing.allocator);
@@ -1150,7 +1214,6 @@ test "MCP tools/call arguments are compacted to one JSON-RPC line" {
     try std.testing.expectEqualStrings("ok", result.content.slice()[0].text.text);
 }
 
-
 test "MCP structured-only result is surfaced" {
     var parsed = try std.json.parseFromSlice(
         std.json.Value,
@@ -1163,7 +1226,6 @@ test "MCP structured-only result is surfaced" {
     defer tool_result.deinit(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, tool_result.content.slice()[0].text.text, "\"answer\":42") != null);
 }
-
 
 test "MCP colliding sanitized names are disambiguated" {
     var bridge = McpBridge.init(std.testing.allocator);

@@ -94,6 +94,7 @@ jobs:
       - name: Run the SDK tests
         env:
           OAP_SDK_BINARY_PATH: /tmp/oapx-go-sdk/bin/oxap
+          NODE_ENV: test
         run: go test -race ./go/sdk/...
       - name: Tests leave no credential store in the checkout
         if: always()
