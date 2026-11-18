@@ -19,6 +19,7 @@ pub const McpServerConfig = struct {
     endpoint: ?[]u8 = null,
     args: [][]u8 = &.{},
     env: []EnvVar = &.{},
+    headers: []std.http.Header = &.{},
 
     pub fn deinit(self: *McpServerConfig, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
@@ -28,6 +29,12 @@ pub const McpServerConfig = struct {
         allocator.free(self.args);
         for (self.env) |*entry| entry.deinit(allocator);
         allocator.free(self.env);
+        for (self.headers) |header| {
+            allocator.free(header.name);
+            std.crypto.secureZero(u8, @constCast(header.value));
+            allocator.free(header.value);
+        }
+        allocator.free(self.headers);
         self.* = undefined;
     }
 };
@@ -270,13 +277,18 @@ const McpServerSession = struct {
     }
 
     fn httpCall(self: *McpServerSession, allocator: std.mem.Allocator, endpoint: []const u8, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel_token: ?ai_types.CancelToken, timeout_ms: ?u64) !mcp_http.Reply {
-        const access = try mcp_credentials.access(allocator, endpoint, null);
+        const static_auth = self.hasStaticAuth();
+        const access = if (static_auth) null else try mcp_credentials.access(allocator, endpoint, null);
         defer if (access) |value| {
             std.crypto.secureZero(u8, value);
             allocator.free(value);
         };
-        var response = try mcp_http.callAuthorized(allocator, endpoint, self.http_session, self.http_initialized, method, body, id, cancel_token, timeout_ms, access);
+        var response = try mcp_http.callWithCredentials(allocator, endpoint, self.http_session, self.http_initialized, method, body, id, cancel_token, timeout_ms, access, self.config.headers);
         if (response.unauthorized) {
+            if (static_auth) {
+                response.deinit(allocator);
+                return error.McpHttpFailure;
+            }
             if (access) |rejected| {
                 response.deinit(allocator);
                 const renewed = (try mcp_credentials.access(allocator, endpoint, rejected)) orelse return error.McpHttpFailure;
@@ -284,7 +296,7 @@ const McpServerSession = struct {
                     std.crypto.secureZero(u8, renewed);
                     allocator.free(renewed);
                 }
-                response = try mcp_http.callAuthorized(allocator, endpoint, self.http_session, self.http_initialized, method, body, id, cancel_token, timeout_ms, renewed);
+                response = try mcp_http.callWithCredentials(allocator, endpoint, self.http_session, self.http_initialized, method, body, id, cancel_token, timeout_ms, renewed, self.config.headers);
                 if (response.unauthorized) {
                     response.deinit(allocator);
                     return error.McpHttpFailure;
@@ -312,6 +324,11 @@ const McpServerSession = struct {
         return response;
     }
 
+    fn hasStaticAuth(self: *const McpServerSession) bool {
+        for (self.config.headers) |header| if (std.ascii.eqlIgnoreCase(header.name, "authorization")) return true;
+        return false;
+    }
+
     fn rememberAccess(self: *McpServerSession, allocator: std.mem.Allocator, access: ?[]const u8) !void {
         const replacement = if (access) |value| try allocator.dupe(u8, value) else null;
         if (self.http_access) |old| {
@@ -332,7 +349,7 @@ const McpServerSession = struct {
         if (self.config.endpoint) |endpoint| {
             const notification = std.fmt.allocPrint(allocator, "{{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{s}}}", .{params}) catch return;
             defer allocator.free(notification);
-            mcp_http.notifyAuthorized(endpoint, self.http_session, self.http_initialized, notification, self.http_access);
+            mcp_http.notifyWithCredentials(endpoint, self.http_session, self.http_initialized, notification, self.http_access, self.config.headers);
             return;
         }
         self.sendNotification(allocator, "notifications/cancelled", params) catch {};
@@ -429,6 +446,30 @@ pub const McpBridge = struct {
         }
         try self.servers.appendSlice(self.allocator, parsed_servers.items);
         parsed_servers.deinit(self.allocator);
+    }
+
+    pub fn setHeaders(self: *McpBridge, name: []const u8, headers: []const std.http.Header) !void {
+        for (self.servers.items) |*server| {
+            if (!std.mem.eql(u8, server.config.name, name)) continue;
+            const copies = try self.allocator.alloc(std.http.Header, headers.len);
+            var filled: usize = 0;
+            errdefer {
+                for (copies[0..filled]) |header| {
+                    self.allocator.free(header.name);
+                    std.crypto.secureZero(u8, @constCast(header.value));
+                    self.allocator.free(header.value);
+                }
+                self.allocator.free(copies);
+            }
+            for (headers, copies) |header, *copy| {
+                const header_name = try self.allocator.dupe(u8, header.name);
+                errdefer self.allocator.free(header_name);
+                copy.* = .{ .name = header_name, .value = try self.allocator.dupe(u8, header.value) };
+                filled += 1;
+            }
+            server.config.headers = copies;
+            return;
+        }
     }
 
     pub fn discover(self: *McpBridge) !void {

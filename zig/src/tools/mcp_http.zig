@@ -48,6 +48,7 @@ const Job = struct {
     unauthorized: bool = false,
     authorization: ?[]u8,
     failure: ?anyerror = null,
+    headers: []std.http.Header,
 
     fn release(self: *Job) void {
         if (self.refs.fetchSub(1, .acq_rel) != 1) return;
@@ -61,6 +62,12 @@ const Job = struct {
             std.crypto.secureZero(u8, s);
             alloc.free(s);
         }
+        for (self.headers) |header| {
+            alloc.free(header.name);
+            std.crypto.secureZero(u8, @constCast(header.value));
+            alloc.free(header.value);
+        }
+        alloc.free(self.headers);
         alloc.destroy(self);
     }
 
@@ -82,27 +89,21 @@ const Job = struct {
     fn exchange(self: *Job, client: *compat.http.HttpClient, method: std.http.Method, body: ?[]const u8, id: ?u64, primary: bool) anyerror!void {
         if (self.cancelled.load(.acquire)) return error.Cancelled;
         const uri = try std.Uri.parse(self.url);
-        var headers: [5]std.http.Header = undefined;
-        var count: usize = 0;
-        headers[count] = .{ .name = "Accept", .value = "application/json, text/event-stream" };
-        count += 1;
-        headers[count] = .{ .name = "Content-Type", .value = "application/json" };
-        count += 1;
+        var headers: std.ArrayList(std.http.Header) = .empty;
+        defer headers.deinit(alloc);
+        try headers.append(alloc, .{ .name = "Accept", .value = "application/json, text/event-stream" });
+        try headers.append(alloc, .{ .name = "Content-Type", .value = "application/json" });
         if (self.session orelse self.new_session) |session| {
-            headers[count] = .{ .name = "Mcp-Session-Id", .value = session };
-            count += 1;
+            try headers.append(alloc, .{ .name = "Mcp-Session-Id", .value = session });
         }
         if (self.initialized) {
-            headers[count] = .{ .name = "MCP-Protocol-Version", .value = "2025-03-26" };
-            count += 1;
+            try headers.append(alloc, .{ .name = "MCP-Protocol-Version", .value = "2025-03-26" });
         }
-        if (self.authorization) |value| {
-            headers[count] = .{ .name = "Authorization", .value = value };
-            count += 1;
-        }
-        var request = try client.openRequest(method, uri, .{ .extra_headers = headers[0..count], .keep_alive = false });
+        try headers.appendSlice(alloc, self.headers);
+        if (self.authorization) |value| try headers.append(alloc, .{ .name = "Authorization", .value = value });
+        var request = try client.openRequest(method, uri, .{ .extra_headers = headers.items, .keep_alive = false });
         defer request.deinit();
-        if (self.authorization != null) request.redirect_behavior = .unhandled;
+        if (self.authorization != null or self.headers.len > 0) request.redirect_behavior = .unhandled;
         if (body) |value| try compat.http.sendRequest(&request, value) else try compat.http.sendBodilessRequest(&request);
         var redirect: [8192]u8 = undefined;
         var response = try compat.http.receiveResponse(&request, &redirect);
@@ -181,7 +182,7 @@ const Job = struct {
     }
 };
 
-fn create(url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, access: ?[]const u8) !*Job {
+fn create(url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, access: ?[]const u8, supplied: []const std.http.Header) !*Job {
     const job = try alloc.create(Job);
     errdefer alloc.destroy(job);
     const url_copy = try alloc.dupe(u8, url);
@@ -190,17 +191,33 @@ fn create(url: []const u8, session: ?[]const u8, initialized: bool, method: std.
     errdefer if (session_copy) |s| alloc.free(s);
     const body_copy = if (body) |s| try alloc.dupe(u8, s) else null;
     errdefer if (body_copy) |s| alloc.free(s);
-    const authorization = if (access) |s| try std.fmt.allocPrint(alloc, "Bearer {s}", .{s}) else null;
-    job.* = .{ .url = url_copy, .session = session_copy, .initialized = initialized, .body = body_copy, .id = id, .method = method, .authorization = authorization };
+    const headers = try alloc.alloc(std.http.Header, supplied.len);
+    var filled: usize = 0;
+    errdefer {
+        for (headers[0..filled]) |header| {
+            alloc.free(header.name);
+            std.crypto.secureZero(u8, @constCast(header.value));
+            alloc.free(header.value);
+        }
+        alloc.free(headers);
+    }
+    for (supplied, headers) |header, *copy| {
+        const name = try alloc.dupe(u8, header.name);
+        errdefer alloc.free(name);
+        copy.* = .{ .name = name, .value = try alloc.dupe(u8, header.value) };
+        filled += 1;
+    }
+    const authorization = if (access) |value| try std.fmt.allocPrint(alloc, "Bearer {s}", .{value}) else null;
+    job.* = .{ .url = url_copy, .session = session_copy, .initialized = initialized, .body = body_copy, .id = id, .method = method, .headers = headers, .authorization = authorization };
     return job;
 }
 
 pub fn notify(url: []const u8, session: ?[]const u8, initialized: bool, body: []const u8) void {
-    notifyAuthorized(url, session, initialized, body, null);
+    notifyWithCredentials(url, session, initialized, body, null, &.{});
 }
 
-pub fn notifyAuthorized(url: []const u8, session: ?[]const u8, initialized: bool, body: []const u8, access: ?[]const u8) void {
-    const job = create(url, session, initialized, .POST, body, null, access) catch return;
+pub fn notifyWithCredentials(url: []const u8, session: ?[]const u8, initialized: bool, body: []const u8, access: ?[]const u8, headers: []const std.http.Header) void {
+    const job = create(url, session, initialized, .POST, body, null, access, headers) catch return;
     const thread = std.Thread.spawn(.{}, notifyRun, .{job}) catch {
         job.release();
         job.release();
@@ -213,17 +230,17 @@ pub fn notifyAuthorized(url: []const u8, session: ?[]const u8, initialized: bool
 fn notifyRun(job: *Job) void {
     defer job.release();
     const access = if (job.authorization) |value| value[7..] else null;
-    var response = callAuthorized(alloc, job.url, job.session, job.initialized, .POST, job.body, null, null, 5000, access) catch return;
+    var response = callWithCredentials(alloc, job.url, job.session, job.initialized, .POST, job.body, null, null, 5000, access, job.headers) catch return;
     response.deinit(alloc);
 }
 
 pub fn call(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64) !Reply {
-    return callAuthorized(a, url, session, initialized, method, body, id, cancel, timeout_ms, null);
+    return callWithCredentials(a, url, session, initialized, method, body, id, cancel, timeout_ms, null, &.{});
 }
 
-pub fn callAuthorized(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64, access: ?[]const u8) !Reply {
+pub fn callWithCredentials(a: std.mem.Allocator, url: []const u8, session: ?[]const u8, initialized: bool, method: std.http.Method, body: ?[]const u8, id: ?u64, cancel: ?ai_types.CancelToken, timeout_ms: ?u64, access: ?[]const u8, headers: []const std.http.Header) !Reply {
     const io = try sharedIo();
-    const job = try create(url, session, initialized, method, body, id, access);
+    const job = try create(url, session, initialized, method, body, id, access, headers);
     var future = io.concurrent(Job.run, .{ job, io }) catch |err| {
         job.release();
         job.release();
