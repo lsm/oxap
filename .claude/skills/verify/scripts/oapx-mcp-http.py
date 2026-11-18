@@ -9,6 +9,7 @@ import shutil
 import ssl
 import sys
 import tempfile
+import time
 import threading
 import uuid
 
@@ -43,6 +44,7 @@ class Mcp(http.server.BaseHTTPRequestHandler):
         elif method == 'tools/list':
             result = {'tools':[{'name':'echo','description':'Echo input','inputSchema':{'type':'object','properties':{'text':{'type':'string'}}}}]}
         elif method == 'tools/call':
+            time.sleep(float(os.environ.get('OAP_VERIFY_MCP_DELAY', '0')))
             result = {'content':[{'type':'text','text':'echoed:' + request['params']['arguments']['text']}]}
         else:
             raise AssertionError(method)
@@ -109,7 +111,14 @@ def main():
             assert 'error' not in result.get('payload', {}), result
             catalog = hub.call('tools', session_id='http-proof')
             assert any(t['name'] == 'mcp_demo_echo' and t['source'] == 'demo' for t in catalog['payload']['tools']), catalog
-            base.submit(hub, 'http-proof', 'Call the echo tool with hello')
+            request = base.envelope('session.message.submit.request', {'session_id':'http-proof','delivery':'auto','messages':[{'role':'user','content':'Call the echo tool with hello'}]})
+            request['session_id'] = 'http-proof'
+            hub.call('submit', session_id='http-proof', request=request)
+            deadline = time.monotonic() + 50
+            while time.monotonic() < deadline:
+                if hub.call('state', session_id='http-proof')['payload'].get('status') == 'idle': break
+                time.sleep(0.05)
+            else: raise AssertionError('run did not return to idle')
             assert 'echoed:hello' in json.dumps(stdio.Provider.requests[-1]), stdio.Provider.requests
             hub.stop(); hub = None
             assert Mcp.ping_answered.is_set()

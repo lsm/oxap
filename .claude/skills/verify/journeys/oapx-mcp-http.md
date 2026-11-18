@@ -14,3 +14,4 @@ for the served exchange. No credentials or live providers are used.
 
 CI also runs this journey against a stateless server and over HTTPS. The HTTPS
 run uses a temporary certificate trusted only on its disposable runner.
+It also waits for a tool response that takes longer than 30 seconds.
