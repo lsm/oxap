@@ -5,8 +5,8 @@ const ai_types = @import("ai_types");
 const agent = @import("agent");
 const common = @import("tools/common");
 const build_options = @import("build_options");
-const mcp_http = @import("mcp_http.zig");
-const mcp_oauth = @import("mcp_oauth.zig");
+const mcp_http = @import("mcp_http");
+const mcp_oauth = @import("mcp_oauth");
 
 const mcp_client_info_json = std.fmt.comptimePrint("{{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"makai\",\"version\":\"{s}\"}}}}", .{build_options.version});
 
