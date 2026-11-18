@@ -31,13 +31,15 @@ type configFile struct {
 }
 
 type toolSourceEntry struct {
-	Kind        string   `json:"kind"`
-	DisplayName string   `json:"display_name"`
-	Protocol    string   `json:"protocol"`
-	Endpoint    string   `json:"endpoint"`
-	Command     string   `json:"command"`
-	Args        []string `json:"args"`
-	Environment []string `json:"environment"`
+	Headers     json.RawMessage `json:"headers"`
+	Auth        json.RawMessage `json:"auth"`
+	Kind        string          `json:"kind"`
+	DisplayName string          `json:"display_name"`
+	Protocol    string          `json:"protocol"`
+	Endpoint    string          `json:"endpoint"`
+	Command     string          `json:"command"`
+	Args        []string        `json:"args"`
+	Environment []string        `json:"environment"`
 }
 
 type adapterEntry struct {
@@ -93,7 +95,7 @@ var adapterMembers = []string{
 	"any_directory",
 }
 
-var toolSourceMembers = []string{"kind", "display_name", "protocol", "endpoint", "command", "args", "environment"}
+var toolSourceMembers = []string{"kind", "display_name", "protocol", "endpoint", "command", "args", "environment", "headers", "auth"}
 
 func (file *configFile) UnmarshalJSON(data []byte) error {
 	if _, duplicate := validation.DuplicateKey(data); duplicate {

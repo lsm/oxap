@@ -177,9 +177,13 @@ the entry as an unknown type, and `examples/oap-serve.json` does not carry one
 because `goap serve` reads that file too (D27).
 
 A tool source entry takes exactly `kind`, `display_name`, `protocol`,
-`endpoint`, `command`, `args`, `environment`. A `process` entry must carry a
+`endpoint`, `command`, `args`, `environment`, `headers`, and `auth`. A `process` entry must carry a
 `command`; a `kind` outside the protocol's five is refused; an entry naming one
 environment variable twice is refused.
+For remote MCP sources, Zig accepts static headers and bearer auth as literal
+strings or `{"env":"NAME"}` references; missing or empty variables are refused.
+Go accepts these two members for shared registry files but does not use them;
+Go and Rust native-loop support is tracked in #1863.
 
 | rule | pinned by |
 | --- | --- |
@@ -194,6 +198,8 @@ environment variable twice is refused.
 | A refusal from the loader names the entry it came from | Go: `goap serve` refuses at decode, naming the adapter. Zig: `Hub.load` writes into a `config.Diagnostic` before answering `ConfigRefused`, so the operator is told which entry — pinned by the negative half of `the registry takes the first journal capacity an entry names, a zero keeps the default, and a negative is refused` |
 | A document that is not one JSON object is refused | `TestLoadRegistryDocumentErrors` |
 | A tool source loads into the registry and is attachable by id | `TestLoadRegistryToolSources` |
+| Shared remote auth fields are accepted by Go | `TestLoadRegistryAcceptsRemoteMCPAuthFields` |
+| Zig refuses invalid remote auth fields and unresolved references | Zig: `MCP config refuses` tests |
 | A tool source needs a kind; a `process` one needs a command | `TestLoadRegistryToolSourceNeedsKind`, `TestLoadRegistryProcessToolSourceNeedsCommand` |
 | A programmatically registered tool source is judged as the loader would judge it | `TestRegisterToolSourceJudgesTheEntryTheLoaderWouldHaveJudged` |
 | Registering a name twice is refused | `TestRegistryRegister` |

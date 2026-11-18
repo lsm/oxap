@@ -444,6 +444,58 @@ fn expectRefused(bytes: []const u8, names: []const [2][]const u8, expected: []co
     try testing.expectEqualStrings(expected, message);
 }
 
+test "MCP config refuses invalid header name" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"bad name\":\"x\"}}}}", &.{}, "config: tool source \"fs\": invalid or reserved header name");
+}
+
+test "MCP config refuses reserved header name" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"Host\":\"x\"}}}}", &.{}, "config: tool source \"fs\": invalid or reserved header name");
+}
+
+test "MCP config refuses duplicate header name" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"X-Foo\":\"x\",\"x-foo\":\"y\"}}}}", &.{}, "config: tool source \"fs\": duplicate header name");
+}
+
+test "MCP config refuses non-object headers" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":[]}}}", &.{}, "config: tool source \"fs\": headers require a remote source and an object");
+}
+
+test "MCP config refuses invalid header value shape" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"X-Foo\":42}}}}", &.{}, "config: tool source \"fs\": header value must be a string or an env reference");
+}
+
+test "MCP config refuses invalid env reference" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"X-Foo\":{\"env\":\"\"}}}}}", &.{}, "config: tool source \"fs\": env reference needs a variable name");
+}
+
+test "MCP config refuses missing env reference" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"X-Foo\":{\"env\":\"MISSING\"}}}}}", &.{}, "config: tool source \"fs\": environment variable \"MISSING\" is not set");
+}
+
+test "MCP config refuses empty env reference" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"X-Foo\":{\"env\":\"EMPTY\"}}}}}", &.{.{ "EMPTY", "" }}, "config: tool source \"fs\": environment variable \"EMPTY\" is empty");
+}
+
+test "MCP config refuses invalid header value" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"headers\":{\"X-Foo\":\"bad\\rvalue\"}}}}", &.{}, "config: tool source \"fs\": invalid header value");
+}
+
+test "MCP config refuses invalid bearer" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"auth\":\"bad token\"}}}", &.{}, "config: tool source \"fs\": invalid bearer token");
+}
+
+test "MCP config refuses conflicting auth" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"remote\",\"auth\":\"token\",\"headers\":{\"authorization\":\"other\"}}}}", &.{}, "config: tool source \"fs\": auth conflicts with the authorization header");
+}
+
+test "MCP config refuses headers on a non-remote source" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"native\",\"headers\":{}}}}", &.{}, "config: tool source \"fs\": headers require a remote source and an object");
+}
+
+test "MCP config refuses auth on a non-remote source" {
+    try expectRefused("{\"tool_sources\":{\"fs\":{\"kind\":\"native\",\"auth\":\"token\"}}}", &.{}, "config: tool source \"fs\": auth requires a remote source");
+}
+
 test "the example registry parses, each entry typed and resolved as it is written" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

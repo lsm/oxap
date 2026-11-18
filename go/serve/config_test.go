@@ -314,6 +314,17 @@ func TestRegistryRegister(t *testing.T) {
 	}
 }
 
+func TestLoadRegistryAcceptsRemoteMCPAuthFields(t *testing.T) {
+	path := writeConfig(t, `{"tool_sources":{"remote":{"kind":"remote","protocol":"mcp","endpoint":"https://example.invalid/mcp","headers":{"X-Region":"west","X-Token":{"env":"MCP_HEADER"}},"auth":{"env":"MCP_TOKEN"}}}}`)
+	registry, err := LoadRegistry(path, staticEnviron(map[string]string{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := registry.ToolSource("remote"); !ok {
+		t.Fatal("remote source missing")
+	}
+}
+
 func TestLoadRegistryToolSources(t *testing.T) {
 	path := writeConfig(t, `{
 		"adapters": {"memory": {"type": "memory"}},
