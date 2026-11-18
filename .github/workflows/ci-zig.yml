@@ -601,6 +601,21 @@ jobs:
           OAP_SDK_BINARY_PATH: /tmp/makai-rs/bin/oxap
         run: cargo test --all-features
 
+      - name: Package the publishable crates at a version crates.io does not have
+        working-directory: .
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+        run: |
+          set -euo pipefail
+          version="$(node scripts/release-channels.mjs versions)"
+          probe="$RUNNER_TEMP/package-probe"
+          mkdir -p "$probe"
+          git archive HEAD rust | tar -x -C "$probe"
+          grep -rlF --include=Cargo.toml "$version" "$probe/rust" | xargs perl -pi -e "s/\Q$version\E/0.0.0-unpublished.1/g"
+          args=()
+          for crate in $(node scripts/release-channels.mjs crates); do args+=(-p "$crate"); done
+          cargo package --allow-dirty --manifest-path "$probe/rust/Cargo.toml" "${args[@]}"
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
