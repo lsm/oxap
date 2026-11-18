@@ -8,7 +8,7 @@ const WORKFLOW = "release-binaries.yml";
 const ENVIRONMENT = "release";
 const PLATFORMS = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64", "win32-arm64"];
 const NPM_PACKAGES = [...PLATFORMS.map((target) => `@oxap/cli-${target}`), "@oxap/cli", "@oxap/sdk", "@oxap/client"];
-const PYPI_PROJECT = "oxap-sdk";
+export const PYPI_PROJECTS = ["oxap-sdk", "oxap"];
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -24,6 +24,16 @@ export function pep440(version) {
   const match = /^(\d+\.\d+\.\d+)(?:-(alpha|beta|rc)\.(\d+))?$/.exec(version);
   if (!match) fail(`${version} is not a release version this script can map to PEP 440`);
   return match[2] ? `${match[1]}${{ alpha: "a", beta: "b", rc: "rc" }[match[2]]}${match[3]}` : match[1];
+}
+
+export function pythonVersions(read) {
+  const sdk = read("sdk/python/pyproject.toml");
+  const name = read("sdk/python-oxap/pyproject.toml");
+  return {
+    "sdk/python/pyproject.toml": /^version = "([^"]+)"/m.exec(sdk)[1],
+    "sdk/python-oxap/pyproject.toml": /^version = "([^"]+)"/m.exec(name)[1],
+    "sdk/python-oxap/pyproject.toml oxap-sdk pin": /"oxap-sdk==([^"]+)"/.exec(name)?.[1],
+  };
 }
 
 export function npmTarball(name, version) {
@@ -94,7 +104,7 @@ function versions() {
   const found = {
     "package.json": root,
     "clients/ts/package.json": JSON.parse(readFileSync("clients/ts/package.json", "utf8")).version,
-    "sdk/python/pyproject.toml": /^version = "([^"]+)"/m.exec(readFileSync("sdk/python/pyproject.toml", "utf8"))[1],
+    ...pythonVersions((path) => readFileSync(path, "utf8")),
     "zig/build.zig.zon": /^\s*\.version = "([^"]+)"/m.exec(readFileSync("zig/build.zig.zon", "utf8"))[1],
   };
   for (const crate of publishOrder(workspace())) found[`crate ${crate.name}`] = crate.version;
@@ -137,7 +147,9 @@ async function registry() {
     }
   }
   if (!channel || channel === "pypi") {
-    rows.push(["pypi", `${PYPI_PROJECT}==${pep440(version)}`, await present(`https://pypi.org/pypi/${PYPI_PROJECT}/${pep440(version)}/json`)]);
+    for (const project of PYPI_PROJECTS) {
+      rows.push(["pypi", `${project}==${pep440(version)}`, await present(`https://pypi.org/pypi/${project}/${pep440(version)}/json`)]);
+    }
   }
   for (const [where, what, ok] of rows) console.log(`${ok ? "present" : "missing"} ${where} ${what}`);
   const missing = rows.filter(([, , ok]) => !ok).length;
@@ -186,7 +198,7 @@ function commands() {
     `- GitHub: create the \`${ENVIRONMENT}\` environment with required reviewers before tagging: https://github.com/${REPOSITORY}/settings/environments`,
     ...NPM_PACKAGES.map((name) => `- npm: https://www.npmjs.com/package/${name}/access`),
     ...order.map((crate) => `- crates.io: https://crates.io/crates/${crate.name}/settings`),
-    `- PyPI (pending publisher for \`${PYPI_PROJECT}\`): https://pypi.org/manage/account/publishing/`,
+    ...PYPI_PROJECTS.map((project) => `- PyPI (pending publisher for \`${project}\`, or the project's own publishing page once it exists): https://pypi.org/manage/account/publishing/`),
     "",
     "## 5. Tag in bootstrap mode, then leave it",
     "",
