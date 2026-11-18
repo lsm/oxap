@@ -15,9 +15,9 @@ model is reached one of two ways, and the choice is `--backend`.
 
 ## Provider layer
 
-The built-in loop calls a model API directly, over the wire the catalog row
-names (`openai-completions`, `openai-responses` or `anthropic-messages`). Any
-catalogued provider works, and so does any OpenAI- or Anthropic-compatible
+The built-in loop calls a model API directly, over whichever wire the catalog
+row names; it speaks every wire the catalog uses. Any catalogued provider
+works, and so does any OpenAI- or Anthropic-compatible
 endpoint declared as a custom provider, with extra request headers if it needs
 them. Credentials come from `oxap auth login` or the variable the catalog row
 lists. The loop owns tools, permissions and compaction itself, whichever model
