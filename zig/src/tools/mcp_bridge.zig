@@ -6,6 +6,7 @@ const agent = @import("agent");
 const common = @import("tools/common");
 const build_options = @import("build_options");
 const mcp_http = @import("mcp_http.zig");
+const mcp_oauth = @import("mcp_oauth.zig");
 
 const mcp_client_info_json = std.fmt.comptimePrint("{{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"makai\",\"version\":\"{s}\"}}}}", .{build_options.version});
 
@@ -204,7 +205,11 @@ const McpServerSession = struct {
                 return err;
             };
             defer response.deinit(allocator);
-            if (response.challenge != null) return error.McpHttpFailure;
+            if (response.challenge) |challenge| {
+                var metadata = try mcp_oauth.discover(allocator, endpoint, challenge);
+                metadata.deinit(allocator);
+                return error.McpHttpFailure;
+            }
             if (response.session) |session| {
                 const replacement = try allocator.dupe(u8, session);
                 if (self.http_session) |old| allocator.free(old);
