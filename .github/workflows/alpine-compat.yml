@@ -1,0 +1,43 @@
+name: Alpine image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - zig/**
+      - schema/**
+      - harnesses/**
+      - .claude/skills/verify/**
+      - .github/workflows/alpine-compat.yml
+
+concurrency:
+  group: alpine-image-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build runner
+        run: zig build --build-file zig/build.zig -Dtarget=x86_64-linux -Doptimize=ReleaseSafe
+      - name: Build image
+        run: docker build --platform linux/amd64 -t oxap-alpine:verify .
+      - name: Record image size
+        run: docker image inspect oxap-alpine:verify --format "Image size: {{.Size}} bytes"
+      - name: Run image journey
+        run: NODE_ENV=test python3 .claude/skills/verify/scripts/alpine-image.py "$RUNNER_TEMP/alpine-evidence"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alpine-evidence
+          path: ${{ runner.temp }}/alpine-evidence
