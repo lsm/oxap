@@ -30,7 +30,7 @@ pub(crate) struct Run {
     pub(crate) status: RunStatus,
     pub(crate) started: bool,
     pub(crate) terminal: bool,
-    next: u64,
+    pub(crate) next: u64,
     parts: Vec<ContentPart>,
     usage: UsageState,
     tools: Vec<Tool>,
@@ -62,6 +62,14 @@ impl Reducer {
             current: None,
             events: Vec::new(),
         }
+    }
+
+    pub(crate) fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    pub(crate) fn native_id(&self) -> &str {
+        &self.native_id
     }
 
     fn live(&self) -> usize {
