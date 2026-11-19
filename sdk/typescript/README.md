@@ -530,8 +530,8 @@ type RunOptions = {
 ```
 
 `headers` go on a direct provider call only; an agent run refuses them. The
-endpoint decides which it forwards and refuses the rest: oapx forwards the
-session header a provider's catalog entry names, such as `x-opencode-session`.
+endpoint decides which headers it forwards to the provider and refuses the rest
+with `unsupported_feature`.
 
 Core namespaces:
 
