@@ -77,7 +77,11 @@ fn reducer() -> Reducer {
     Reducer::new("s1".into(), "ses".into(), ids, Arc::new(Ticks::default()))
 }
 
-fn apply(reducer: &mut Reducer, admitted: Option<usize>, step: &Step) -> Result<Option<usize>, String> {
+fn apply(
+    reducer: &mut Reducer,
+    admitted: Option<usize>,
+    step: &Step,
+) -> Result<Option<usize>, String> {
     let direction = if step.action == "admit" {
         "host-to-copilot"
     } else {
@@ -103,7 +107,10 @@ fn apply(reducer: &mut Reducer, admitted: Option<usize>, step: &Step) -> Result<
             if message.kind != Kind::Request || message.method != "session.send" {
                 return Err("invalid admission".into());
             }
-            reducer.admit(false).map(Some).map_err(|error| error.to_string())
+            reducer
+                .admit(false)
+                .map(Some)
+                .map_err(|error| error.to_string())
         }
         "bind" => {
             let result = message.result.as_deref().map_or("null", RawValue::get);
@@ -179,7 +186,8 @@ fn replay(name: &str) {
     let mut admitted = None;
     for line in native.lines().filter(|line| !line.trim().is_empty()) {
         let step: Step = serde_json::from_str(line).unwrap();
-        admitted = apply(&mut reducer, admitted, &step).unwrap_or_else(|error| panic!("{name}: {error}"));
+        admitted =
+            apply(&mut reducer, admitted, &step).unwrap_or_else(|error| panic!("{name}: {error}"));
     }
     let want = std::fs::read_to_string(directory.join("expected-oap.json")).unwrap();
     let mut got = serde_json::to_string(&reducer.events).unwrap();
@@ -212,10 +220,26 @@ fn the_codec_corpus_replays_to_its_expectation() {
 #[test]
 fn replay_rejects_direction_and_binding_corruption() {
     let steps = [
-        ("bind", "host-to-copilot", r#"{"jsonrpc":"2.0","id":1,"result":{"messageId":"m1"}}"#),
-        ("observe", "host-to-copilot", r#"{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"session.idle","data":{}}}}"#),
-        ("bind", "copilot-to-host", r#"{"jsonrpc":"2.0","id":1,"result":{}}"#),
-        ("bind", "copilot-to-host", r#"{"jsonrpc":"2.0","id":1,"result":null}"#),
+        (
+            "bind",
+            "host-to-copilot",
+            r#"{"jsonrpc":"2.0","id":1,"result":{"messageId":"m1"}}"#,
+        ),
+        (
+            "observe",
+            "host-to-copilot",
+            r#"{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"session.idle","data":{}}}}"#,
+        ),
+        (
+            "bind",
+            "copilot-to-host",
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+        ),
+        (
+            "bind",
+            "copilot-to-host",
+            r#"{"jsonrpc":"2.0","id":1,"result":null}"#,
+        ),
     ];
     for (action, direction, raw) in steps {
         let mut reducer = reducer();
@@ -225,7 +249,10 @@ fn replay_rejects_direction_and_binding_corruption() {
             direction: direction.into(),
             raw: RawValue::from_string(raw.into()).unwrap(),
         };
-        assert!(apply(&mut reducer, Some(index), &step).is_err(), "accepted corrupted {action} step: {raw}");
+        assert!(
+            apply(&mut reducer, Some(index), &step).is_err(),
+            "accepted corrupted {action} step: {raw}"
+        );
     }
 }
 
@@ -255,5 +282,8 @@ fn every_manifest_case_is_replayed_exactly_once() {
             case.id
         );
     }
-    assert!(known.is_empty(), "replay cases absent from manifest: {known:?}");
+    assert!(
+        known.is_empty(),
+        "replay cases absent from manifest: {known:?}"
+    );
 }
