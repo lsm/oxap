@@ -42,7 +42,7 @@ impl Reducer {
         let found = self.runs[index]
             .tools
             .iter()
-            .position(|tool| tool.native_id != id);
+            .position(|tool| tool.native_id == id);
         match event.kind.as_str() {
             "tool.execution_start" => {
                 let name = text(&event.data, "toolName");
