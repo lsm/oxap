@@ -34,11 +34,11 @@ and the fix is cheaper there.
 
 | fixture | the divergence it is the last check on |
 | --- | --- |
-| `acp`, `claude`, `codex`, `deepseek`, `hermes`, `opencode`, `pi` | that tree's adapter translates this harness's frames the same way the other tree's does |
+| `acp`, `claude`, `codex`, `copilot`, `deepseek`, `hermes`, `opencode`, `pi` | that tree's adapter translates this harness's frames the same way the other tree's does |
 | `pi-two-open-calls` | that two calls open **at once** are closed in the same order in both trees — the contested settlement, the one case `memory` structurally cannot reach |
 | `memory` | that a whole run's event stream — from the permission gate through the tool call and the input gate to the terminal, both interactions in sequence — comes out identical and in the same order |
 
-The eight harness fixtures share one shape: a fixed `scenario.jsonl`, a
+The nine harness fixtures share one shape: a fixed `scenario.jsonl`, a
 `registry.json` naming the adapter, and a `child.sh` that answers
 deterministically. (`opencode` has no `child.sh` and answers the in-test fake
 HTTP server the harness starts for it when its registry carries `@URL@`.) A
@@ -82,8 +82,10 @@ the open children by `order`, and out of its Zig counterpart; sorting that sweep
 the other way round makes this fixture fail, which is what makes it worth having.
 
 **Two tests, and only one of them looks at order.** `TestBackendsMatchOapx`
-runs the eight harness fixtures and `memory` with a content diff **and** the
-ordered comparison.
+runs the harness fixtures and `memory` with a content diff **and** the
+ordered comparison. It skips a fixture naming a type oapx does not serve, which
+today is `copilot`: only goap and the Rust hub serve it, so
+`TestBackendsMatchRustHub` is the comparison it gets.
 `TestMemoryBackendMatchesOapx` compares the memory backend's output as a
 *sorted* set, so it is order-blind by construction: it answers "do the two
 trees emit the same envelopes", not "in what order". The order claim belongs to

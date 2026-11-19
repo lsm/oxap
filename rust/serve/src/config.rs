@@ -39,8 +39,8 @@ const TOOL_SOURCE_MEMBERS: [&str; 7] = [
     "environment",
 ];
 
-const HARNESS_TYPES: [&str; 8] = [
-    "claude", "codex", "copilot", "deepseek", "hermes", "opencode", "pi", "oapx",
+const HARNESS_TYPES: [&str; 7] = [
+    "claude", "codex", "deepseek", "hermes", "opencode", "pi", "oapx",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -212,6 +212,20 @@ impl Registry {
                         .map_err(|err| refuse(err.to_string()))?,
                     )
                 }
+                "copilot" => Arc::new(
+                    oxap_adapter_copilot::adapter::Adapter::new(
+                        oxap_adapter_copilot::adapter::Config {
+                            executable: entry.executable,
+                            args: entry.args,
+                            environment,
+                            working_directory: entry.working_directory.clone(),
+                            model: entry.model,
+                            journal_capacity: entry.journal_capacity as usize,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|err| refuse(err.to_string()))?,
+                ),
                 harness if HARNESS_TYPES.contains(&harness) => {
                     return Err(refuse(format!(
                         "type {harness:?} is not built in the Rust tree yet"

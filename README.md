@@ -650,8 +650,8 @@ go run ./go/cmd/goap serve [--config examples/oap-serve.json] [--addr 127.0.0.1:
 
 Without `--config` the daemon serves the built-in memory reference adapter
 only. The registry document maps names to in-repo adapter configurations
-(`examples/oap-serve.json` shows the shared entry types; the Go-only Copilot entry
-is in `examples/oap-serve-go-copilot.json`); constructor requirements
+(`examples/oap-serve.json` shows the shared entry types; the Copilot entry, which
+oapx does not serve, is in `examples/oap-serve-go-copilot.json`); constructor requirements
 (absolute working directories, provider settings) surface at startup. The
 `environment` list of an entry is an explicit allowlist: a bare `NAME`
 forwards the value the daemon itself carries (unset names are omitted) and
@@ -1346,8 +1346,8 @@ sanitized native frames through the production codec and drives the
 production reducer, so codec and reducer regressions are caught without any
 external process.
 
-Go callers can use `go/adapter/copilot.New` or the Go-only configuration
-[`examples/oap-serve-go-copilot.json`](examples/oap-serve-go-copilot.json). The adapter pins CLI 1.0.109 over headless stdio,
+Go callers can use `go/adapter/copilot.New`, and goap or the Rust hub can serve the
+configuration [`examples/oap-serve-go-copilot.json`](examples/oap-serve-go-copilot.json). The adapter pins CLI 1.0.109 over headless stdio,
 checks the reported version/protocol before opening, and supports text auto/queue
 delivery, streaming, state, bounded in-memory replay and Copilot-owned tools.
 Reopen, portable cancellation and interactive answers are not advertised.

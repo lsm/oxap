@@ -1214,6 +1214,7 @@ dependencies = [
  "oxap-adapter",
  "oxap-adapter-acp",
  "oxap-adapter-codex-appserver",
+ "oxap-adapter-copilot",
  "oxap-adapter-deepseek",
  "oxap-binding",
  "oxap-protocol",
