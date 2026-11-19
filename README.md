@@ -959,7 +959,7 @@ A Go program depends on this repository as a module, and one tag carries both
 the library and the released `oxap` binary:
 
 ```
-go get github.com/lsm/oxap@v0.1.0-alpha.34
+go get github.com/lsm/oxap@v0.1.0-alpha.35
 ```
 
 Versions before `v0.1.0-alpha.33` still declare the old module path

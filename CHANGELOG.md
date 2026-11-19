@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.35] - 2026-11-18
+
+### Merged pull requests
+
+- **zig: Treat a model missing from the catalog as text-only** ([#1883](https://github.com/lsm/oxap/pull/1883)): A model the catalog does not list resolved to a stand-in with no input modalities and image support marked unknown.
+- **zig: Give HTTP 429 its own longer retry budget** ([#1882](https://github.com/lsm/oxap/pull/1882)): Rate-limited requests (HTTP 429) now get their own, longer retry budget.
+- **zig: Share one retry budget across the five provider wires** ([#1881](https://github.com/lsm/oxap/pull/1881)): The five provider wires each carried a copy of the same retry loop.
+- **Send configured MCP headers and bearer tokens** ([#1880](https://github.com/lsm/oxap/pull/1880)): Remote MCP sources ignored configured headers and bearer tokens, preventing access to servers that require them.
+- **Use and refresh MCP OAuth credentials** ([#1879](https://github.com/lsm/oxap/pull/1879)): OAuth-protected MCP tools cannot use the credentials saved by browser login.
+- **Add browser login for MCP sources** ([#1878](https://github.com/lsm/oxap/pull/1878)): OAuth-protected MCP sources need a browser sign-in before the loop can use their credentials.
+- **Fix Alpine image workflow YAML** ([#1877](https://github.com/lsm/oxap/pull/1877)): Fixes the Alpine image workflow, which failed to start because the image-size command was invalid YAML.
+- **Add an Alpine image for the built-in runner** ([#1876](https://github.com/lsm/oxap/pull/1876)): Adds an x64 Alpine image for the built-in runner, so oxap can run in a small container.
+- **Discover MCP authorization metadata** ([#1875](https://github.com/lsm/oxap/pull/1875)): Protected MCP sources need authorization-server metadata before they can begin OAuth.
+- **verify: Exercise the GLM catalog setup** ([#1873](https://github.com/lsm/oxap/pull/1873)): Verify the existing global Z.AI Coding Plan catalog setup for #1849.
+- **Preserve MCP authorization challenges** ([#1872](https://github.com/lsm/oxap/pull/1872)): Protected MCP servers return a 401 challenge that the HTTP transport currently discards.
+- **rust: Publish an oxap crate that re-exports oxap-sdk** ([#1870](https://github.com/lsm/oxap/pull/1870)): `cargo add oxap` is what Rust users try first, and the name is free on crates.io.
+- **provider: Add Command Code catalog row** ([#1869](https://github.com/lsm/oxap/pull/1869)): Add Command Code as a catalog provider so its chat-compatible models can be used with zero-data-retention routing.
+- **provider: Send catalog headers in Go** ([#1867](https://github.com/lsm/oxap/pull/1867)): Go discovery and inference now send catalog request headers, including environment-backed values.
+- **providers: Send catalog request headers** ([#1866](https://github.com/lsm/oxap/pull/1866)): Allow provider catalog rows to specify literal and environment-backed request headers. oxap sends them for discovery and inference; Go runtime support follows in #1864.
+- **oapx: Attach Streamable HTTP MCP sources** ([#1865](https://github.com/lsm/oxap/pull/1865)): Attach unauthenticated HTTP and HTTPS MCP sources to the built-in loop so their tools can be discovered and called.
+- **harness: Install the pinned OpenCode build** ([#1862](https://github.com/lsm/oxap/pull/1862)): The first slice of #1851 adds a common harness install command for the catalog-pinned OpenCode build.
+- **providers: Resolve header values from the environment** ([#1861](https://github.com/lsm/oxap/pull/1861)): Custom provider headers can now refer to environment variables, so sensitive values do not need to be stored in provider configuration.
+- **release: Publish an oxap package on PyPI that installs oxap-sdk** ([#1860](https://github.com/lsm/oxap/pull/1860)): `pip install oxap` is what users try first, and the name was free for anyone to take.
+- **docs: Explain the provider layer and the harness layer side by side** ([#1859](https://github.com/lsm/oxap/pull/1859)): Closes #1853.
+- **zig: Retire the Kimi print mode behind -p** ([#1858](https://github.com/lsm/oxap/pull/1858)): Follow-up to #1857.
+- **zig: Make oxap run a one-shot over any backend and model** ([#1857](https://github.com/lsm/oxap/pull/1857)): Closes #1850.
+- **oapx: Attach stdio MCP tools to sessions** ([#1856](https://github.com/lsm/oxap/pull/1856)): The built-in loop can now use tools from configured stdio MCP servers.
+- **zig: Add the driver a one-shot oxap run speaks to serve agent with** ([#1855](https://github.com/lsm/oxap/pull/1855)): First half of #1850: the client a generic `oxap run` will use to drive `oxap serve agent` over any backend.
+- **serve: Serve and compare the codex type from the Rust hub** ([#1847](https://github.com/lsm/oxap/pull/1847)): Backend parity slice on #1438: `oap-rust-hub` now serves the `codex` type, and `TestBackendsMatchRustHub` holds it to goap on the codex parity fixture.
+- **codex: Serve the Rust Codex adapter through the async contract as Go does** ([#1846](https://github.com/lsm/oxap/pull/1846)): Feature, part of #1439 (C3 Codex app-server, contract slice).
+- **codex: Update a Rust Codex session's settings as Go does** ([#1845](https://github.com/lsm/oxap/pull/1845)): Feature, part of #1439 (C3 Codex app-server, slice 11).
+- **release: 0.1.0-alpha.34** ([#1844](https://github.com/lsm/oxap/pull/1844)): Release prep.
+
 ## [0.1.0-alpha.34] - 2026-11-16
 
 ### Merged pull requests
