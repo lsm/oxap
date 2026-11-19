@@ -59,6 +59,9 @@ func (s *ProviderService) Stream(ctx context.Context, req CompletionRequest) (*P
 		if req.Options.Metadata != nil {
 			payload["metadata"] = req.Options.Metadata
 		}
+		if len(req.Options.Headers) > 0 {
+			payload["headers"] = req.Options.Headers
+		}
 	}
 	request := providerFrame("inference.create.request", payload)
 	sub := s.transport.subscribeStream(string(request.ID))

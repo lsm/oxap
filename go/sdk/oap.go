@@ -601,6 +601,9 @@ func declaredToolSource(sources []any) string {
 
 func oapOpenPayload(t *transport, sessionID string, req AgentRequest) (map[string]any, error) {
 	payload := map[string]any{"session_id": sessionID}
+	if req.Options != nil && len(req.Options.Headers) > 0 {
+		return nil, &ProtocolError{Code: "unsupported_feature", Message: "request headers reach a provider only on a direct provider call"}
+	}
 	if len(req.Tools) > 0 && !t.agentFeatures["action.tools.provide"] {
 		return nil, &ProtocolError{Code: "unsupported_feature", Message: "this endpoint does not advertise action.tools.provide, so it cannot run client tools"}
 	}

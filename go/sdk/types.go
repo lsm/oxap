@@ -108,6 +108,8 @@ type RunOptions struct {
 
 	Metadata map[string]string
 
+	Headers map[string]string
+
 	SessionID string
 }
 
