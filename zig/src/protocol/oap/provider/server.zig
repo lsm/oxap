@@ -27,6 +27,7 @@ pub const Options = struct {
     catalog: ?types.ModelCatalogState = null,
     unserved_refusal: ?*const fn (provider_id: []const u8) ?UnservedRefusal = null,
     awaiting_declares: ?*const fn (model_ref: []const u8, capability: types.ModelCapability) bool = null,
+    session_header: ?*const fn (model_ref: []const u8) ?[]const u8 = null,
 };
 
 pub const UnservedRefusal = struct {
@@ -60,6 +61,7 @@ pub const ActiveInference = struct {
     tools: []const types.ToolDefinition = &.{},
     tool_choice: ?types.ToolChoice = null,
     reasoning: ?types.ReasoningOptions = null,
+    session: ?[]const u8 = null,
     next_sequence: u64 = 1,
     open_part: ?u32 = null,
     open_part_kind: types.PartKind = .text,
@@ -79,6 +81,7 @@ pub const ActiveInference = struct {
         allocator.free(self.tools);
         if (self.tool_choice) |*choice| choice.deinit(allocator);
         if (self.reasoning) |*options| options.deinit(allocator);
+        if (self.session) |value| allocator.free(value);
         allocator.free(self.id);
         allocator.free(self.model_ref);
         for (self.messages) |*message| message.deinit(allocator);
@@ -1028,9 +1031,17 @@ pub const Server = struct {
             return;
         }
 
+        var session: ?[]const u8 = null;
         if (create_request.headers.len > 0) {
-            try self.emitCreateRefusal(env, .unsupported_feature, "this endpoint does not forward request headers to a provider");
-            return;
+            const forwarded = if (self.options.session_header) |lookup| lookup(create_request.model_ref) else null;
+            for (create_request.headers) |header| {
+                const name = forwarded orelse "";
+                if (name.len == 0 or !std.ascii.eqlIgnoreCase(header.name, name)) {
+                    try self.emitCreateRefusal(env, .unsupported_feature, "this endpoint forwards only the session header the provider's catalog entry names");
+                    return;
+                }
+                session = header.value;
+            }
         }
 
         if (create_request.tools.len > 0 and !self.createDeclares(served == null, create_request.model_ref, .tools)) {
@@ -1142,6 +1153,8 @@ pub const Server = struct {
             var owned = value.*;
             owned.deinit(self.allocator);
         };
+        const owned_session = if (session) |value| try self.allocator.dupe(u8, value) else null;
+        errdefer if (owned_session) |value| self.allocator.free(value);
 
         const queued = try self.allocator.dupe(u8, inference_id);
         errdefer self.allocator.free(queued);
@@ -1183,6 +1196,7 @@ pub const Server = struct {
             .tools = tools,
             .tool_choice = tool_choice,
             .reasoning = reasoning,
+            .session = owned_session,
             .closed_parts = std.ArrayList(oap_types.ContentPart).empty,
             .text = std.ArrayList(u8).empty,
         });
@@ -2544,6 +2558,67 @@ test "a credential in caller headers is refused with the correct alternative nam
     try std.testing.expectEqual(types.ErrorCode.invalid_request, err.code);
     try std.testing.expect(std.mem.indexOf(u8, err.message, "provider.credential.grant.request") != null);
     try std.testing.expectEqualStrings("q1", response.in_reply_to.?);
+}
+
+fn gemmaSessionHeader(model_ref: []const u8) ?[]const u8 {
+    return if (std.mem.eql(u8, model_ref, "ollama-local/openai-chat-completions@gemma")) "x-test-session" else null;
+}
+
+test "the catalog's session header reaches the inference, matched without regard to case, and any other header is refused" {
+    const allocator = std.testing.allocator;
+    var server = try testServer(allocator, .{ .accepts_inference = true, .session_header = gemmaSessionHeader });
+    defer server.deinit();
+
+    const named = try makeRequest(
+        allocator,
+        "inference.create.request",
+        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"X-Test-Session\":\"video-7\"}}",
+        "q1",
+    );
+    defer allocator.free(named);
+    try server.handleLine(named);
+
+    var accepted = try decodeOnly(allocator, &server);
+    defer accepted.deinit(allocator);
+    try std.testing.expect(accepted.payload.inference_create_response.accepted);
+    try std.testing.expectEqual(@as(usize, 1), server.active.items.len);
+    try std.testing.expectEqualStrings("video-7", server.active.items[0].session.?);
+
+    const other = try makeRequest(
+        allocator,
+        "inference.create.request",
+        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"X-Tenant\":\"acme\"}}",
+        "q2",
+    );
+    defer allocator.free(other);
+    try server.handleLine(other);
+
+    var refused = try decodeOnly(allocator, &server);
+    defer refused.deinit(allocator);
+    const err = refused.payload.inference_create_response.err.?;
+    try std.testing.expectEqual(types.ErrorCode.unsupported_feature, err.code);
+    try std.testing.expectEqualStrings("this endpoint forwards only the session header the provider's catalog entry names", err.message);
+    try std.testing.expectEqual(@as(usize, 1), server.active.items.len);
+}
+
+test "a header is refused when the endpoint names no session header for the model" {
+    const allocator = std.testing.allocator;
+    var server = try testServer(allocator, .{ .accepts_inference = true });
+    defer server.deinit();
+
+    const line = try makeRequest(
+        allocator,
+        "inference.create.request",
+        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"x-test-session\":\"video-7\"}}",
+        "q1",
+    );
+    defer allocator.free(line);
+    try server.handleLine(line);
+
+    var refused = try decodeOnly(allocator, &server);
+    defer refused.deinit(allocator);
+    try std.testing.expectEqual(types.ErrorCode.unsupported_feature, refused.payload.inference_create_response.err.?.code);
+    try std.testing.expectEqual(@as(usize, 0), server.active.items.len);
 }
 
 test "an unsupported snapshot policy is refused unless the caller allows degrading inference.snapshot" {

@@ -3304,6 +3304,7 @@ fn servedOapProviderOptions(grant_channel: oap_provider_server.GrantChannel) oap
     return .{
         .unserved_refusal = oapUnservedRefusal,
         .awaiting_declares = oapAwaitingDeclares,
+        .session_header = oapSessionHeader,
         .capability_revision = VERSION,
         .revision_follows_catalog = true,
         .grant_channel = grant_channel,
@@ -3324,6 +3325,19 @@ fn applyServedOapReload(allocator: std.mem.Allocator, server: *oap_provider_serv
     try populateAwaitingOapProviders(allocator, server);
     applied.* = current;
     return true;
+}
+
+fn oapSessionHeader(model_ref_value: []const u8) ?[]const u8 {
+    const parsed = oap_provider_types.parseModelRef(model_ref_value) orelse return null;
+    const api = oap_provider_catalog.apiForWire(parsed.wire, parsed.wire_id) orelse return null;
+    return provider_catalog.sessionHeader(parsed.provider_id, api);
+}
+
+test "the served session header is the one the catalog names for that provider and wire, and none elsewhere" {
+    try std.testing.expectEqualStrings("x-opencode-session", oapSessionHeader("opencode-go/openai-chat-completions@deepseek-v4.1-flash").?);
+    try std.testing.expectEqualStrings("x-opencode-session", oapSessionHeader("opencode-go/anthropic-messages@minimax-m3").?);
+    try std.testing.expect(oapSessionHeader("opencode-zen/openai-chat-completions@gpt-6-luna") == null);
+    try std.testing.expect(oapSessionHeader("not-a-ref") == null);
 }
 
 fn oapUnservedRefusal(provider_id: []const u8) ?oap_provider_server.UnservedRefusal {
@@ -3812,6 +3826,7 @@ fn startOapInference(
         .function => |name| ai_types.ToolChoice{ .function = name },
     };
     applyOapReasoning(&options, inference.reasoning);
+    if (inference.session) |value| options.session_id = @TypeOf(options.session_id).initBorrowed(value);
 
     const started = if (renewal_due) startDeferredOapStream(allocator, provider, provider_id, model, context, options) else provider.stream(model, context, options, allocator);
     const stream = started catch |err| {
