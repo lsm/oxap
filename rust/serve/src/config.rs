@@ -212,6 +212,20 @@ impl Registry {
                         .map_err(|err| refuse(err.to_string()))?,
                     )
                 }
+                "copilot" => Arc::new(
+                    oxap_adapter_copilot::adapter::Adapter::new(
+                        oxap_adapter_copilot::adapter::Config {
+                            executable: entry.executable,
+                            args: entry.args,
+                            environment,
+                            working_directory: entry.working_directory.clone(),
+                            model: entry.model,
+                            journal_capacity: entry.journal_capacity as usize,
+                            ..Default::default()
+                        },
+                    )
+                    .map_err(|err| refuse(err.to_string()))?,
+                ),
                 harness if HARNESS_TYPES.contains(&harness) => {
                     return Err(refuse(format!(
                         "type {harness:?} is not built in the Rust tree yet"
