@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.36] - 2026-11-18
+
+### Merged pull requests
+
+- **sdk/rust: Send request headers on a provider call** ([#1894](https://github.com/lsm/oxap/pull/1894)): Part of #1887.
+- **sdk/go: Send request headers on a provider call** ([#1893](https://github.com/lsm/oxap/pull/1893)): Part of #1887.
+- **sdk/typescript: Send request headers on a provider call** ([#1892](https://github.com/lsm/oxap/pull/1892)): Part of #1887.
+- **sdk/python: Send request headers on a provider call** ([#1891](https://github.com/lsm/oxap/pull/1891)): Part of #1887.
+- **oapx: Let a provider call set the catalog's session header** ([#1890](https://github.com/lsm/oxap/pull/1890)): Part of #1887.
+- **command-code: Forward reasoning effort on chat completions** ([#1889](https://github.com/lsm/oxap/pull/1889)): Closes #1888.
+- **copilot: Spawn the Copilot CLI through a Rust rpc process as Go's rpc.Start does** ([#1886](https://github.com/lsm/oxap/pull/1886)): Copilot slice 2 on #1439: `process::Process`, the Rust port of Go's `go/adapter/copilot/internal/rpc/process.go`, over the shared `oxap_adapter::process::Child` and the rpc client from #1884.
+
 ## [0.1.0-alpha.35] - 2026-11-18
 
 ### Merged pull requests
