@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use oxap_adapter::memory::{Clock, IdGenerator};
 use oxap_adapter::testkit::drain;
-use oxap_adapter::{Error, ResumeRequest};
+use oxap_adapter::{Error, ReplayGap, ResumeRequest};
 use oxap_protocol::{Envelope, RunStatus, SessionStatus};
 use serde_json::{json, Value};
 
@@ -68,6 +68,10 @@ fn python() -> PathBuf {
 }
 
 fn session() -> Session {
+    journaled(64)
+}
+
+fn journaled(capacity: usize) -> Session {
     let process = Process::start(&ProcessConfig {
         path: python().display().to_string(),
         args: vec!["-c".into(), CHILD.into()],
@@ -77,7 +81,7 @@ fn session() -> Session {
     .unwrap();
     let ids = Arc::new(Counter::default());
     let reducer = Reducer::new("s1".into(), "native-1".into(), ids, Arc::new(Fixed));
-    Session::new(reducer, process, 64)
+    Session::new(reducer, process, capacity)
 }
 
 fn admit(session: &Session, native: &str) -> oxap_protocol::RunId {
@@ -245,5 +249,35 @@ fn an_invalid_session_event_fails_the_run_and_closes_the_wire() {
         .done()
         .recv_timeout(WAIT)
         .is_err());
+    session.close();
+}
+
+#[test]
+fn a_cursor_behind_the_evicted_prefix_is_a_replay_gap() {
+    let session = journaled(2);
+    let run = admit(&session, "m1");
+    emit(
+        &session,
+        json!([
+            {"type": "user.message", "data": {"messageId": "m1", "interactionId": "i1"}},
+            {"type": "assistant.message_delta", "data": {"interactionId": "i1", "deltaContent": "hi"}},
+            {"type": "session.idle", "data": {}},
+        ]),
+    );
+    let deadline = Instant::now() + WAIT;
+    while !session.shared.lock().reducer.runs[0].terminal {
+        assert!(Instant::now() < deadline, "the run never settled");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let request = ResumeRequest {
+        run_id: run,
+        after_sequence: 0,
+    };
+    let gap = ReplayGap {
+        requested_after: 0,
+        oldest_available: 2,
+        latest_available: 3,
+    };
+    assert!(matches!(session.resume(&request), Err(Error::ReplayGap(found)) if found == gap));
     session.close();
 }
