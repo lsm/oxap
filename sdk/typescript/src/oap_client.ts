@@ -420,7 +420,7 @@ class OapProviderApi implements MakaiProviderApi {
       ...(request.tools?.length ? { tools: request.tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: parseInputSchema(tool.parameters_schema_json) })) } : {}),
       ...(request.options?.max_tokens !== undefined ? { max_output_tokens: request.options.max_tokens } : {}),
       ...(request.options?.temperature !== undefined ? { temperature: request.options.temperature } : {}),
-      ...(request.options?.reasoning_effort && request.options.reasoning_effort !== "off" ? { reasoning: { enabled: true, effort: request.options.reasoning_effort } } : {}),
+      ...(request.options?.reasoning_effort ? { reasoning: { enabled: request.options.reasoning_effort !== "off", effort: request.options.reasoning_effort } } : {}),
       ...(request.options?.metadata ? { metadata: request.options.metadata } : {}),
       ...(request.options?.headers && Object.keys(request.options.headers).length ? { headers: request.options.headers } : {}),
     });

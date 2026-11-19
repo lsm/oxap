@@ -510,7 +510,7 @@ func toolChoiceValue(choice ToolChoice) (jsonValue, bool) {
 func commandCodeEffort(modelID, effort string) string {
 	switch effort {
 	case "off", "none":
-		return ""
+		return "off"
 	}
 	if strings.HasPrefix(strings.ToLower(modelID), "deepseek/") {
 		return deepSeekEffort(effort)

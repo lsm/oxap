@@ -117,7 +117,7 @@ fn drainClientEvents(client: *ProtocolClient, out_stream: *event_stream.Assistan
 }
 
 fn reasoningEffort(level: ai_types.ThinkingLevel, model: ai_types.Model) []const u8 {
-    if (provider_caps.isOpenCodeGateway(model.provider) or provider_caps.isCommandCode(model.provider)) return if (level == .off) "" else @tagName(level);
+    if (provider_caps.isOpenCodeGateway(model.provider) or provider_caps.isCommandCode(model.provider)) return @tagName(level);
     if (provider_caps.usesDeepSeekWire(model.provider, model.base_url) and level != .off) return @tagName(level);
     const model_id = model.id;
     return switch (level) {
@@ -1008,9 +1008,9 @@ fn bridgeTestModel(provider: []const u8, id: []const u8) ai_types.Model {
     };
 }
 
-test "deepseek and opencode receive the thinking level by name, and opencode nothing when it is off" {
-    const levels = [_]struct { level: ai_types.ThinkingLevel, deepseek: []const u8, opencode: ?[]const u8 }{
-        .{ .level = .off, .deepseek = "low", .opencode = null },
+test "deepseek and opencode receive the thinking level by name, and opencode off with reasoning disabled when it is off" {
+    const levels = [_]struct { level: ai_types.ThinkingLevel, deepseek: []const u8, opencode: []const u8 }{
+        .{ .level = .off, .deepseek = "low", .opencode = "off" },
         .{ .level = .medium, .deepseek = "medium", .opencode = "medium" },
         .{ .level = .xhigh, .deepseek = "xhigh", .opencode = "xhigh" },
         .{ .level = .max, .deepseek = "max", .opencode = "max" },
@@ -1019,11 +1019,7 @@ test "deepseek and opencode receive the thinking level by name, and opencode not
         const deepseek = streamOptionsFromProtocolOptions(.{ .thinking_level = case.level }, bridgeTestModel("deepseek", "deepseek-flash"), null, null);
         try std.testing.expectEqualStrings(case.deepseek, deepseek.getReasoningEffort().?);
         const opencode = streamOptionsFromProtocolOptions(.{ .thinking_level = case.level }, bridgeTestModel("opencode-go", "deepseek-v4.1-flash"), null, null);
-        if (case.opencode) |expected| {
-            try std.testing.expectEqualStrings(expected, opencode.getReasoningEffort().?);
-        } else {
-            try std.testing.expect(opencode.getReasoningEffort() == null);
-            try std.testing.expect(!opencode.reasoning_enabled);
-        }
+        try std.testing.expectEqualStrings(case.opencode, opencode.getReasoningEffort().?);
+        try std.testing.expectEqual(case.level != .off, opencode.reasoning_enabled);
     }
 }

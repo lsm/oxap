@@ -633,6 +633,8 @@ func TestACommandCodeRequestSendsTheEffortItsUpstreamVendorTakes(t *testing.T) {
 		{"deepseek/deepseek-v4.1-flash", "medium", "high"},
 		{"deepseek/deepseek-v4.1-flash", "max", "max"},
 		{"Qwen/Qwen3.8-Max", "medium", "medium"},
+		{"deepseek/deepseek-v4.1-flash", "off", "off"},
+		{"Qwen/Qwen3.8-Max", "none", "off"},
 	}
 	for _, c := range cases {
 		model.ID = c.id
@@ -640,10 +642,6 @@ func TestACommandCodeRequestSendsTheEffortItsUpstreamVendorTakes(t *testing.T) {
 		if got["reasoning_effort"] != c.sent {
 			t.Errorf("%s at %q sent %v, want %q", c.id, c.level, got["reasoning_effort"], c.sent)
 		}
-	}
-	model.ID = "deepseek/deepseek-v4.1-flash"
-	if got := decode(t, BuildRequestBody(model, Context{}, StreamOptions{ReasoningEffort: "off"})); got["reasoning_effort"] != nil {
-		t.Errorf("reasoning off sent %v, want no reasoning_effort", got["reasoning_effort"])
 	}
 }
 

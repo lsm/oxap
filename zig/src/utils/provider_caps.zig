@@ -145,7 +145,7 @@ pub fn isCommandCode(vendor_id: []const u8) bool {
 }
 
 pub fn commandCodeEffort(model_id: []const u8, effort: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, effort, "off") or std.mem.eql(u8, effort, "none")) return null;
+    if (std.mem.eql(u8, effort, "off") or std.mem.eql(u8, effort, "none")) return "off";
     if (std.ascii.startsWithIgnoreCase(model_id, "deepseek/")) return deepSeekEffort(effort);
     if (std.mem.eql(u8, effort, "minimal") or std.mem.eql(u8, effort, "low")) return "low";
     if (std.mem.eql(u8, effort, "medium")) return "medium";
@@ -153,7 +153,7 @@ pub fn commandCodeEffort(model_id: []const u8, effort: []const u8) ?[]const u8 {
 }
 
 pub fn openCodeEffort(model_id: []const u8, effort: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, effort, "off") or std.mem.eql(u8, effort, "none")) return null;
+    if (std.mem.eql(u8, effort, "off") or std.mem.eql(u8, effort, "none")) return if (containsAny(model_id, &.{"deepseek-v4"})) "none" else null;
     if (containsAny(model_id, &.{ "glm-5.2", "glm-5-2", "glm-5p2" })) return if (isTopEffort(effort)) "max" else "high";
     if (containsAny(model_id, &.{ "deepseek-chat", "deepseek-reasoner", "deepseek-r1", "deepseek-v3", "minimax", "glm", "kimi", "k2p", "qwen", "big-pickle" })) return null;
     if (containsAny(model_id, &.{"deepseek-v4"})) return deepSeekEffort(effort);
@@ -1003,7 +1003,8 @@ test "opencode sends each model family the efforts opencode itself offers it" {
     try std.testing.expectEqualStrings("medium", openCodeEffort("grok-4.7", "medium").?);
     try std.testing.expectEqualStrings("high", openCodeEffort("gpt-6-luna", "xhigh").?);
     try std.testing.expectEqualStrings("low", openCodeEffort("mimo-v2.6-pro", "minimal").?);
-    try std.testing.expect(openCodeEffort("deepseek-v4.1-flash", "off") == null);
+    try std.testing.expectEqualStrings("none", openCodeEffort("deepseek-v4.1-flash", "off").?);
+    try std.testing.expect(openCodeEffort("gpt-6-luna", "off") == null);
     try std.testing.expect(openCodeEffort("glm-5.3", "high") == null);
     try std.testing.expect(openCodeEffort("kimi-k3", "high") == null);
     try std.testing.expect(openCodeEffort("qwen3.8-flash", "high") == null);
