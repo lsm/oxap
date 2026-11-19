@@ -81,7 +81,11 @@ impl Session {
         }
         let id = run.id.as_str();
         let journal = &self.shared.journal;
-        Ok(journal.resume(inner.state(), id, request.after_sequence, latest))
+        let (recovery, replay) = journal.resume(inner.state(), id, request.after_sequence, latest);
+        if let Some(gap) = recovery.replay_gap {
+            return Err(Error::ReplayGap(gap));
+        }
+        Ok((recovery, replay))
     }
 
     pub fn close(&self) {
@@ -101,7 +105,7 @@ impl Inner {
             ..SessionState::default()
         };
         let mut position = 0;
-        for run in self.reducer.runs.iter().filter(|run| run.terminal) {
+        for run in self.reducer.runs.iter().filter(|run| !run.terminal) {
             let mut active = ActiveRun {
                 run_id: run.id.clone(),
                 status: run.status.clone(),
@@ -192,7 +196,9 @@ impl Shared {
     pub(crate) fn flush(&self, inner: &mut Inner) {
         for envelope in inner.reducer.events.drain(..) {
             let kind = &envelope.envelope_type;
-            let terminal = *kind == EnvelopeType::RUN_CANCELLED;
+            let terminal = *kind == EnvelopeType::RUN_COMPLETED
+                || *kind == EnvelopeType::RUN_FAILED
+                || *kind == EnvelopeType::RUN_CANCELLED;
             self.journal.append(envelope, terminal);
         }
     }
