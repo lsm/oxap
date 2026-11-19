@@ -40,7 +40,7 @@ fn mergeCompat(model: ai_types.Model) MergedCompat {
     const deepseek_wire = provider_caps.usesDeepSeekWire(model.provider, model.base_url);
     const detected_reasoning_effort = if (deepseek_wire and model.reasoning and caps.supports_reasoning_effort == false and provider_caps.isExplicitDeepSeekVendor(model.provider))
         true
-    else if (provider_caps.isOpenCodeGateway(model.provider))
+    else if (provider_caps.isOpenCodeGateway(model.provider) or provider_caps.isCommandCode(model.provider))
         model.reasoning
     else if (honors_native_caps or deepseek_wire)
         caps.supports_reasoning_effort
@@ -660,6 +660,8 @@ fn buildRequestBody(
         if (model.reasoning and merged.supports_reasoning_effort) {
             const sent: ?[]const u8 = if (provider_caps.isOpenCodeGateway(model.provider))
                 (if (options.reasoning_enabled) provider_caps.openCodeEffort(model.id, effort) else null)
+            else if (provider_caps.isCommandCode(model.provider))
+                (if (options.reasoning_enabled) provider_caps.commandCodeEffort(model.id, effort) else null)
             else if (provider_caps.usesDeepSeekWire(model.provider, model.base_url))
                 provider_caps.deepSeekEffort(effort)
             else
@@ -2601,6 +2603,45 @@ test "an opencode request carries the effort opencode offers the model, and none
             .input = &[_][]const u8{"text"},
             .cost = .{ .input = 0, .output = 0, .cache_read = 0, .cache_write = 0 },
             .context_window = 1_048_576,
+            .max_tokens = 100,
+        };
+        const body = try buildRequestBody(model, .{ .messages = &messages }, .{
+            .max_tokens = 100,
+            .reasoning_effort = ai_types.OwnedSlice(u8).initBorrowed(case.level),
+        }, allocator);
+        defer allocator.free(body);
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+        defer parsed.deinit();
+        const sent = parsed.value.object.get("reasoning_effort");
+        if (case.sent) |expected| {
+            try std.testing.expectEqualStrings(expected, sent.?.string);
+        } else {
+            try std.testing.expect(sent == null);
+        }
+    }
+}
+
+test "a command-code request carries the effort its upstream vendor takes, and none when reasoning is off" {
+    const allocator = std.testing.allocator;
+    const messages = [_]ai_types.Message{.{ .user = .{ .content = .{ .text = "hi" }, .timestamp = 0 } }};
+    const cases = [_]struct { id: []const u8, level: []const u8, sent: ?[]const u8 }{
+        .{ .id = "deepseek/deepseek-v4.1-flash", .level = "low", .sent = "low" },
+        .{ .id = "deepseek/deepseek-v4.1-flash", .level = "medium", .sent = "high" },
+        .{ .id = "deepseek/deepseek-v4.1-flash", .level = "xhigh", .sent = "max" },
+        .{ .id = "Qwen/Qwen3.8-Max", .level = "medium", .sent = "medium" },
+        .{ .id = "deepseek/deepseek-v4.1-flash", .level = "off", .sent = null },
+    };
+    for (cases) |case| {
+        const model = ai_types.Model{
+            .id = case.id,
+            .name = case.id,
+            .api = "openai-completions",
+            .provider = "command-code",
+            .base_url = "https://api.commandcode.ai/provider/v1",
+            .reasoning = true,
+            .input = &[_][]const u8{"text"},
+            .cost = .{ .input = 0, .output = 0, .cache_read = 0, .cache_write = 0 },
+            .context_window = 1_000_000,
             .max_tokens = 100,
         };
         const body = try buildRequestBody(model, .{ .messages = &messages }, .{

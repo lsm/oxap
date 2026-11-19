@@ -447,10 +447,14 @@ func BuildRequestBody(model Model, ctx Context, options StreamOptions) []byte {
 	if options.ReasoningEffort != "" {
 		if model.Reasoning && merged.SupportsReasoningEffort {
 			effort := options.ReasoningEffort
-			if IsDeepSeekModel(model) {
+			if IsCommandCodeModel(model) {
+				effort = commandCodeEffort(model.ID, effort)
+			} else if IsDeepSeekModel(model) {
 				effort = deepSeekEffort(effort)
 			}
-			body = body.with(member("reasoning_effort", jsonString(effort)))
+			if effort != "" {
+				body = body.with(member("reasoning_effort", jsonString(effort)))
+			}
 		}
 	}
 	if len(ctx.Tools) > 0 {
@@ -501,6 +505,23 @@ func toolChoiceValue(choice ToolChoice) (jsonValue, bool) {
 		}, true
 	}
 	return nil, false
+}
+
+func commandCodeEffort(modelID, effort string) string {
+	switch effort {
+	case "off", "none":
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(modelID), "deepseek/") {
+		return deepSeekEffort(effort)
+	}
+	switch effort {
+	case "minimal", "low":
+		return "low"
+	case "medium":
+		return "medium"
+	}
+	return "high"
 }
 
 func deepSeekEffort(effort string) string {

@@ -140,6 +140,18 @@ pub fn isOpenCodeGateway(vendor_id: []const u8) bool {
     return std.mem.eql(u8, vendor_id, "opencode-zen") or std.mem.eql(u8, vendor_id, "opencode-go");
 }
 
+pub fn isCommandCode(vendor_id: []const u8) bool {
+    return std.mem.eql(u8, vendor_id, "command-code");
+}
+
+pub fn commandCodeEffort(model_id: []const u8, effort: []const u8) ?[]const u8 {
+    if (std.mem.eql(u8, effort, "off") or std.mem.eql(u8, effort, "none")) return null;
+    if (std.ascii.startsWithIgnoreCase(model_id, "deepseek/")) return deepSeekEffort(effort);
+    if (std.mem.eql(u8, effort, "minimal") or std.mem.eql(u8, effort, "low")) return "low";
+    if (std.mem.eql(u8, effort, "medium")) return "medium";
+    return "high";
+}
+
 pub fn openCodeEffort(model_id: []const u8, effort: []const u8) ?[]const u8 {
     if (std.mem.eql(u8, effort, "off") or std.mem.eql(u8, effort, "none")) return null;
     if (containsAny(model_id, &.{ "glm-5.2", "glm-5-2", "glm-5p2" })) return if (isTopEffort(effort)) "max" else "high";

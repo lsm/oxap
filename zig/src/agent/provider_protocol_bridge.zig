@@ -117,7 +117,7 @@ fn drainClientEvents(client: *ProtocolClient, out_stream: *event_stream.Assistan
 }
 
 fn reasoningEffort(level: ai_types.ThinkingLevel, model: ai_types.Model) []const u8 {
-    if (provider_caps.isOpenCodeGateway(model.provider)) return if (level == .off) "" else @tagName(level);
+    if (provider_caps.isOpenCodeGateway(model.provider) or provider_caps.isCommandCode(model.provider)) return if (level == .off) "" else @tagName(level);
     if (provider_caps.usesDeepSeekWire(model.provider, model.base_url) and level != .off) return @tagName(level);
     const model_id = model.id;
     return switch (level) {
