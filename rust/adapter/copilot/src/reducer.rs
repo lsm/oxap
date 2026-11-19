@@ -293,6 +293,8 @@ impl Reducer {
 }
 
 #[cfg(test)]
+mod corpus;
+#[cfg(test)]
 mod tests;
 
 fn text_part(text: String) -> ContentPart {
