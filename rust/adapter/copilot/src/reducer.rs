@@ -50,7 +50,7 @@ impl Reducer {
 
     pub fn admit(&mut self, queue: bool) -> Result<usize, Error> {
         let live = self.live();
-        if live > MAX_QUEUED * 2 {
+        if live > MAX_QUEUED {
             return Err(Error::RunActive);
         }
         let mut status = RunStatus::RUNNING;
@@ -61,7 +61,7 @@ impl Reducer {
                 .iter()
                 .filter(|run| !run.terminal && run.status == RunStatus::QUEUED)
                 .count();
-            if queued >= MAX_QUEUED * 2 {
+            if queued >= MAX_QUEUED {
                 return Err(Error::RunActive);
             }
         }
@@ -124,7 +124,12 @@ impl Reducer {
         let run = &mut self.runs[index];
         run.next += 1;
         if terminal {
-            run.status = RunStatus::RUNNING;
+            run.terminal = true;
+            run.status = if kind == EnvelopeType::RUN_FAILED {
+                RunStatus::FAILED
+            } else {
+                RunStatus::COMPLETED
+            };
             if self.current == Some(index) {
                 self.current = None;
             }
