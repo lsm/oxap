@@ -1,0 +1,1 @@
+{"adapters":{"copilot":{"type":"copilot","executable":"@DIR@/child.sh","working_directory":"@DIR@","environment":["PATH"]}}}

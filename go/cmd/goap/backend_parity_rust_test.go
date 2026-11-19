@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -53,6 +54,11 @@ func TestBackendsMatchRustHub(t *testing.T) {
 
 func rustHubServes(t *testing.T, dir string) bool {
 	t.Helper()
+	return servesOnly(t, dir, "memory", "acp", "deepseek", "codex", "copilot")
+}
+
+func servesOnly(t *testing.T, dir string, served ...string) bool {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "registry.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +76,7 @@ func rustHubServes(t *testing.T, dir string) bool {
 		if kind == "" {
 			kind = name
 		}
-		if kind != "memory" && kind != "acp" && kind != "deepseek" && kind != "codex" {
+		if !slices.Contains(served, kind) {
 			return false
 		}
 	}

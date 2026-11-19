@@ -33,6 +33,9 @@ func TestBackendsMatchOapx(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, dir := range cases {
+		if !oapxServes(t, dir) {
+			continue
+		}
 		backend := fixtureBackend(t, dir)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			scenario := readLines(t, filepath.Join(dir, "scenario.jsonl"))
@@ -52,6 +55,11 @@ func TestBackendsMatchOapx(t *testing.T) {
 			}
 		})
 	}
+}
+
+func oapxServes(t *testing.T, dir string) bool {
+	t.Helper()
+	return servesOnly(t, dir, "claude", "codex", "pi", "acp", "hermes", "deepseek", "opencode", "memory", "oapx")
 }
 
 func fixtureBackend(t *testing.T, dir string) string {
