@@ -693,6 +693,7 @@
       ],
       "headers": {"User-Agent": "oxap/1", "x-cmd-zdr": "1"},
       "models_endpoint": "/models",
+      "models_dev": "commandcode",
       "docs": "https://commandcode.ai/docs/provider"
     }
   ]

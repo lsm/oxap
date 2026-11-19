@@ -623,6 +623,30 @@ func TestADeepSeekRequestSendsOneOfItsDocumentedEfforts(t *testing.T) {
 	}
 }
 
+func TestACommandCodeRequestSendsTheEffortItsUpstreamVendorTakes(t *testing.T) {
+	model := loopbackModel()
+	model.Provider = "command-code"
+	model.BaseURL = "https://api.commandcode.ai/provider/v1"
+	model.Reasoning = true
+	cases := []struct{ id, level, sent string }{
+		{"deepseek/deepseek-v4.1-flash", "low", "low"},
+		{"deepseek/deepseek-v4.1-flash", "medium", "high"},
+		{"deepseek/deepseek-v4.1-flash", "max", "max"},
+		{"Qwen/Qwen3.8-Max", "medium", "medium"},
+	}
+	for _, c := range cases {
+		model.ID = c.id
+		got := decode(t, BuildRequestBody(model, Context{}, StreamOptions{ReasoningEffort: c.level}))
+		if got["reasoning_effort"] != c.sent {
+			t.Errorf("%s at %q sent %v, want %q", c.id, c.level, got["reasoning_effort"], c.sent)
+		}
+	}
+	model.ID = "deepseek/deepseek-v4.1-flash"
+	if got := decode(t, BuildRequestBody(model, Context{}, StreamOptions{ReasoningEffort: "off"})); got["reasoning_effort"] != nil {
+		t.Errorf("reasoning off sent %v, want no reasoning_effort", got["reasoning_effort"])
+	}
+}
+
 func TestAnAssistantWithThinkingAsTextWritesItInsideTheContentArray(t *testing.T) {
 	model := loopbackModel()
 	model.Compat = CompatOptions{RequiresThinkingAsText: boolPtr(true)}
