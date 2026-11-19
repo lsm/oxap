@@ -14,16 +14,16 @@ records the names and the compatibility rules.
 | The binary through npm | `npm install -g @oxap/cli`, or `npx @oxap/cli --version`. |
 | The binary from source | Zig 0.17.0, then `make install` in a checkout. |
 | TypeScript SDK | `npm install @oxap/sdk` |
-| Go library and Go SDK | `go get github.com/lsm/oxap@v0.1.0-alpha.36` |
+| Go library and Go SDK | `go get github.com/lsm/oxap@v0.1.0-alpha.37` |
 | TypeScript hub client | `npm install @oxap/client` |
-| Python SDK | `pip install oxap-sdk==0.1.0a36` (or `oxap`, which installs it), then `import oxap_sdk` |
-| Rust SDK | `cargo add oxap-sdk@0.1.0-alpha.36` (or `oxap`, which re-exports it) |
+| Python SDK | `pip install oxap-sdk==0.1.0a37` (or `oxap`, which installs it), then `import oxap_sdk` |
+| Rust SDK | `cargo add oxap-sdk@0.1.0-alpha.37` (or `oxap`, which re-exports it) |
 
 Alpha releases are pre-releases. Until a stable version ships, npm publishes
 them under `latest`, so a plain install gets the newest alpha. Cargo picks a
 pre-release only when you name its version, and pip prefers final releases, so
 those commands name it. To pin npm exactly, name the version, for example
-`npm install @oxap/sdk@0.1.0-alpha.36`.
+`npm install @oxap/sdk@0.1.0-alpha.37`.
 
 The registry packages appear with the `v0.1.0-alpha.33` release; until then,
 each SDK's README says how to use it from a checkout. Of the Rust crates only

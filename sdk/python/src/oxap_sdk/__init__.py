@@ -107,7 +107,7 @@ from .types import (
     Usage,
 )
 
-__version__ = "0.1.0a36"
+__version__ = "0.1.0a37"
 
 __all__ = [
     "__version__",
