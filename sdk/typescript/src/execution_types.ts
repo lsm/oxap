@@ -76,6 +76,7 @@ export interface RunOptions {
   auth_retry_policy?: AuthRetryPolicy;
   session_id?: string;
   metadata?: Record<string, string>;
+  headers?: Record<string, string>;
   signal?: AbortSignal;
 }
 

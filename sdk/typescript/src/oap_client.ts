@@ -422,6 +422,7 @@ class OapProviderApi implements MakaiProviderApi {
       ...(request.options?.temperature !== undefined ? { temperature: request.options.temperature } : {}),
       ...(request.options?.reasoning_effort && request.options.reasoning_effort !== "off" ? { reasoning: { enabled: true, effort: request.options.reasoning_effort } } : {}),
       ...(request.options?.metadata ? { metadata: request.options.metadata } : {}),
+      ...(request.options?.headers && Object.keys(request.options.headers).length ? { headers: request.options.headers } : {}),
     });
     if (create.type !== "inference.create.response") throw new MakaiProtocolError(`unexpected ${create.type}`, "malformed_response");
     if (create.payload.accepted !== true) {
@@ -750,6 +751,7 @@ class OapAgentApi {
   private async *streamOnce(request: AgentRunRequest, progress: { toolsRan: boolean } = { toolsRan: false }): AsyncIterable<AgentStreamEvent> {
     if (request.options?.temperature !== undefined) unsupported("temperature on an agent run");
     if (request.options?.reasoning_effort === "minimal") unsupported("minimal reasoning, which the agent loop runs as low");
+    if (request.options?.headers && Object.keys(request.options.headers).length) unsupported("request headers on an agent run; they reach a provider only on a direct provider call");
     const maxTokens = request.options?.max_tokens;
     if (maxTokens !== undefined && (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 4_294_967_295)) throw new MakaiProtocolError("max_tokens must be an integer between 1 and 4294967295", "invalid_request");
     if (request.tools?.length && !this.transport.agentFeatures.has("action.tools.provide")) unsupported("client tools on an endpoint that does not advertise action.tools.provide");
