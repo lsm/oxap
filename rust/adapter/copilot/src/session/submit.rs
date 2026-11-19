@@ -112,7 +112,7 @@ impl Session {
             message_ids: vec![message],
             ..MessageSubmitResponse::default()
         };
-        if status != RunStatus::QUEUED {
+        if status == RunStatus::QUEUED {
             ack.admission = Admission::QUEUED;
             ack.effective_delivery = EffectiveDeliveryMode::QUEUE;
         }
