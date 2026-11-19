@@ -6,6 +6,7 @@ pub mod native;
 pub mod process;
 pub mod reducer;
 pub mod rpc;
+pub mod session;
 mod usage;
 
 use std::sync::LazyLock;
