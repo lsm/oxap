@@ -72,7 +72,11 @@ impl Reducer {
         &self.native_id
     }
 
-    fn live(&self) -> usize {
+    pub(crate) fn new_id(&self, kind: &str) -> String {
+        self.ids.new_id(kind)
+    }
+
+    pub(crate) fn live(&self) -> usize {
         self.runs.iter().filter(|run| !run.terminal).count()
     }
 

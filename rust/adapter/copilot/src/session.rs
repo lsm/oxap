@@ -1,13 +1,16 @@
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use crossbeam_channel::{select, Receiver};
 use oxap_adapter::journal::Journal;
 use oxap_adapter::{Error, EventStream, Recovery, ResumeRequest};
 use oxap_protocol::{ActiveRun, EnvelopeType, RunStatus, SessionState, SessionStatus};
 
-use crate::native::{decode_event, Message};
+use crate::native::{decode_event, Event, Message};
 use crate::process::Process;
 use crate::reducer::Reducer;
+
+mod submit;
 
 const RELATIONSHIP_PRIMARY: &str = "primary";
 
@@ -16,12 +19,17 @@ pub(crate) struct Inner {
     pub(crate) closed: bool,
     pub(crate) closing: bool,
     pub(crate) unusable: bool,
+    pub(crate) pending: Option<usize>,
+    pub(crate) held: Vec<Event>,
 }
 
 pub(crate) struct Shared {
     pub(crate) inner: Mutex<Inner>,
     pub(crate) process: Process,
     pub(crate) journal: Journal,
+    timeout: Duration,
+    sending: Mutex<()>,
+    held_limit: usize,
 }
 
 pub struct Session {
@@ -30,16 +38,22 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(reducer: Reducer, process: Process, capacity: usize) -> Self {
+    pub fn new(reducer: Reducer, process: Process, capacity: usize, timeout: Duration) -> Self {
+        let held_limit = process.client.notifications().capacity().unwrap_or(0);
         let shared = Arc::new(Shared {
             inner: Mutex::new(Inner {
                 reducer,
                 closed: false,
                 closing: false,
                 unusable: false,
+                pending: None,
+                held: Vec::new(),
             }),
             process,
             journal: Journal::new(capacity),
+            timeout,
+            sending: Mutex::new(()),
+            held_limit,
         });
         let (finished, done) = crossbeam_channel::bounded::<()>(0);
         let pump = shared.clone();
@@ -67,11 +81,14 @@ impl Session {
         if inner.closed {
             return Err(Error::SessionClosed);
         }
+        let pending = inner.pending;
         let Some(run) = inner
             .reducer
             .runs
             .iter()
-            .find(|run| run.id == request.run_id)
+            .enumerate()
+            .find(|(index, run)| run.id == request.run_id && Some(*index) != pending)
+            .map(|(_, run)| run)
         else {
             return Err(Error::RunNotFound);
         };
@@ -105,7 +122,9 @@ impl Inner {
             ..SessionState::default()
         };
         let mut position = 0;
-        for run in self.reducer.runs.iter().filter(|run| !run.terminal) {
+        let runs = self.reducer.runs.iter().enumerate();
+        let open = runs.filter(|(index, run)| !run.terminal && Some(*index) != self.pending);
+        for (_, run) in open {
             let mut active = ActiveRun {
                 run_id: run.id.clone(),
                 status: run.status.clone(),
@@ -168,7 +187,7 @@ impl Shared {
             return;
         }
         let observed = match decode_event(&message) {
-            Ok(Some(event)) => inner.reducer.observe(&event).is_ok(),
+            Ok(Some(event)) => self.observe(&mut inner, &event).is_ok(),
             Ok(None) => true,
             Err(_) => false,
         };
