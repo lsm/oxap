@@ -74,6 +74,8 @@ test("agent tools and settings travel over OAP, and temperature and provider cal
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === "invalid_request");
     await assert.rejects(() => client.agent.run({ model_ref: "fixture/openai-responses@settings", messages: [{ role: "user", content: "hello" }], options: { reasoning_effort: "minimal" } }),
       (error: unknown) => error instanceof OapUnsupportedFeatureError);
+    await assert.rejects(() => client.agent.run({ model_ref: "fixture/openai-responses@settings", messages: [{ role: "user", content: "hello" }], options: { headers: { "x-opencode-session": "video-7" } } }),
+      (error: unknown) => error instanceof OapUnsupportedFeatureError);
     const aborting = new AbortController();
     const hanging = { name: "lookup", description: "never answers", parameters_schema_json: "{}", execute: () => { aborting.abort(); return new Promise<string>(() => {}); } };
     await assert.rejects(() => client.agent.run({ model_ref: "fixture/openai-responses@tool", messages: [{ role: "user", content: "hello" }], tools: [hanging], options: { signal: aborting.signal } }),
@@ -246,12 +248,13 @@ test("direct OAP request uses JSON input_schema and metadata, and correlates too
         { role: "tool", tool_call_id: "call-1", content: "sunny" },
       ],
       tools: [{ name: "lookup", description: "City lookup", parameters_schema_json: '{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}' }],
-      options: { metadata: { trace: "test" } },
+      options: { metadata: { trace: "test" }, headers: { "x-opencode-session": "video-7" } },
     });
     assert.equal(typeof completed.message.content, "string");
     const sent = JSON.parse(completed.message.content as string);
     assert.deepEqual(sent.tools, [{ name: "lookup", description: "City lookup", input_schema: { type: "object", properties: { city: { type: "string" } }, required: ["city"] } }]);
     assert.deepEqual(sent.metadata, { trace: "test" });
+    assert.deepEqual(sent.headers, { "x-opencode-session": "video-7" });
     assert.equal(sent.metadata_json, undefined);
     assert.deepEqual(sent.messages[0].content, [{ type: "tool_call", tool_call_id: "call-1", name: "lookup", arguments_json: { city: "Paris" }, carry: "tool-carry" }]);
     assert.deepEqual(sent.messages[1], { role: "tool", content: [{ type: "tool_result", tool_call_id: "call-1", result: "sunny" }] });

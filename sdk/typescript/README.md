@@ -524,9 +524,14 @@ type RunOptions = {
    */
   session_id?: string;
   metadata?: Record<string, string>;
+  headers?: Record<string, string>;
   signal?: AbortSignal;
 };
 ```
+
+`headers` go on a direct provider call only; an agent run refuses them. The
+endpoint decides which it forwards and refuses the rest: oapx forwards the
+session header a provider's catalog entry names, such as `x-opencode-session`.
 
 Core namespaces:
 
