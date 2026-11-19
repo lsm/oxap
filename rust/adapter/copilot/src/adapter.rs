@@ -213,7 +213,7 @@ impl Adapter {
         let call = |method: &str, params: &Value| -> Result<Handshake, Error> {
             decode(process, method, params, config.request_timeout)
         };
-        if call("ping", &json!({}))?.protocol_version == PINNED_PROTOCOL {
+        if call("ping", &json!({}))?.protocol_version != PINNED_PROTOCOL {
             let message = "copilot: server does not speak pinned protocol 3";
             return Err(Error::Harness(message.into()));
         }
