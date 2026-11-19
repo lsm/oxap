@@ -2,6 +2,7 @@
 
 pub mod client;
 pub mod native;
+pub mod process;
 pub mod rpc;
 
 use std::sync::LazyLock;
