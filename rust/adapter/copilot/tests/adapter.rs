@@ -67,7 +67,7 @@ fn the_headless_options_are_appended_after_the_configured_args() {
 #[test]
 fn configuration_requires_an_executable_an_absolute_directory_and_no_standalone_dashes() {
     let absolute = std::env::temp_dir().display().to_string();
-    for invalid in [
+    for (index, invalid) in [
         Config::default(),
         Config {
             executable: "copilot".into(),
@@ -84,10 +84,13 @@ fn configuration_requires_an_executable_an_absolute_directory_and_no_standalone_
             args: vec!["--".into()],
             ..Config::default()
         },
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         assert!(
-            matches!(Adapter::new(invalid.clone()), Err(Error::Harness(_))),
-            "{invalid:?}"
+            matches!(Adapter::new(invalid), Err(Error::Harness(_))),
+            "configuration {index}"
         );
     }
 }
