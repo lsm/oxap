@@ -176,6 +176,7 @@ pub struct RunOptions {
     pub auth_retry_policy: Option<AuthRetryPolicy>,
     pub session_id: Option<String>,
     pub metadata: Option<std::collections::BTreeMap<String, String>>,
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
 }
 
 impl RunOptions {

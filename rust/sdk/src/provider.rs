@@ -265,6 +265,14 @@ fn oap_create_payload(request: &ExecutionRequest) -> Result<serde_json::Value> {
     if let Some(metadata) = &request.options.metadata {
         fields.insert("metadata".to_owned(), json!(metadata));
     }
+    if let Some(headers) = request
+        .options
+        .headers
+        .as_ref()
+        .filter(|headers| !headers.is_empty())
+    {
+        fields.insert("headers".to_owned(), json!(headers));
+    }
     if !request.tools.is_empty() {
         let tools = request
             .tools
@@ -338,5 +346,27 @@ impl Drop for OapInferenceGuard {
                 Some(("inference_id", &self.id)),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod create_payload_tests {
+    use super::*;
+
+    #[test]
+    fn a_provider_call_carries_its_headers_and_a_call_without_them_sends_none() {
+        let headed = ExecutionRequest::prompt(
+            "opencode-go/openai-chat-completions@deepseek-v4.1-flash",
+            "hello",
+        )
+        .with_header("x-opencode-session", "video-7");
+        let payload = oap_create_payload(&headed).expect("payload");
+        assert_eq!(
+            payload["headers"],
+            json!({ "x-opencode-session": "video-7" })
+        );
+        let plain = ExecutionRequest::prompt("fixture/openai-responses@mock", "hello");
+        let payload = oap_create_payload(&plain).expect("payload");
+        assert!(payload.get("headers").is_none());
     }
 }

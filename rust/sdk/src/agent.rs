@@ -153,6 +153,16 @@ impl AgentApi {
         if request.options.temperature.is_some() {
             return Err(crate::oap::unsupported("temperature on an agent run"));
         }
+        if request
+            .options
+            .headers
+            .as_ref()
+            .is_some_and(|headers| !headers.is_empty())
+        {
+            return Err(crate::oap::unsupported(
+                "request headers on an agent run; they reach a provider only on a direct provider call",
+            ));
+        }
         let session_id = request
             .options
             .session_id
