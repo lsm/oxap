@@ -1040,6 +1040,10 @@ pub const Server = struct {
                     try self.emitCreateRefusal(env, .unsupported_feature, "this endpoint forwards only the session header the provider's catalog entry names");
                     return;
                 }
+                if (std.mem.trim(u8, header.value, " \t").len == 0) {
+                    try self.emitCreateRefusal(env, .invalid_request, "the session header needs a value");
+                    return;
+                }
                 session = header.value;
             }
         }
@@ -2564,7 +2568,7 @@ fn gemmaSessionHeader(model_ref: []const u8) ?[]const u8 {
     return if (std.mem.eql(u8, model_ref, "ollama-local/openai-chat-completions@gemma")) "x-test-session" else null;
 }
 
-test "the catalog's session header reaches the inference, matched without regard to case, and any other header is refused" {
+test "the catalog's session header reaches the inference, matched without regard to case, and any other header or a blank value is refused" {
     const allocator = std.testing.allocator;
     var server = try testServer(allocator, .{ .accepts_inference = true, .session_header = gemmaSessionHeader });
     defer server.deinit();
@@ -2598,6 +2602,22 @@ test "the catalog's session header reaches the inference, matched without regard
     const err = refused.payload.inference_create_response.err.?;
     try std.testing.expectEqual(types.ErrorCode.unsupported_feature, err.code);
     try std.testing.expectEqualStrings("this endpoint forwards only the session header the provider's catalog entry names", err.message);
+    try std.testing.expectEqual(@as(usize, 1), server.active.items.len);
+
+    const empty = try makeRequest(
+        allocator,
+        "inference.create.request",
+        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"x-test-session\":\" \"}}",
+        "q3",
+    );
+    defer allocator.free(empty);
+    try server.handleLine(empty);
+
+    var blank = try decodeOnly(allocator, &server);
+    defer blank.deinit(allocator);
+    const blank_err = blank.payload.inference_create_response.err.?;
+    try std.testing.expectEqual(types.ErrorCode.invalid_request, blank_err.code);
+    try std.testing.expectEqualStrings("the session header needs a value", blank_err.message);
     try std.testing.expectEqual(@as(usize, 1), server.active.items.len);
 }
 
