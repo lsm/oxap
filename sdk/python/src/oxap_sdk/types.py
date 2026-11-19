@@ -210,7 +210,9 @@ class RunOptions:
     a one-run correlation key. On an agent run ``reasoning_effort`` becomes the
     session's reasoning level and ``max_tokens`` the oapx output limit, both
     at open; ``temperature`` fails explicitly, since the loop takes none. On an auto-once
-    auth retry, a fresh session id is used for the retried attempt.
+    auth retry, a fresh session id is used for the retried attempt. ``headers``
+    reach the provider on a direct provider call only, and the endpoint decides
+    which it forwards; an agent run refuses them.
     """
 
     temperature: Optional[float] = None
@@ -219,6 +221,7 @@ class RunOptions:
     auth_retry_policy: Optional[AuthRetryPolicy] = None
     session_id: Optional[str] = None
     metadata: Optional[Mapping[str, str]] = None
+    headers: Optional[Mapping[str, str]] = None
 
 
 @dataclass(frozen=True)

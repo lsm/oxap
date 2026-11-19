@@ -334,6 +334,8 @@ class ProviderApi:
                                          "effort": options.reasoning_effort}
             if options.metadata is not None:
                 payload["metadata"] = dict(options.metadata)
+            if options.headers:
+                payload["headers"] = dict(options.headers)
         return payload
 
     async def _frames(self, model_ref: str, messages: Sequence[ChatMessage],
@@ -482,6 +484,9 @@ def _open_payload(transport: StdioTransport, session_id: str, tools: Optional[Se
         payload["metadata"] = {"oapx": settings}
     if options and options.reasoning_effort == "minimal":
         raise MakaiProtocolError("the agent loop runs minimal reasoning as low, so it refuses minimal",
+                                 "unsupported_feature")
+    if options and options.headers:
+        raise MakaiProtocolError("request headers reach a provider only on a direct provider call",
                                  "unsupported_feature")
     if options and options.reasoning_effort is not None:
         payload["reasoning_level"] = options.reasoning_effort
