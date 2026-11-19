@@ -39,8 +39,8 @@ const TOOL_SOURCE_MEMBERS: [&str; 7] = [
     "environment",
 ];
 
-const HARNESS_TYPES: [&str; 8] = [
-    "claude", "codex", "copilot", "deepseek", "hermes", "opencode", "pi", "oapx",
+const HARNESS_TYPES: [&str; 7] = [
+    "claude", "codex", "deepseek", "hermes", "opencode", "pi", "oapx",
 ];
 
 #[derive(Debug, thiserror::Error)]

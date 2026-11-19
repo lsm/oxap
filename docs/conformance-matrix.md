@@ -22,7 +22,7 @@ records where each tree stands against it. Rule-level validator coverage is in
 | Pack loading (20 codes) | partial: 5; #1261 adds 10 | done | missing |
 | Harness catalog and pins | done | done | done: `oxap-harness` reads the catalog and runs every catalog drift rule (#1442) |
 | Adapters: acp, claude, codex, deepseek, hermes, opencode, pi | done (shared corpora) | done (shared corpora) | missing |
-| Adapter: copilot | done | missing | missing |
+| Adapter: copilot | done | done: `go/adapter/copilot`, replaying its corpus | done: `oxap-adapter-copilot`, replaying the same corpus and served by `oap-rust-hub` |
 | Memory reference adapter | done | done | done: `oxap_adapter::memory`, which `oap-rust-hub serve agent` serves through every `goap conformance` check and the memory parity fixture |
 | Hub, stdio | done | done | done |
 | Hub, HTTP and SSE | done | done | partial: the gates, the read-only routes, tools, models, open with its held subscription, submit, resolve, cancel with task cancel, task output, settings, close, SSE events, transcript, the work routes and shutdown; `oap-rust-hub serve --addr` serves them on a loopback allowlist; `TestHubHTTPAnswersGoapAndRustTheSame` holds 36 requests to goap's answers; SIGINT and SIGTERM map as in Go |
@@ -46,7 +46,7 @@ missing; Rust 9 done, 4 partial, 6 missing.
 | Adapter corpora, byte for byte | yes | yes | no |
 | Hub differential (`goap` vs `oapx` stdio) | yes | yes | yes, against `oap-rust-hub`, every scenario |
 | HTTP hub differential (`goap serve --addr` vs Rust) | no | yes | yes, `TestHubHTTPAnswersGoapAndRustTheSame` against `oap-rust-hub serve --addr` |
-| Served backend parity (`TestBackendsMatchOapx`) | yes | yes | partial: `TestBackendsMatchRustHub` holds `oap-rust-hub serve agent` to goap on the memory, acp, deepseek and codex fixtures; the other harness types are not served yet |
+| Served backend parity (`TestBackendsMatchOapx`) | yes | yes | partial: `TestBackendsMatchRustHub` holds `oap-rust-hub serve agent` to goap on the memory, acp, deepseek, codex and copilot fixtures; the other harness types are not served yet |
 
 The Zig semantic gate skips any code Zig has not implemented, so a green Zig
 gate does not mean Zig agrees with Go on every trace. No check compares all
