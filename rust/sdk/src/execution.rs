@@ -47,6 +47,14 @@ impl ExecutionRequest {
         self
     }
 
+    pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.options
+            .headers
+            .get_or_insert_with(Default::default)
+            .insert(name.into(), value.into());
+        self
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         if self.model_ref.is_empty() {
             return Err(Error::invalid_request("request requires a model_ref"));

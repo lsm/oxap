@@ -194,6 +194,8 @@ for model in &response.models {
 
 `RunOptions::session_id` identifies an OAP session. Sessions can retain their selected model across runs; use `switch_model` then `run_selected` to change it.
 
+`ExecutionRequest::with_header` (or `RunOptions::headers`) sends request headers on a direct provider call; an agent run refuses them with `unsupported_feature`. The endpoint decides which headers it forwards to the provider and refuses the rest with `unsupported_feature`.
+
 ## Configuration
 
 `Client::builder()` configures the transport and binary resolution.

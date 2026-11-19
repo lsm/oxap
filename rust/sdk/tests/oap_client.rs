@@ -312,6 +312,16 @@ async fn agent_tools_and_settings_travel_over_oap_and_temperature_is_refused() {
     assert!(
         matches!(error, Error::Protocol { code: Some(code), .. } if code == "unsupported_feature")
     );
+    let headed = ExecutionRequest::prompt("fixture/openai-responses@mock", "hello")
+        .with_header("x-opencode-session", "video-7");
+    let error = client
+        .agent()
+        .run(headed)
+        .await
+        .expect_err("headers refused on an agent run");
+    assert!(
+        matches!(error, Error::Protocol { code: Some(code), .. } if code == "unsupported_feature")
+    );
     client.close().await;
 }
 
