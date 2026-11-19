@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod client;
 pub mod native;
 pub mod process;
+pub mod reducer;
 pub mod rpc;
 
 use std::sync::LazyLock;
