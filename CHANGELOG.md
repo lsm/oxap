@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.37] - 2026-11-19
+
+### Merged pull requests
+
+- **provider: Send reasoning off to OpenCode Go and Command Code** ([#1902](https://github.com/lsm/oxap/pull/1902)): Asking for reasoning off left `reasoning_effort` out of the request, so both gateways ran at their default and DeepSeek V4 Flash spent a whole 8000-token budget reasoning.
+- **copilot: Port the Rust reducer's tool call lifecycle from Go** ([#1900](https://github.com/lsm/oxap/pull/1900)): Copilot slice 5 on #1439: the Rust reducer now carries Copilot's own tool calls, ported from Go's `go/adapter/copilot/tools.go`.
+- **copilot: Port the Rust reducer's native event reduction and usage from Go** ([#1899](https://github.com/lsm/oxap/pull/1899)): Copilot slice 4b on #1439: the Rust reducer now reduces native `session.event`s and accounts usage, ported from Go's `go/adapter/copilot/reducer.go` and `usage.go`.
+- **copilot: Port the Rust reducer's run admission and settlement from Go** ([#1898](https://github.com/lsm/oxap/pull/1898)): Copilot slice 4a on #1439: the Rust `reducer::Reducer` run table and settlement, ported from Go's `go/adapter/copilot/reducer.go`.
+
 ## [0.1.0-alpha.36] - 2026-11-18
 
 ### Merged pull requests

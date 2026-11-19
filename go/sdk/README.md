@@ -12,7 +12,7 @@ One child process carries profiled `agent-control-core` and `model-provider-core
 ## Install and connect
 
 ```bash
-go get github.com/lsm/oxap@v0.1.0-alpha.36
+go get github.com/lsm/oxap@v0.1.0-alpha.37
 ```
 
 ```go
