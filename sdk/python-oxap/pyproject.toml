@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "oxap"
-version = "0.1.0a34"
+version = "0.1.0a35"
 description = "OXAP for Python: installs oxap-sdk, the Python SDK for the oxap runtime"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "ISC" }
 authors = [{ name = "Open Agent Protocol contributors" }]
-dependencies = ["oxap-sdk==0.1.0a34"]
+dependencies = ["oxap-sdk==0.1.0a35"]
 
 [project.urls]
 Homepage = "https://github.com/lsm/oxap"
