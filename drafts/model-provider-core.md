@@ -1641,6 +1641,15 @@ not to delete every such member, because some of them carry things a deployment
 genuinely needs. It is to make sure a correct path exists, make the incorrect
 path non-conformant, and catch the cases a validator can see.
 
+**What oapx forwards today.** oapx accepts one caller header: the session header
+a provider's catalog endpoint names (`session_header`, for example
+`x-opencode-session` on OpenCode Go), matched without regard to case. Its value
+replaces the session key oapx would otherwise derive from the system prompt and
+first user message, so a caller can keep calls with different prompts in one
+upstream session. Any other header is refused with `unsupported_feature` rather
+than dropped, so a caller never believes a header reached a provider that did
+not.
+
 ## Shared Vocabulary
 
 An earlier version of this draft said `ContentPart`, `ToolDefinition`, `Usage`
