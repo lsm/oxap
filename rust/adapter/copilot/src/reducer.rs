@@ -1,20 +1,25 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use oxap_adapter::gojson::go_marshal;
 use oxap_adapter::memory::{Clock, IdGenerator};
 use oxap_adapter::Error;
 use oxap_protocol::{
-    ContentPart, ContentPartType, Envelope, EnvelopeType, MessageId, ProtocolError, RunId,
-    RunStatus, SessionId,
+    ContentPart, ContentPartType, Envelope, EnvelopeId, EnvelopeType, MessageId, ProtocolError,
+    RunId, RunStatus, SessionId,
 };
+use serde_json::value::RawValue;
 use serde_json::Value;
 
 use crate::adapter::MAX_QUEUED;
 use crate::native::{text, Event};
 use crate::usage::UsageState;
 use crate::CAPABILITY_REVISION;
+use tools::Tool;
 
-pub(crate) type Payload = BTreeMap<&'static str, Value>;
+mod tools;
+
+pub(crate) type Payload = BTreeMap<&'static str, Box<RawValue>>;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Run {
@@ -28,6 +33,7 @@ pub(crate) struct Run {
     next: u64,
     parts: Vec<ContentPart>,
     usage: UsageState,
+    tools: Vec<Tool>,
 }
 
 pub struct Reducer {
@@ -154,6 +160,10 @@ impl Reducer {
                 }
                 Ok(())
             }
+            "tool.execution_start"
+            | "tool.execution_partial_result"
+            | "tool.shell_output"
+            | "tool.execution_complete" => self.observe_tool(event),
             _ => Ok(()),
         }
     }
@@ -187,13 +197,13 @@ impl Reducer {
         let content = if run.parts.is_empty() {
             Value::String(String::new())
         } else {
-            json(&run.parts)
+            serde_json::to_value(&run.parts).map_err(Error::harness)?
         };
         let response =
             serde_json::json!({ "id": run.message_id, "role": "assistant", "content": content });
         let payload = Payload::from([
-            ("final_response", response),
-            ("stop_reason", Value::from("end_turn")),
+            ("final_response", json(&response)),
+            ("stop_reason", json(&"end_turn")),
         ]);
         self.emit(index, EnvelopeType::RUN_COMPLETED, payload, true)
     }
@@ -212,11 +222,25 @@ impl Reducer {
         &mut self,
         index: usize,
         kind: EnvelopeType,
-        mut payload: Payload,
+        payload: Payload,
         terminal: bool,
     ) -> Result<(), Error> {
+        self.append(index, kind, payload, terminal, None).map(drop)
+    }
+
+    fn append(
+        &mut self,
+        index: usize,
+        kind: EnvelopeType,
+        mut payload: Payload,
+        terminal: bool,
+        reply: Option<EnvelopeId>,
+    ) -> Result<Option<EnvelopeId>, Error> {
         if self.runs[index].terminal {
-            return Ok(());
+            return Ok(None);
+        }
+        if terminal {
+            self.settle_tools(index)?;
         }
         let run = &self.runs[index];
         payload.insert("session_id", json(&self.session_id));
@@ -231,6 +255,11 @@ impl Reducer {
         envelope.session_id = Some(self.session_id.clone());
         envelope.run_id = Some(run.id.clone());
         envelope.capability_revision = Some(CAPABILITY_REVISION.clone());
+        envelope.in_reply_to = reply;
+        envelope.tool_call_id = payload
+            .get("tool_call_id")
+            .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
+            .map(Into::into);
         let run = &mut self.runs[index];
         run.next += 1;
         if terminal {
@@ -245,8 +274,9 @@ impl Reducer {
                 self.current = None;
             }
         }
+        let id = envelope.id.clone();
         self.events.push(envelope);
-        Ok(())
+        Ok(Some(id))
     }
 }
 
@@ -261,6 +291,11 @@ fn text_part(text: String) -> ContentPart {
     }
 }
 
-fn json(value: &impl serde::Serialize) -> Value {
-    serde_json::to_value(value).expect("reducer payloads hold only JSON values")
+fn json(value: &impl serde::Serialize) -> Box<RawValue> {
+    serde_json::value::to_raw_value(value).expect("reducer payloads hold only JSON values")
+}
+
+fn native_raw(raw: Option<&RawValue>) -> Box<RawValue> {
+    raw.and_then(|raw| RawValue::from_string(go_marshal(raw.get())).ok())
+        .unwrap_or_else(|| RawValue::NULL.to_owned())
 }
