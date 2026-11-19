@@ -32,10 +32,12 @@ func TestBackendsMatchOapx(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	compared := 0
 	for _, dir := range cases {
 		if !oapxServes(t, dir) {
 			continue
 		}
+		compared++
 		backend := fixtureBackend(t, dir)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			scenario := readLines(t, filepath.Join(dir, "scenario.jsonl"))
@@ -54,6 +56,9 @@ func TestBackendsMatchOapx(t *testing.T) {
 				t.Errorf("oapx writes different data to its child\n--- only goap\n%s\n--- only oapx\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
 			}
 		})
+	}
+	if compared == 0 {
+		t.Fatal("no parity fixture serves only types oapx serves, so nothing was compared")
 	}
 }
 
