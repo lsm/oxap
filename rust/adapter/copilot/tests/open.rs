@@ -38,7 +38,7 @@ while True:
     message = read()
     method = message["method"]
     if method == "ping":
-        reply(message, {"protocolVersion": 2 if mode == "old-protocol" else 3})
+        reply(message, None if mode == "null" else {"protocolVersion": 2 if mode == "old-protocol" else 3})
     elif method == "status.get":
         reply(message, {"version": "0.0.0" if mode == "old-version" else os.environ["VERSION"]})
     elif method == "session.create":
@@ -156,10 +156,12 @@ fn the_contract_opens_the_same_session() {
 
 #[test]
 fn open_refuses_a_server_off_the_pinned_protocol_or_version() {
-    assert_eq!(
-        refusal("old-protocol", ""),
-        "copilot: server does not speak pinned protocol 3"
-    );
+    for mode in ["old-protocol", "null"] {
+        assert_eq!(
+            refusal(mode, ""),
+            "copilot: server does not speak pinned protocol 3"
+        );
+    }
     assert_eq!(
         refusal("old-version", ""),
         format!(
@@ -177,8 +179,18 @@ fn open_refuses_a_server_off_the_pinned_protocol_or_version() {
 fn open_refuses_before_starting_the_server_when_admission_fails() {
     let mut anonymous = request("s1");
     anonymous.participant.id = "".into();
+    let missing = Adapter::new(Config {
+        executable: "/nonexistent/copilot".into(),
+        working_directory: directory(),
+        ..Config::default()
+    })
+    .unwrap();
     assert!(matches!(
-        adapter("", "").open(anonymous),
+        missing.open(anonymous),
         Err(Error::InvalidParticipant)
+    ));
+    assert!(matches!(
+        missing.open(request("s1")),
+        Err(Error::Harness(_))
     ));
 }

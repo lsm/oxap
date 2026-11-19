@@ -17,6 +17,7 @@ use oxap_protocol::{
 
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde_json::value::RawValue;
 use serde_json::{json, Value};
 
 use crate::process::{Process, ProcessConfig};
@@ -249,11 +250,11 @@ fn decode<T: DeserializeOwned + Default>(
 ) -> Result<T, Error> {
     let deadline = Some(Instant::now() + timeout);
     let raw = process.client.call(method, params, deadline);
-    match raw.map_err(Error::harness)? {
-        Some(raw) => serde_json::from_str(raw.get())
-            .map_err(|error| Error::Harness(format!("copilot: decode {method}: {error}"))),
-        None => Ok(T::default()),
-    }
+    let raw = raw.map_err(Error::harness)?;
+    let text = raw.as_deref().map_or("null", RawValue::get);
+    serde_json::from_str::<Option<T>>(text)
+        .map(Option::unwrap_or_default)
+        .map_err(|error| Error::Harness(format!("copilot: decode {method}: {error}")))
 }
 
 impl AdapterContract for Adapter {
