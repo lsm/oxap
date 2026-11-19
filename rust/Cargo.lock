@@ -1076,6 +1076,7 @@ dependencies = [
 name = "oxap-adapter-copilot"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "oxap-adapter",
  "oxap-harness",
  "serde",
