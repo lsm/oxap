@@ -35,8 +35,8 @@ records where each tree stands against it. Rule-level validator coverage is in
 | Agent loop and provider runtime | done | done | missing |
 
 Totals over the 19 rows that apply to all three trees (the SDK row does not
-apply to Zig): Zig 14 done, 5 partial, 0 missing; Go 15 done, 3 partial, 1
-missing; Rust 9 done, 4 partial, 6 missing.
+apply to Zig): Zig 14 done, 5 partial, 0 missing; Go 16 done, 3 partial, 0
+missing; Rust 10 done, 4 partial, 5 missing.
 
 ## What proves alignment today
 
