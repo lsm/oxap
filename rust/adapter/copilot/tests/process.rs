@@ -9,7 +9,6 @@ use oxap_adapter_copilot::process::{Process, ProcessConfig};
 use serde_json::Value;
 
 const WAIT: Duration = Duration::from_secs(5);
-const SENTINEL: &str = "OAP_COPILOT_AMBIENT_SENTINEL";
 const CHILD: &str = r#"
 import json, os, sys, time
 source, sink = sys.stdin.buffer, sys.stdout.buffer
@@ -40,7 +39,7 @@ while True:
     result = {"protocolVersion": 3}
     if message["method"] == "home":
         result["home"] = os.environ.get("HOME", "")
-        result["ambient"] = os.environ.get("OAP_COPILOT_AMBIENT_SENTINEL", "")
+        result["path"] = os.environ.get("PATH", "")
     write({"jsonrpc": "2.0", "id": message["id"], "result": result})
 "#;
 
@@ -75,7 +74,7 @@ fn reaped(process: &Process) -> bool {
 
 #[test]
 fn the_child_sees_only_its_listed_environment_and_is_reaped_on_close() {
-    std::env::set_var(SENTINEL, "must-not-leak");
+    assert!(std::env::var_os("PATH").is_some_and(|path| !path.is_empty()));
     let dir = home("environment");
     let process = synthetic(&dir);
     let result = process
@@ -85,7 +84,7 @@ fn the_child_sees_only_its_listed_environment_and_is_reaped_on_close() {
         .unwrap();
     let result: Value = serde_json::from_str(result.get()).unwrap();
     assert_eq!(result["home"], dir.display().to_string());
-    assert_eq!(result["ambient"], "");
+    assert_eq!(result["path"], "");
     process.close();
     assert!(reaped(&process));
     let _ = std::fs::remove_dir_all(&dir);
