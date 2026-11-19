@@ -385,3 +385,269 @@ fn a_queued_runs_user_message_settles_the_current_run_first() {
         ]
     );
 }
+
+fn tool_events(reducer: &mut Reducer, events: &[(&str, Value)]) {
+    for (kind, data) in events {
+        let mut data = data.clone();
+        data["interactionId"] = json!("i1");
+        reducer.observe(&event("native-1", kind, data)).unwrap();
+    }
+}
+
+fn tool_ids(reducer: &Reducer) -> Vec<(Option<&str>, Option<&str>)> {
+    reducer
+        .events
+        .iter()
+        .map(|envelope| {
+            (
+                envelope.tool_call_id.as_ref().map(|id| id.as_str()),
+                envelope.in_reply_to.as_ref().map(|id| id.as_str()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_tool_call_is_requested_started_reported_and_completed_in_reply_to_its_start() {
+    let mut reducer = reducer();
+    started(&mut reducer, "m1", "i1");
+    tool_events(
+        &mut reducer,
+        &[
+            (
+                "tool.execution_start",
+                json!({"toolCallId": "t1", "toolName": "bash", "arguments": {"command": "a < b"}}),
+            ),
+            (
+                "tool.execution_partial_result",
+                json!({"toolCallId": "t1", "partialOutput": "half"}),
+            ),
+            (
+                "tool.shell_output",
+                json!({"toolCallId": "t1", "text": "shell"}),
+            ),
+            (
+                "tool.execution_partial_result",
+                json!({"toolCallId": "unknown", "partialOutput": "stray"}),
+            ),
+            (
+                "tool.execution_complete",
+                json!({"toolCallId": "t1", "success": true, "result": {"content": "done"}}),
+            ),
+            (
+                "tool.shell_output",
+                json!({"toolCallId": "t1", "text": "late"}),
+            ),
+            ("session.idle", json!({})),
+        ],
+    );
+    assert_eq!(
+        kinds(&reducer),
+        [
+            "run.started",
+            "action.call.requested",
+            "action.call.started",
+            "action.call.progress",
+            "action.call.progress",
+            "action.call.completed",
+            "run.completed",
+        ]
+    );
+    let requested = reducer.events[1].id.as_str().to_owned();
+    let started = reducer.events[2].id.as_str().to_owned();
+    let call = Some("tool-call-4");
+    assert_eq!(
+        tool_ids(&reducer),
+        [
+            (None, None),
+            (call, None),
+            (call, Some(requested.as_str())),
+            (call, Some(started.as_str())),
+            (call, Some(started.as_str())),
+            (call, Some(started.as_str())),
+            (None, None),
+        ]
+    );
+    let run_id = json!(reducer.runs[0].id);
+    let tool = json!({
+        "tool_call_id": "tool-call-4",
+        "requested_by": "copilot.headless",
+        "execution_owner": "copilot-cli",
+        "name": "bash",
+        "session_id": "s1",
+        "run_id": run_id,
+    });
+    let with = |key: &str, value: Value| {
+        let mut payload = tool.clone();
+        payload[key] = value;
+        payload
+    };
+    assert_eq!(
+        payload(&reducer.events[1]),
+        with("arguments_json", json!({"command": "a < b"}))
+    );
+    assert!(reducer.events[1]
+        .payload
+        .as_ref()
+        .unwrap()
+        .get()
+        .contains(r#""arguments_json":{"command":"a \u003c b"}"#));
+    assert_eq!(payload(&reducer.events[2]), tool);
+    assert_eq!(payload(&reducer.events[3]), with("progress", json!("half")));
+    assert_eq!(
+        payload(&reducer.events[4]),
+        with("progress", json!("shell"))
+    );
+    assert_eq!(
+        payload(&reducer.events[5]),
+        with("result", json!({"content": "done"}))
+    );
+    for (index, envelope) in reducer.events.iter().enumerate() {
+        assert_eq!(envelope.sequence, Some(index as u64 + 1));
+    }
+}
+
+#[test]
+fn a_failed_tool_reports_denial_and_a_default_message() {
+    let mut reducer = reducer();
+    started(&mut reducer, "m1", "i1");
+    tool_events(
+        &mut reducer,
+        &[
+            (
+                "tool.execution_start",
+                json!({"toolCallId": "t1", "toolName": "bash"}),
+            ),
+            (
+                "tool.execution_start",
+                json!({"toolCallId": "t2", "toolName": "edit"}),
+            ),
+            (
+                "tool.execution_complete",
+                json!({"toolCallId": "t1", "success": false, "error": {"code": "denied", "message": "no"}}),
+            ),
+            (
+                "tool.execution_complete",
+                json!({"toolCallId": "t2", "success": "true", "error": "unreadable"}),
+            ),
+        ],
+    );
+    assert_eq!(payload(&reducer.events[1])["arguments_json"], Value::Null);
+    let failures: Vec<Value> = reducer
+        .events
+        .iter()
+        .filter(|envelope| envelope.envelope_type == EnvelopeType::ACTION_CALL_FAILED)
+        .map(|envelope| payload(envelope)["error"].clone())
+        .collect();
+    assert_eq!(
+        failures,
+        [
+            json!({"code": "copilot_tool_denied", "message": "no"}),
+            json!({"code": "copilot_tool_failed", "message": "Copilot reported the tool call failed"}),
+        ]
+    );
+    assert_eq!(reducer.current, Some(0));
+}
+
+#[test]
+fn settling_a_run_fails_its_unfinished_tools_before_the_terminal() {
+    let mut reducer = reducer();
+    started(&mut reducer, "m1", "i1");
+    tool_events(
+        &mut reducer,
+        &[
+            (
+                "tool.execution_start",
+                json!({"toolCallId": "t1", "toolName": "bash"}),
+            ),
+            ("session.idle", json!({})),
+        ],
+    );
+    assert_eq!(
+        kinds(&reducer),
+        [
+            "run.started",
+            "action.call.requested",
+            "action.call.started",
+            "action.call.failed",
+            "run.completed"
+        ]
+    );
+    let started = reducer.events[2].id.clone();
+    assert_eq!(reducer.events[3].in_reply_to.as_ref(), Some(&started));
+    assert_eq!(
+        payload(&reducer.events[3])["error"],
+        json!({"code": "incomplete_tool", "message": "the Copilot run settled with an unfinished tool call"})
+    );
+}
+
+#[test]
+fn a_broken_tool_lifecycle_fails_the_run() {
+    for (events, message) in [
+        (
+            vec![("tool.execution_start", json!({"toolCallId": "t1"}))],
+            "a tool start that is unnamed or already started",
+        ),
+        (
+            vec![("tool.execution_start", json!({"toolName": "bash"}))],
+            "a tool start that is unnamed or already started",
+        ),
+        (
+            vec![
+                (
+                    "tool.execution_start",
+                    json!({"toolCallId": "t1", "toolName": "bash"}),
+                ),
+                (
+                    "tool.execution_start",
+                    json!({"toolCallId": "t1", "toolName": "bash"}),
+                ),
+            ],
+            "a tool start that is unnamed or already started",
+        ),
+        (
+            vec![(
+                "tool.execution_complete",
+                json!({"toolCallId": "t1", "success": true}),
+            )],
+            "a tool completion without a start in this run",
+        ),
+        (
+            vec![
+                (
+                    "tool.execution_start",
+                    json!({"toolCallId": "t1", "toolName": "bash"}),
+                ),
+                (
+                    "tool.execution_complete",
+                    json!({"toolCallId": "t1", "success": true}),
+                ),
+                (
+                    "tool.execution_complete",
+                    json!({"toolCallId": "t1", "success": true}),
+                ),
+            ],
+            "a second completion for one tool call",
+        ),
+    ] {
+        let mut reducer = reducer();
+        started(&mut reducer, "m1", "i1");
+        tool_events(&mut reducer, &events);
+        let failed = reducer.events.last().unwrap();
+        assert_eq!(failed.envelope_type, EnvelopeType::RUN_FAILED, "{message}");
+        assert_eq!(
+            payload(failed)["error"],
+            json!({"code": "copilot_invalid_tool_lifecycle", "message": message})
+        );
+    }
+}
+
+#[test]
+fn tool_events_without_an_open_run_are_ignored() {
+    let mut reducer = reducer();
+    let start = json!({"toolCallId": "t1", "toolName": "bash"});
+    reducer
+        .observe(&event("native-1", "tool.execution_start", start))
+        .unwrap();
+    assert!(reducer.events.is_empty());
+}
