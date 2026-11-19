@@ -262,7 +262,8 @@ fn an_invalid_session_event_fails_the_run_and_closes_the_wire() {
     let session = session();
     let run = admit(&session, "m1");
     let mut stream = follow(&session, &run);
-    emit(&session, json!([{"data": {}}]));
+    let client = &session.shared.process.client;
+    let _ = client.call("emit", &json!({ "events": [{"data": {}}] }), None);
     let events = drain(&mut stream, WAIT);
     assert_eq!(kinds(&events), ["run.failed"]);
     assert_eq!(
