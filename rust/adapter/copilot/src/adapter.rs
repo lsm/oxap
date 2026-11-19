@@ -1,24 +1,36 @@
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use oxap_adapter::memory::{Clock, IdGenerator};
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
-    Descriptor, Error, JournalDescriptor, OpenRequest, UnsupportedControl,
+    Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, OpenRequest,
+    Session as SessionContract, UnsupportedControl,
 };
 use oxap_protocol::{
     CapabilityDescriptor, CapabilityLimits, EndpointDescriptor, FeatureSupport, SupportLevel,
     FEATURE_OPEN_REOPEN, PROFILE, VERSION,
 };
 
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::process::{Process, ProcessConfig};
+use crate::reducer::Reducer;
+use crate::session::Session;
 use crate::{CAPABILITY_REVISION, PINNED_VERSION};
 
 pub(crate) const MAX_QUEUED: usize = 8;
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADLESS: [&str; 3] = ["--headless", "--stdio", "--no-auto-update"];
+const PINNED_PROTOCOL: i64 = 3;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct Config {
     pub executable: String,
     pub args: Vec<String>,
@@ -29,11 +41,42 @@ pub struct Config {
     pub frame_limit: usize,
     pub queue_capacity: usize,
     pub request_timeout: Duration,
+    pub clock: Option<Arc<dyn Clock>>,
+    pub ids: Option<Arc<dyn IdGenerator>>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Adapter {
     config: Config,
+    clock: Arc<dyn Clock>,
+    ids: Arc<dyn IdGenerator>,
+}
+
+struct WallClock;
+
+impl Clock for WallClock {
+    fn now_ms(&self) -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as i64)
+    }
+}
+
+#[derive(Default)]
+struct SequenceIds(AtomicU64);
+
+impl IdGenerator for SequenceIds {
+    fn new_id(&self, kind: &str) -> String {
+        format!("{kind}-{}", self.0.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct Handshake {
+    protocol_version: i64,
+    version: String,
+    session_id: String,
 }
 
 impl Adapter {
@@ -55,7 +98,10 @@ impl Adapter {
         if config.request_timeout.is_zero() {
             config.request_timeout = DEFAULT_REQUEST_TIMEOUT;
         }
-        Ok(Self { config })
+        let clock = config.clock.clone().unwrap_or_else(|| Arc::new(WallClock));
+        let ids = config.ids.clone();
+        let ids = ids.unwrap_or_else(|| Arc::new(SequenceIds::default()));
+        Ok(Self { config, clock, ids })
     }
 
     pub fn config(&self) -> &Config {
@@ -127,5 +173,99 @@ impl Adapter {
         refuse_unadvertised_settings(request, &self.describe().capabilities)?;
         refuse_unadvertised_tool_sources(request, &[])?;
         refuse_unadvertised_tools(request, &[])
+    }
+
+    pub fn open(&self, request: OpenRequest) -> Result<Session, Error> {
+        self.admit(&request)?;
+        let config = &self.config;
+        let process = Process::start(&ProcessConfig {
+            path: config.executable.clone(),
+            args: config.args.clone(),
+            dir: config.working_directory.clone(),
+            env: config.environment.clone(),
+            frame_limit: config.frame_limit,
+            queue_capacity: config.queue_capacity,
+        })
+        .map_err(Error::harness)?;
+        let native = match self.handshake(&process) {
+            Ok(native) => native,
+            Err(error) => {
+                process.close();
+                return Err(error);
+            }
+        };
+        let mut id = request.session_id;
+        if id.as_str().is_empty() {
+            id = self.ids.new_id("session").into();
+        }
+        let reducer = Reducer::new(id, native, self.ids.clone(), self.clock.clone());
+        let timeout = config.request_timeout;
+        Ok(Session::new(
+            reducer,
+            process,
+            config.journal_capacity,
+            timeout,
+        ))
+    }
+
+    fn handshake(&self, process: &Process) -> Result<String, Error> {
+        let config = &self.config;
+        let call = |method: &str, params: &Value| -> Result<Handshake, Error> {
+            decode(process, method, params, config.request_timeout)
+        };
+        if call("ping", &json!({}))?.protocol_version == PINNED_PROTOCOL {
+            let message = "copilot: server does not speak pinned protocol 3";
+            return Err(Error::Harness(message.into()));
+        }
+        if call("status.get", &json!({}))?.version != *PINNED_VERSION {
+            let message = "copilot: server does not report pinned CLI version";
+            return Err(Error::Harness(format!("{message} {}", *PINNED_VERSION)));
+        }
+        let mut params = json!({
+            "clientName": "open-agent-protocol",
+            "workingDirectory": config.working_directory,
+            "streaming": true,
+            "requestPermission": false,
+            "requestUserInput": false,
+            "envValueMode": "direct",
+        });
+        if !config.model.is_empty() {
+            params["model"] = json!(config.model);
+        }
+        let created = call("session.create", &params)?.session_id;
+        if created.is_empty() {
+            let message = "copilot: session.create returned no sessionId";
+            return Err(Error::Harness(message.into()));
+        }
+        Ok(created)
+    }
+}
+
+fn decode<T: DeserializeOwned + Default>(
+    process: &Process,
+    method: &str,
+    params: &Value,
+    timeout: Duration,
+) -> Result<T, Error> {
+    let deadline = Some(Instant::now() + timeout);
+    let raw = process.client.call(method, params, deadline);
+    match raw.map_err(Error::harness)? {
+        Some(raw) => serde_json::from_str(raw.get())
+            .map_err(|error| Error::Harness(format!("copilot: decode {method}: {error}"))),
+        None => Ok(T::default()),
+    }
+}
+
+impl AdapterContract for Adapter {
+    fn probe(&self) -> BoxFuture<'_, Descriptor> {
+        let descriptor = self.describe();
+        Box::pin(async move { Ok(descriptor) })
+    }
+
+    fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {
+        Box::pin(async move {
+            let session = Adapter::open(self, request)?;
+            Ok(Box::new(session) as Box<dyn SessionContract>)
+        })
     }
 }
