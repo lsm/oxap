@@ -1044,6 +1044,10 @@ pub const Server = struct {
                     try self.emitCreateRefusal(env, .invalid_request, "the session header needs a value");
                     return;
                 }
+                if (carriesControlByte(header.value)) {
+                    try self.emitCreateRefusal(env, .invalid_request, "the session header value must not carry control characters");
+                    return;
+                }
                 session = header.value;
             }
         }
@@ -2564,11 +2568,19 @@ test "a credential in caller headers is refused with the correct alternative nam
     try std.testing.expectEqualStrings("q1", response.in_reply_to.?);
 }
 
+fn carriesControlByte(value: []const u8) bool {
+    for (value) |byte| {
+        if (byte == '\t') continue;
+        if (byte < 0x20 or byte == 0x7f) return true;
+    }
+    return false;
+}
+
 fn gemmaSessionHeader(model_ref: []const u8) ?[]const u8 {
     return if (std.mem.eql(u8, model_ref, "ollama-local/openai-chat-completions@gemma")) "x-test-session" else null;
 }
 
-test "the catalog's session header reaches the inference, matched without regard to case, and any other header or a blank value is refused" {
+test "the catalog's session header reaches the inference, matched without regard to case, and any other header, a blank value or a control character is refused" {
     const allocator = std.testing.allocator;
     var server = try testServer(allocator, .{ .accepts_inference = true, .session_header = gemmaSessionHeader });
     defer server.deinit();
@@ -2618,6 +2630,22 @@ test "the catalog's session header reaches the inference, matched without regard
     const blank_err = blank.payload.inference_create_response.err.?;
     try std.testing.expectEqual(types.ErrorCode.invalid_request, blank_err.code);
     try std.testing.expectEqualStrings("the session header needs a value", blank_err.message);
+    try std.testing.expectEqual(@as(usize, 1), server.active.items.len);
+
+    const injected = try makeRequest(
+        allocator,
+        "inference.create.request",
+        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"x-test-session\":\"v\\r\\nX-Other: 1\"}}",
+        "q4",
+    );
+    defer allocator.free(injected);
+    try server.handleLine(injected);
+
+    var split = try decodeOnly(allocator, &server);
+    defer split.deinit(allocator);
+    const split_err = split.payload.inference_create_response.err.?;
+    try std.testing.expectEqual(types.ErrorCode.invalid_request, split_err.code);
+    try std.testing.expectEqualStrings("the session header value must not carry control characters", split_err.message);
     try std.testing.expectEqual(@as(usize, 1), server.active.items.len);
 }
 

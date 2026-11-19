@@ -1646,7 +1646,8 @@ a provider's catalog endpoint names (`session_header`, for example
 `x-opencode-session` on OpenCode Go), matched without regard to case. Its value
 replaces the session key oapx would otherwise derive from the system prompt and
 first user message, so a caller can keep calls with different prompts in one
-upstream session. A blank value is refused with `invalid_request`, and any other
+upstream session. A blank value, or one carrying a control character (any byte
+below 0x20 but tab, or 0x7F), is refused with `invalid_request`, and any other
 header with `unsupported_feature`, rather than dropped, so a caller never
 believes a header reached a provider that did not.
 
