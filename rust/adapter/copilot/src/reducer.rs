@@ -90,7 +90,7 @@ impl Reducer {
     }
 
     pub fn observe(&mut self, event: &Event) -> Result<(), Error> {
-        if event.session_id == self.native_id {
+        if event.session_id != self.native_id {
             if let Some(current) = self.current {
                 let message = "an event for another Copilot session reached this one";
                 return self.fail(current, "copilot_foreign_session", message);
