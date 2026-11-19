@@ -294,6 +294,20 @@ class OAPOpenTests(unittest.TestCase):
             self.assertEqual(refused.exception.code, "unsupported_feature")
         self.assertNotIn("metadata", _open_payload(bare, "session-1", None, None))
 
+    def test_headers_ride_a_provider_call_and_an_agent_run_refuses_them(self) -> None:
+        from types import SimpleNamespace
+        from oxap_sdk._oap import ProviderApi, _open_payload
+        options = RunOptions(headers={"x-opencode-session": "video-7"})
+        payload = ProviderApi(transport=None)._create_payload(  # type: ignore[arg-type]
+            "opencode-go/openai-chat-completions@deepseek-v4.1-flash", [{"role": "user", "content": "hi"}], None, options)
+        self.assertEqual(payload["headers"], {"x-opencode-session": "video-7"})
+        self.assertNotIn("headers", ProviderApi(transport=None)._create_payload(  # type: ignore[arg-type]
+            "fixture/other:test@ok", [{"role": "user", "content": "hi"}], None, RunOptions()))
+        agent: Any = SimpleNamespace(agent_endpoint="oapx.agent", agent_features=frozenset())
+        with self.assertRaises(MakaiProtocolError) as refused:
+            _open_payload(agent, "session-1", None, options)
+        self.assertEqual(refused.exception.code, "unsupported_feature")
+
 
 if __name__ == "__main__":
     unittest.main()
