@@ -57,7 +57,7 @@ frames can be ignored or converted to ordinary provider errors; valid counts
 retain those frames' behavior. Numbers in tool results and other application
 objects retain their ordinary JSON decoding.
 
-`RunOptions(headers=...)` sends request headers on a direct provider call. The endpoint decides which it forwards and refuses the rest with `unsupported_feature`; oapx forwards the session header a provider's catalog entry names, such as `x-opencode-session` for OpenCode Go, so calls with different prompts can share one upstream session. A credential in a header is refused, and an agent run refuses `headers` client side.
+`RunOptions(headers=...)` sends request headers on a direct provider call. The endpoint decides which headers it forwards to the provider and refuses the rest with `unsupported_feature`. A credential in a header is refused, and an agent run refuses `headers` client side.
 
 ## Agent sessions
 
