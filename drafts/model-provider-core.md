@@ -1643,8 +1643,8 @@ path non-conformant, and catch the cases a validator can see.
 
 **What oapx forwards today.** oapx accepts one caller header: the session header
 a provider's catalog endpoint names (`session_header`, for example
-`x-opencode-session` on OpenCode Go), matched without regard to case. Its value
-replaces the session key oapx would otherwise derive from the system prompt and
+`x-opencode-session` on OpenCode Go), matched without regard to case. Its value,
+with surrounding spaces and tabs trimmed as HTTP does, replaces the session key oapx would otherwise derive from the system prompt and
 first user message, so a caller can keep calls with different prompts in one
 upstream session. A blank value, or one carrying a control character (any byte
 below 0x20 but tab, or 0x7F), is refused with `invalid_request`, and any other

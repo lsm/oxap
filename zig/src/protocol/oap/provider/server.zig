@@ -1048,7 +1048,7 @@ pub const Server = struct {
                     try self.emitCreateRefusal(env, .invalid_request, "the session header value must not carry control characters");
                     return;
                 }
-                session = header.value;
+                session = std.mem.trim(u8, header.value, " \t");
             }
         }
 
@@ -2580,7 +2580,7 @@ fn gemmaSessionHeader(model_ref: []const u8) ?[]const u8 {
     return if (std.mem.eql(u8, model_ref, "ollama-local/openai-chat-completions@gemma")) "x-test-session" else null;
 }
 
-test "the catalog's session header reaches the inference, matched without regard to case, and any other header, a blank value or a control character is refused" {
+test "the catalog's session header reaches the inference trimmed and matched without regard to case, and any other header, a blank value or a control character is refused" {
     const allocator = std.testing.allocator;
     var server = try testServer(allocator, .{ .accepts_inference = true, .session_header = gemmaSessionHeader });
     defer server.deinit();
@@ -2588,7 +2588,7 @@ test "the catalog's session header reaches the inference, matched without regard
     const named = try makeRequest(
         allocator,
         "inference.create.request",
-        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"X-Test-Session\":\"video-7\"}}",
+        "{\"model_ref\":\"ollama-local/openai-chat-completions@gemma\",\"messages\":[],\"headers\":{\"X-Test-Session\":\" video-7\\t\"}}",
         "q1",
     );
     defer allocator.free(named);
