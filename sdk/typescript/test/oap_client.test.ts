@@ -238,6 +238,21 @@ test("direct OAP completion preserves structured assistant parts and hides parti
   } finally { await client.close(); }
 });
 
+test("reasoning off asks the endpoint to disable reasoning rather than sending nothing", async () => {
+  const client = await createOapClient({ command: process.execPath, args: [fixture] });
+  try {
+    for (const [effort, enabled] of [["off", false], ["low", true]] as const) {
+      const completed = await client.provider.complete({
+        model_ref: "fixture/openai-responses@echo",
+        messages: [{ role: "user", content: "hello" }],
+        options: { reasoning_effort: effort },
+      });
+      const sent = JSON.parse(completed.message.content as string);
+      assert.deepEqual(sent.reasoning, { enabled, effort });
+    }
+  } finally { await client.close(); }
+});
+
 test("direct OAP request uses JSON input_schema and metadata, and correlates tool result follow-up", async () => {
   const client = await createOapClient({ command: process.execPath, args: [fixture] });
   try {

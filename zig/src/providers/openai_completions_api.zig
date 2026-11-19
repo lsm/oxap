@@ -658,10 +658,11 @@ fn buildRequestBody(
     }
     if (options.getReasoningEffort()) |effort| {
         if (model.reasoning and merged.supports_reasoning_effort) {
+            const level = if (options.reasoning_enabled) effort else "off";
             const sent: ?[]const u8 = if (provider_caps.isOpenCodeGateway(model.provider))
-                (if (options.reasoning_enabled) provider_caps.openCodeEffort(model.id, effort) else null)
+                provider_caps.openCodeEffort(model.id, level)
             else if (provider_caps.isCommandCode(model.provider))
-                (if (options.reasoning_enabled) provider_caps.commandCodeEffort(model.id, effort) else null)
+                provider_caps.commandCodeEffort(model.id, level)
             else if (provider_caps.usesDeepSeekWire(model.provider, model.base_url))
                 provider_caps.deepSeekEffort(effort)
             else
@@ -2591,6 +2592,8 @@ test "an opencode request carries the effort opencode offers the model, and none
         .{ .provider = "opencode-go", .id = "deepseek-v4.1-flash", .level = "low", .sent = "low" },
         .{ .provider = "opencode-zen", .id = "gpt-6-luna", .level = "medium", .sent = "medium" },
         .{ .provider = "opencode-go", .id = "kimi-k3", .level = "high", .sent = null },
+        .{ .provider = "opencode-go", .id = "deepseek-v4.1-flash", .level = "off", .sent = "none" },
+        .{ .provider = "opencode-go", .id = "kimi-k3", .level = "off", .sent = null },
     };
     for (cases) |case| {
         const model = ai_types.Model{
@@ -2621,7 +2624,7 @@ test "an opencode request carries the effort opencode offers the model, and none
     }
 }
 
-test "a command-code request carries the effort its upstream vendor takes, and none when reasoning is off" {
+test "a command-code request carries the effort its upstream vendor takes, and off when reasoning is off" {
     const allocator = std.testing.allocator;
     const messages = [_]ai_types.Message{.{ .user = .{ .content = .{ .text = "hi" }, .timestamp = 0 } }};
     const cases = [_]struct { id: []const u8, level: []const u8, sent: ?[]const u8 }{
@@ -2629,7 +2632,8 @@ test "a command-code request carries the effort its upstream vendor takes, and n
         .{ .id = "deepseek/deepseek-v4.1-flash", .level = "medium", .sent = "high" },
         .{ .id = "deepseek/deepseek-v4.1-flash", .level = "xhigh", .sent = "max" },
         .{ .id = "Qwen/Qwen3.8-Max", .level = "medium", .sent = "medium" },
-        .{ .id = "deepseek/deepseek-v4.1-flash", .level = "off", .sent = null },
+        .{ .id = "deepseek/deepseek-v4.1-flash", .level = "off", .sent = "off" },
+        .{ .id = "Qwen/Qwen3.8-Max", .level = "none", .sent = "off" },
     };
     for (cases) |case| {
         const model = ai_types.Model{

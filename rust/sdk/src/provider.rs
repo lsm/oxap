@@ -12,7 +12,7 @@ use crate::events::ProviderEvent;
 use crate::execution::{provider_id_from_ref, ExecutionRequest};
 use crate::ids::new_ulid;
 use crate::transport::Transport;
-use crate::types::{AuthRetryPolicy, CompletionResponse};
+use crate::types::{AuthRetryPolicy, CompletionResponse, ReasoningEffort};
 use crate::wire::{Frame, PROVIDER_PROFILE};
 
 #[derive(Clone)]
@@ -259,7 +259,7 @@ fn oap_create_payload(request: &ExecutionRequest) -> Result<serde_json::Value> {
     if let Some(reasoning) = request.options.reasoning_effort {
         fields.insert(
             "reasoning".to_owned(),
-            json!({ "enabled": true, "effort": format!("{reasoning:?}").to_lowercase() }),
+            json!({ "enabled": reasoning != ReasoningEffort::Off, "effort": format!("{reasoning:?}").to_lowercase() }),
         );
     }
     if let Some(metadata) = &request.options.metadata {
@@ -368,5 +368,25 @@ mod create_payload_tests {
         let plain = ExecutionRequest::prompt("fixture/openai-responses@mock", "hello");
         let payload = oap_create_payload(&plain).expect("payload");
         assert!(payload.get("headers").is_none());
+    }
+
+    #[test]
+    fn reasoning_off_asks_the_endpoint_to_disable_reasoning() {
+        for (effort, enabled, name) in [
+            (ReasoningEffort::Off, false, "off"),
+            (ReasoningEffort::Low, true, "low"),
+        ] {
+            let options = crate::types::RunOptions {
+                reasoning_effort: Some(effort),
+                ..Default::default()
+            };
+            let request = ExecutionRequest::prompt("fixture/openai-responses@mock", "hello")
+                .with_options(options);
+            let payload = oap_create_payload(&request).expect("payload");
+            assert_eq!(
+                payload["reasoning"],
+                json!({ "enabled": enabled, "effort": name })
+            );
+        }
     }
 }
