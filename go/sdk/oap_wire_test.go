@@ -88,6 +88,15 @@ func runOAPHost(scenario string) {
 			if request.payload().str("model_ref") == "fixture/other:test@thinks" {
 				time.Sleep(fakeThinkingPause)
 			}
+			if request.payload().str("model_ref") == "fixture/other:test@headers" {
+				completed := oapHostFrame(oapProvider, "inference.completed", map[string]any{
+					"message":     map[string]any{"role": "assistant", "content": request.payload().obj("headers").str("x-opencode-session")},
+					"stop_reason": "stop",
+				})
+				completed.InferenceID = "inference-1"
+				fakeEmit(completed)
+				continue
+			}
 			if request.payload().str("model_ref") == "fixture/other:test@parts" {
 				completed := oapHostFrame(oapProvider, "inference.completed", map[string]any{
 					"message": map[string]any{"role": "assistant", "content": []map[string]any{
@@ -533,6 +542,11 @@ func TestOAPCombinedFakeHost(t *testing.T) {
 	if !errors.As(err, &auth) || auth.ProviderID != "fixture" {
 		t.Fatalf("expected typed provider auth failure, got %v", err)
 	}
+	headed, err := client.Provider.Complete(ctx, CompletionRequest{ModelRef: "fixture/other:test@headers", Messages: []Message{UserMessage("hi")},
+		Options: &RunOptions{Headers: map[string]string{"x-opencode-session": "video-7"}}})
+	if err != nil || headed.Message.Text != "video-7" {
+		t.Fatalf("the provider call's headers should reach inference.create.request, got %+v, %v", headed, err)
+	}
 	structured, err := client.Provider.Complete(ctx, CompletionRequest{ModelRef: "fixture/other:test@parts", Messages: []Message{UserMessage("hi")}})
 	if err != nil {
 		t.Fatal(err)
@@ -705,6 +719,7 @@ func TestOAPOpenRefusesWhatTheEndpointWouldIgnore(t *testing.T) {
 	for name, req := range map[string]AgentRequest{
 		"tools":      {Tools: []Tool{{Name: "lookup", ParametersSchemaJSON: "{}"}}},
 		"max tokens": {Options: &RunOptions{MaxTokens: MaxTokens(10)}},
+		"headers":    {Options: &RunOptions{Headers: map[string]string{"x-opencode-session": "video-7"}}},
 	} {
 		_, err := oapOpenPayload(bare, "session-1", req)
 		var refused *ProtocolError
