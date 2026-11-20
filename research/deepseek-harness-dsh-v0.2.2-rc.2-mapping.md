@@ -48,6 +48,15 @@ named multi-layer subagent teams, desktop update channels); the harness SDK
 wire above is what reaches this adapter. Interactive user questions,
 approvals, commands, scheduling and end-to-end execution remain not verified.
 
+## Model change
+
+The SDK wire still has no model-change request, and the runtime takes its model
+at `initialize`. The adapter's earlier `unavailable` row for a model change is
+now `emulated` for one case: a session that has run nothing restarts its own
+runtime on the new model, so the one-shot initialize freeze holds for every
+runtime it starts ([Decision 0028](../decisions/0028-live-model-and-provider-control.md)).
+After a run the switch is refused. No live runtime or model was used.
+
 ## Source blobs
 
 | Source | Git blob |

@@ -112,7 +112,7 @@ handshake:
 		case outcome := <-ready:
 			if outcome.err != nil {
 				_ = process.abort()
-				return nil, fmt.Errorf("%w: %v; stderr: %s", ErrHandshake, outcome.err, process.Stderr())
+				return nil, fmt.Errorf("%w: %w; stderr: %s", ErrHandshake, outcome.err, process.Stderr())
 			}
 			initialized = outcome.result
 			break handshake

@@ -44,7 +44,9 @@ type Session struct {
 	lastSeq  int64
 	seqSeen  bool
 	stop     chan struct{}
+	exited   chan struct{}
 	stopOnce sync.Once
+	restart  func(context.Context, string) (Client, string, error)
 }
 
 type runState struct {
@@ -218,17 +220,18 @@ func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.Cont
 	return blocks, ids, nil
 }
 
-func (s *Session) dispatch() {
+func (s *Session) dispatch(client Client, inbound <-chan rpc.InboundMessage, stop <-chan struct{}, exited chan<- struct{}) {
+	defer close(exited)
 	for {
 		select {
-		case in := <-s.inbound:
+		case in := <-inbound:
 			s.reduceMu.Lock()
 			s.reduce(in)
 			s.reduceMu.Unlock()
-		case <-s.client.Done():
+		case <-client.Done():
 			for {
 				select {
-				case in := <-s.inbound:
+				case in := <-inbound:
 					s.reduceMu.Lock()
 					s.reduce(in)
 					s.reduceMu.Unlock()
@@ -239,7 +242,7 @@ func (s *Session) dispatch() {
 					return
 				}
 			}
-		case <-s.stop:
+		case <-stop:
 			return
 		}
 	}
@@ -875,6 +878,62 @@ func (s *Session) Close(ctx context.Context) error {
 	s.journal.Close()
 	return err
 }
+func (s *Session) SwitchModel(ctx context.Context, request protocol.SessionModelSwitchRequest) (protocol.SessionModelSwitchResponse, protocol.SessionState, error) {
+	if err := ctx.Err(); err != nil {
+		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, err
+	}
+	refuse := func(detail string) error {
+		return &base.UnsupportedControlError{Feature: protocol.FeatureSessionModelSwitch, Reason: base.ControlUnsatisfiable, Field: "model_id", Detail: detail}
+	}
+	s.promptMu.Lock()
+	defer s.promptMu.Unlock()
+	s.reduceMu.Lock()
+	defer s.reduceMu.Unlock()
+	s.mu.Lock()
+	switch {
+	case s.closed || s.unusable:
+		s.mu.Unlock()
+		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, base.ErrSessionClosed
+	case request.SessionID != s.state.SessionID || request.ModelID == "":
+		s.mu.Unlock()
+		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, fmt.Errorf("%w: switch names session %q and model %q", base.ErrInvalidSubmission, request.SessionID, request.ModelID)
+	case request.ModelID == s.model:
+		state := s.state
+		s.mu.Unlock()
+		return protocol.SessionModelSwitchResponse{SessionID: state.SessionID, ModelID: state.CurrentModelID, PreviousModelID: state.CurrentModelID}, state, nil
+	case s.pending != nil || s.active != nil || len(s.runs) > 0:
+		s.mu.Unlock()
+		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, refuse("the runtime freezes its model at initialize, so a session that has run cannot change it")
+	}
+	s.mu.Unlock()
+
+	client, model, err := s.restart(ctx, request.ModelID)
+	if err != nil {
+		var remote *rpc.RemoteError
+		if errors.As(err, &remote) {
+			return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, &base.ModelNotFoundError{ModelID: request.ModelID}
+		}
+		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, err
+	}
+
+	inbound, stop, exited := client.Inbound(), make(chan struct{}), make(chan struct{})
+	s.mu.Lock()
+	previous, oldClient, oldStop, oldExited := s.model, s.client, s.stop, s.exited
+	s.client, s.inbound, s.stop, s.exited, s.stopOnce = client, inbound, stop, exited, sync.Once{}
+	s.model = model
+	s.state.CurrentModelID = model
+	s.state.UpdatedAtMS = s.clock.Now().UnixMilli()
+	state := s.state
+	s.mu.Unlock()
+	go s.dispatch(client, inbound, stop, exited)
+	close(oldStop)
+	go func() {
+		<-oldExited
+		_ = oldClient.Close()
+	}()
+	return protocol.SessionModelSwitchResponse{SessionID: state.SessionID, ModelID: model, PreviousModelID: previous}, state, nil
+}
+
 func (s *Session) externalActivity(what string) {
 	s.mu.Lock()
 	run := s.pending
