@@ -16,7 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **copilot: Replay the pinned corpus through the Rust reducer** ([#1906](https://github.com/lsm/oxap/pull/1906)): Replays the pinned Copilot corpus through the Rust reducer, as Go's `corpus_test.go` does, so both trees are checked against the same recorded expectations.
 - **copilot: Port the Rust adapter's open handshake from Go** ([#1905](https://github.com/lsm/oxap/pull/1905)): Ports the Copilot adapter's `Open` from Go to Rust, so the Rust adapter can start a headless server and hand back a live session.
 - **copilot: Port the Rust session's prompt submission from Go** ([#1904](https://github.com/lsm/oxap/pull/1904)): Ports the Copilot session's prompt submission and the `Session` trait from Go to Rust.
-- **release: Cut 0.1.0-alpha.37** ([#1903](https://github.com/lsm/oxap/pull/1903)): Bumps every published version to 0.1.0-alpha.37 and writes its changelog section from the four PRs merged since alpha.36.
 
 ## [0.1.0-alpha.37] - 2026-11-19
 
