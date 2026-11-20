@@ -5,17 +5,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use oxap_adapter::{testkit, Error, EventStream, OpenRequest, ResumeRequest, SubmitRequest};
+use oxap_adapter::{
+    testkit, Error, EventStream, OpenRequest, ResumeRequest, Session as SessionContract,
+    SubmitRequest,
+};
 use oxap_adapter_deepseek::adapter::{pin, Adapter, Config};
 use oxap_adapter_deepseek::native::{SERVER_NAME, SERVER_VERSION};
 use oxap_adapter_deepseek::process::ProcessConfig;
 use oxap_adapter_deepseek::runtime::Runtime;
 use oxap_adapter_deepseek::session::Session;
 use oxap_protocol::{
-    ActionCallPayload, Admission, ContentDeltaPayload, EffectiveDeliveryMode, EnvelopeType,
-    Message, MessageContent, MessageRole, MessageSubmitRequest, MessageSubmitResponse, Participant,
+    ActionCallPayload, Admission, CompactionKind, CompactionPolicy, ContentDeltaPayload,
+    EffectiveDeliveryMode, EnvelopeType, Message, MessageContent, MessageRole,
+    MessageSubmitRequest, MessageSubmitResponse, Participant, ReasoningLevel,
     RequestedDeliveryMode, RunCompletedPayload, RunFailedPayload, RunStartedPayload, RunStatus,
-    SessionStatus, SETTLED_BY_INFERRED,
+    SessionModelSwitchRequest, SessionStatus, SupportLevel, FEATURE_SESSION_MODEL_SWITCH,
+    SETTLED_BY_INFERRED,
 };
 use serde_json::Value;
 
@@ -92,16 +97,34 @@ impl Fixture {
     }
 
     fn open(&self, on_prompt: &str) -> Arc<Session> {
+        self.adapter(on_prompt)
+            .open(OpenRequest {
+                session_id: "s".into(),
+                participant: Participant {
+                    id: "user".into(),
+                    ..Participant::default()
+                },
+                ..OpenRequest::default()
+            })
+            .map(Arc::new)
+            .unwrap()
+    }
+
+    fn adapter(&self, on_prompt: &str) -> Adapter {
         let dir = self.dir.to_string_lossy().into_owned();
+        let executable = self.dir.join("runtime");
+        std::os::unix::fs::symlink("/bin/sh", &executable).unwrap();
         let info = format!(
             r#"{{"serverInfo":{{"name":"{SERVER_NAME}","version":"{}"}}}}"#,
             *SERVER_VERSION
         );
         let script = format!(
-            r#"while read line; do
+            r#"if [ "$1" = --patch ]; then cat "$2" >> "{dir}/patches"; fi
+while read line; do
 printf '%s\n' "$line" >> "{dir}/wire"
 id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
 case "$line" in
+*'"method":"initialize"'*'"model":"nope"'*) printf '{{"jsonrpc":"2.0","id":%s,"error":{{"code":-32000,"message":"no such model"}}}}\n' "$id"; exit 0 ;;
 *'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{info}}}\n' "$id" ;;
 *'"method":"session/prompt"'*)
 {on_prompt};;
@@ -111,7 +134,7 @@ done"#
         );
         Adapter::new(Config {
             process: ProcessConfig {
-                path: "/bin/sh".into(),
+                path: executable.to_string_lossy().into_owned(),
                 args: vec!["-c".into(), script, "sh".into()],
                 dir,
                 env: Some(vec!["PATH=/usr/bin:/bin".into()]),
@@ -123,16 +146,6 @@ done"#
             runtime: Runtime::new(|| 42, |kind| format!("{kind}-minted")),
             ..Config::default()
         })
-        .unwrap()
-        .open(OpenRequest {
-            session_id: "s".into(),
-            participant: Participant {
-                id: "user".into(),
-                ..Participant::default()
-            },
-            ..OpenRequest::default()
-        })
-        .map(Arc::new)
         .unwrap()
     }
 
@@ -160,11 +173,17 @@ done"#
     }
 
     fn prompts(&self) -> Vec<Value> {
+        self.wire()
+            .into_iter()
+            .filter(|frame| frame["method"] == "session/prompt")
+            .collect()
+    }
+
+    fn wire(&self) -> Vec<Value> {
         std::fs::read_to_string(self.dir.join("wire"))
             .unwrap_or_default()
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).unwrap())
-            .filter(|frame| frame["method"] == "session/prompt")
             .collect()
     }
 }
@@ -1190,4 +1209,130 @@ fn dropping_submit_after_the_receipt_keeps_the_connection_and_the_run_still_comp
     assert_eq!(state.transcript_cursor, "4");
     assert_eq!(fixture.prompts().len(), 1);
     session.close().unwrap();
+}
+
+fn switch_request(session: &str, model: &str) -> SessionModelSwitchRequest {
+    SessionModelSwitchRequest {
+        session_id: session.into(),
+        model_id: model.into(),
+        ..SessionModelSwitchRequest::default()
+    }
+}
+
+#[test]
+fn a_switch_before_the_first_run_restarts_with_the_open_settings() {
+    let fixture = Fixture::new();
+    let compaction = CompactionPolicy {
+        kind: CompactionKind::OFF,
+        ..CompactionPolicy::default()
+    };
+    let session = fixture
+        .adapter("")
+        .open(OpenRequest {
+            session_id: "s".into(),
+            reasoning_level: ReasoningLevel::HIGH,
+            compaction_policy: Some(compaction.clone()),
+            ..OpenRequest::default()
+        })
+        .unwrap();
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let (response, state) =
+        futures::executor::block_on(switcher.switch_model(switch_request("s", "other"))).unwrap();
+    assert_eq!(response.model_id, "other");
+    assert_eq!(response.previous_model_id, "m");
+    assert_eq!(
+        session.state().unwrap().current_model_id,
+        state.current_model_id
+    );
+    assert_eq!(state.current_model_id, "other");
+    assert_eq!(state.status, SessionStatus::IDLE);
+    assert_eq!(state.reasoning_level, ReasoningLevel::HIGH);
+    assert_eq!(state.compaction_policy, Some(compaction));
+    let (same, _) =
+        futures::executor::block_on(switcher.switch_model(switch_request("s", "other"))).unwrap();
+    assert_eq!(same.previous_model_id, "other");
+
+    let wire = fixture.wire();
+    assert_eq!(wire.len(), 3);
+    assert_eq!(wire[0]["params"]["model"], "m");
+    assert_eq!(wire[1]["params"]["model"], "other");
+    assert_eq!(wire[1]["params"]["reasoningEffort"], "high");
+    assert_eq!(wire[2]["method"], "shutdown");
+    assert_eq!(
+        std::fs::read_to_string(fixture.dir.join("patches")).unwrap(),
+        "- id: compaction-basic\n  disabled: true\n".repeat(2)
+    );
+    session.close().unwrap();
+}
+
+#[test]
+fn a_switch_after_a_completed_run_is_unsatisfiable() {
+    let fixture = Fixture::new();
+    let tail = reply(5, 1)
+        + &event(6, "step/end", r#"{"turn":1,"step":1}"#)
+        + &turn_end(7, 1, "completed")
+        + &idle();
+    let session = fixture.open(&(receipt() + &proof() + &tail));
+    let (_, mut stream) = submit(&session, hello("s")).unwrap();
+    assert_eq!(
+        testkit::drain(&mut stream, Duration::from_secs(5))
+            .last()
+            .unwrap()
+            .envelope_type,
+        EnvelopeType::RUN_COMPLETED
+    );
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let refused = futures::executor::block_on(switcher.switch_model(switch_request("s", "other")));
+    assert!(matches!(refused, Err(Error::UnsupportedControl(control))
+        if control.feature == FEATURE_SESSION_MODEL_SWITCH
+            && control.reason == "unsatisfiable"
+            && control.field == "model_id"));
+    assert!(futures::executor::block_on(switcher.switch_model(switch_request("s", "m"))).is_ok());
+    assert_eq!(fixture.wire().len(), 2);
+    assert_eq!(session.state().unwrap().current_model_id, "m");
+    session.close().unwrap();
+}
+
+#[test]
+fn a_switch_to_a_model_rejected_by_initialize_leaves_the_old_runtime_running() {
+    let fixture = Fixture::new();
+    let session = fixture.open(&(receipt() + &proof()));
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let refused = futures::executor::block_on(switcher.switch_model(switch_request("s", "nope")));
+    assert_eq!(refused.err(), Some(Error::ModelNotFound("nope".into())));
+    assert_eq!(session.state().unwrap().current_model_id, "m");
+    assert_eq!(submit(&session, hello("s")).unwrap().0.model_id, "m");
+    let wire = fixture.wire();
+    assert_eq!(wire[1]["params"]["model"], "nope");
+    assert_eq!(wire[2]["method"], "session/prompt");
+}
+
+#[test]
+fn a_switch_spawn_failure_is_reported_instead_of_model_not_found() {
+    let fixture = Fixture::new();
+    let session = fixture.open("");
+    std::fs::remove_file(fixture.dir.join("runtime")).unwrap();
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let refused = futures::executor::block_on(switcher.switch_model(switch_request("s", "other")));
+    assert!(matches!(refused, Err(Error::Harness(detail)) if detail.contains("No such file")));
+    assert_eq!(session.state().unwrap().current_model_id, "m");
+    assert_eq!(fixture.wire().len(), 1);
+}
+
+#[test]
+fn an_invalid_switch_is_refused_before_any_restart() {
+    let fixture = Fixture::new();
+    let session = fixture.open("");
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let refused = futures::executor::block_on(switcher.switch_model(switch_request("s", "")));
+    assert_eq!(refused.err(), Some(Error::InvalidSubmission));
+    assert_eq!(fixture.wire().len(), 1);
+}
+
+#[test]
+fn the_descriptor_advertises_model_switching_as_emulated() {
+    let fixture = Fixture::new();
+    let descriptor = fixture.adapter("").describe();
+    let support = &descriptor.capabilities.features[FEATURE_SESSION_MODEL_SWITCH];
+    assert_eq!(support.level, SupportLevel::EMULATED);
 }
