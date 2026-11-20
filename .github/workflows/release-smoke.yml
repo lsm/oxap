@@ -240,7 +240,7 @@ jobs:
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           ON_PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
-          WAIT_SECONDS: ${{ github.event_name == 'pull_request' && '0' || '600' }}
+          WAIT_SECONDS: ${{ github.event_name == 'pull_request' && '60' || '600' }}
           RETRY_SECONDS: '30'
         run: |
           set -euo pipefail
@@ -248,11 +248,16 @@ jobs:
           while :; do
             missing=""
             for package in @oxap/sdk @oxap/cli @oxap/cli-linux-x64 @oxap/client; do
-              if ! npm view "$package@$VERSION" version >/dev/null 2>&1; then missing="$missing $package@$VERSION"; fi
+              left=$((deadline - SECONDS))
+              if [ "$left" -le 0 ] || ! timeout "$left" npm view "$package@$VERSION" version >/dev/null 2>&1; then
+                missing="$missing $package@$VERSION"
+              fi
             done
-            if [ -z "$missing" ] || [ "$SECONDS" -ge "$deadline" ]; then break; fi
-            echo "not on npm yet:$missing; checking again in ${RETRY_SECONDS}s"
-            sleep "$RETRY_SECONDS"
+            left=$((deadline - SECONDS))
+            if [ -z "$missing" ] || [ "$left" -le 0 ]; then break; fi
+            pause=$((left < RETRY_SECONDS ? left : RETRY_SECONDS))
+            echo "not on npm yet:$missing; checking again in ${pause}s"
+            sleep "$pause"
           done
           if [ -z "$missing" ]; then
             echo "published=true" >> "$GITHUB_OUTPUT"
