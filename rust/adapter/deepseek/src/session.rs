@@ -37,6 +37,7 @@ pub struct Session {
 
 struct Shared {
     prompting: Mutex<()>,
+    reducing: Mutex<()>,
     inner: Mutex<Inner>,
     journal: Journal,
     native_id: String,
@@ -137,6 +138,7 @@ impl Session {
             journal: Journal::new(journal_capacity),
             runtime,
             prompting: Mutex::new(()),
+            reducing: Mutex::new(()),
             launch,
             start_timeout,
         });
@@ -393,6 +395,7 @@ impl Shared {
         cancel: &Receiver<()>,
     ) -> Result<(SessionModelSwitchResponse, SessionState), Error> {
         let _prompting = hold(&self.prompting);
+        let reducing = hold(&self.reducing);
         let previous = {
             let inner = self.lock();
             if inner.process.is_none() || inner.unusable {
@@ -433,6 +436,7 @@ impl Shared {
             (old, inner.state.clone())
         };
         self.read(client);
+        drop(reducing);
         drop(old);
         Ok(model_switch_response(previous, state))
     }
@@ -576,6 +580,7 @@ impl Shared {
 
     fn dispatch(&self, inbound: &Receiver<Inbound>, done: &Receiver<()>) {
         let reduce = |message| {
+            let _reducing = hold(&self.reducing);
             let mut inner = self.lock();
             if !inner.owns_reader(done) {
                 return false;
@@ -597,6 +602,7 @@ impl Shared {
                 return;
             }
         }
+        let _reducing = hold(&self.reducing);
         let mut inner = self.lock();
         if let Some(process) = inner.process.as_ref().filter(|_| inner.owns_reader(done)) {
             let reason = process.client.err().unwrap_or_else(|| "<nil>".into());
