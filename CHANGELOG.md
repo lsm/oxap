@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.39] - 2026-11-20
+
+### Merged pull requests
+
+- **deepseek: Return session links in work status** ([#1913](https://github.com/lsm/oxap/pull/1913)): Clients that check a DeepSeek session's identity before sending the first prompt receive no link from work status.
+- **ci: Wait up to ten minutes for a fresh release to show on npm** ([#1912](https://github.com/lsm/oxap/pull/1912)): Bug fix: the alpha.38 release run failed its npm smoke even though every package had been published. npm keeps a fresh publish in processing for a few minutes, and the smoke checked `npm view` once, 11 seconds after `publish-npm` finished.
+
 ## [0.1.0-alpha.38] - 2026-11-20
 
 ### Merged pull requests
