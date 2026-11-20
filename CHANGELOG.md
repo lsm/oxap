@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.38] - 2026-11-20
+
+### Merged pull requests
+
+- **deepseek: Switch a session's model by restarting its runtime, in Go, Rust and Zig** ([#1909](https://github.com/lsm/oxap/pull/1909)): Feature: a DeepSeek session can now switch its model, in the Go, Rust and Zig adapters.
+- **serve: Serve Copilot from the Rust hub and compare it with goap** ([#1907](https://github.com/lsm/oxap/pull/1907)): Serves Copilot from the Rust hub and compares it with goap's, which finishes the Rust Copilot port.
+- **copilot: Replay the pinned corpus through the Rust reducer** ([#1906](https://github.com/lsm/oxap/pull/1906)): Replays the pinned Copilot corpus through the Rust reducer, as Go's `corpus_test.go` does, so both trees are checked against the same recorded expectations.
+- **copilot: Port the Rust adapter's open handshake from Go** ([#1905](https://github.com/lsm/oxap/pull/1905)): Ports the Copilot adapter's `Open` from Go to Rust, so the Rust adapter can start a headless server and hand back a live session.
+- **copilot: Port the Rust session's prompt submission from Go** ([#1904](https://github.com/lsm/oxap/pull/1904)): Ports the Copilot session's prompt submission and the `Session` trait from Go to Rust.
+
 ## [0.1.0-alpha.37] - 2026-11-19
 
 ### Merged pull requests
