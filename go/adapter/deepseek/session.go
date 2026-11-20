@@ -33,6 +33,7 @@ type Session struct {
 	state     protocol.SessionState
 	closed    bool
 	unusable  bool
+	ran       bool
 	pending   *runState
 	active    *runState
 	runs      map[protocol.RunID]*runState
@@ -130,6 +131,7 @@ func (s *Session) Submit(ctx context.Context, submit base.SubmitRequest) (protoc
 	run := &runState{status: protocol.RunQueued, next: 1, messageID: protocol.MessageID(s.ids.NewID("message")), startResult: make(chan error, 1)}
 	run.stream = s.journal.Reserve()
 	s.pending = run
+	s.ran = true
 	s.mu.Unlock()
 	s.reduceMu.Unlock()
 	var result native.SessionPromptResult
@@ -901,7 +903,7 @@ func (s *Session) SwitchModel(ctx context.Context, request protocol.SessionModel
 		state := s.state
 		s.mu.Unlock()
 		return protocol.SessionModelSwitchResponse{SessionID: state.SessionID, ModelID: state.CurrentModelID, PreviousModelID: state.CurrentModelID}, state, nil
-	case s.pending != nil || s.active != nil || len(s.runs) > 0:
+	case s.ran:
 		s.mu.Unlock()
 		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, refuse("the runtime freezes its model at initialize, so a session that has run cannot change it")
 	}
