@@ -163,6 +163,25 @@ func TestASwitchToAModelTheRuntimeRejectsIsModelNotFoundAndKeepsTheSession(t *te
 	}
 }
 
+func TestADispatchForARetiredRuntimeNeverFailsTheSession(t *testing.T) {
+	runtimes := &startedRuntimes{}
+	session := openOnRuntimes(t, runtimes, base.OpenRequest{})
+	if _, _, err := switchTo(t, session, "other"); err != nil {
+		t.Fatal(err)
+	}
+	retired := newFake()
+	retired.in <- rpc.InboundMessage{Request: &rpc.IncomingRequest{Method: "reverse"}}
+	_ = retired.Close()
+	exited := make(chan struct{})
+	go session.(*Session).dispatch(retired, retired.in, make(chan struct{}), exited)
+	<-exited
+	current, err := session.State(context.Background())
+	if err != nil || current.Status != protocol.SessionIdle || current.CurrentModelID != "other" {
+		t.Fatalf("state %+v, err %v, want an idle session on other after a retired runtime's exit", current, err)
+	}
+	admission(t, session, runtimes.clients[1], "m1")
+}
+
 func TestASwitchThatCannotStartARuntimeIsNotModelNotFound(t *testing.T) {
 	boom := errors.New("spawn failed")
 	runtimes := &startedRuntimes{failure: func(call int) error {

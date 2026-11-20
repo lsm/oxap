@@ -222,12 +222,22 @@ func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.Cont
 	return blocks, ids, nil
 }
 
+func (s *Session) owns(client Client) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.client == client
+}
+
 func (s *Session) dispatch(client Client, inbound <-chan rpc.InboundMessage, stop <-chan struct{}, exited chan<- struct{}) {
 	defer close(exited)
 	for {
 		select {
 		case in := <-inbound:
 			s.reduceMu.Lock()
+			if !s.owns(client) {
+				s.reduceMu.Unlock()
+				return
+			}
 			s.reduce(in)
 			s.reduceMu.Unlock()
 		case <-client.Done():
@@ -235,11 +245,17 @@ func (s *Session) dispatch(client Client, inbound <-chan rpc.InboundMessage, sto
 				select {
 				case in := <-inbound:
 					s.reduceMu.Lock()
+					if !s.owns(client) {
+						s.reduceMu.Unlock()
+						return
+					}
 					s.reduce(in)
 					s.reduceMu.Unlock()
 				default:
 					s.reduceMu.Lock()
-					s.transportFailed()
+					if s.owns(client) {
+						s.transportFailed()
+					}
 					s.reduceMu.Unlock()
 					return
 				}
