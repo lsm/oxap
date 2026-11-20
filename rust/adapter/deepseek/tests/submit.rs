@@ -1266,14 +1266,25 @@ fn a_switch_before_the_first_run_restarts_with_the_open_settings() {
 }
 
 #[test]
-fn a_switch_after_a_completed_run_is_unsatisfiable() {
+fn a_switch_is_unsatisfiable_during_a_run_and_after_it_completes() {
     let fixture = Fixture::new();
     let tail = reply(5, 1)
         + &event(6, "step/end", r#"{"turn":1,"step":1}"#)
         + &turn_end(7, 1, "completed")
         + &idle();
-    let session = fixture.open(&(receipt() + &proof() + &tail));
+    let session = fixture.open(&(receipt() + &proof() + &fixture.until_released() + &tail));
     let (_, mut stream) = submit(&session, hello("s")).unwrap();
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let assert_refused = || {
+        let refused =
+            futures::executor::block_on(switcher.switch_model(switch_request("s", "other")));
+        assert!(matches!(refused, Err(Error::UnsupportedControl(control))
+            if control.feature == FEATURE_SESSION_MODEL_SWITCH
+                && control.reason == "unsatisfiable"
+                && control.field == "model_id"));
+    };
+    assert_refused();
+    fixture.release();
     assert_eq!(
         testkit::drain(&mut stream, Duration::from_secs(5))
             .last()
@@ -1281,12 +1292,7 @@ fn a_switch_after_a_completed_run_is_unsatisfiable() {
             .envelope_type,
         EnvelopeType::RUN_COMPLETED
     );
-    let switcher = session.model_switcher().expect("DeepSeek model switcher");
-    let refused = futures::executor::block_on(switcher.switch_model(switch_request("s", "other")));
-    assert!(matches!(refused, Err(Error::UnsupportedControl(control))
-        if control.feature == FEATURE_SESSION_MODEL_SWITCH
-            && control.reason == "unsatisfiable"
-            && control.field == "model_id"));
+    assert_refused();
     assert!(futures::executor::block_on(switcher.switch_model(switch_request("s", "m"))).is_ok());
     assert_eq!(fixture.wire().len(), 2);
     assert_eq!(session.state().unwrap().current_model_id, "m");

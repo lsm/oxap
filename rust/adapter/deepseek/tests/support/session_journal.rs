@@ -89,15 +89,21 @@ fn notification(method: &str, params: &str) -> Inbound {
 #[test]
 fn a_status_for_this_session_while_idle_is_not_external_activity() {
     let session = open(1);
-    session.shared.reduce(notification(
-        NOTIFY_SESSION_STATUS,
-        r#"{"sessionId":"s","status":"idle"}"#,
-    ));
+    session.shared.reduce(
+        &mut session.shared.lock(),
+        notification(
+            NOTIFY_SESSION_STATUS,
+            r#"{"sessionId":"s","status":"idle"}"#,
+        ),
+    );
     assert_eq!(session.state().unwrap().status, SessionStatus::IDLE);
-    session.shared.reduce(notification(
-        NOTIFY_SESSION_STATUS,
-        r#"{"sessionId":"t","status":"idle"}"#,
-    ));
+    session.shared.reduce(
+        &mut session.shared.lock(),
+        notification(
+            NOTIFY_SESSION_STATUS,
+            r#"{"sessionId":"t","status":"idle"}"#,
+        ),
+    );
     assert_eq!(session.state().err(), Some(Error::SessionClosed));
     session.close().unwrap();
 }
@@ -106,7 +112,9 @@ fn a_status_for_this_session_while_idle_is_not_external_activity() {
 fn a_barrier_is_acknowledged_without_touching_the_session() {
     let session = open(1);
     let (ack, acked) = crossbeam_channel::bounded(1);
-    session.shared.reduce(Inbound::Barrier(ack));
+    session
+        .shared
+        .reduce(&mut session.shared.lock(), Inbound::Barrier(ack));
     assert_eq!(
         acked.recv_timeout(Duration::from_secs(5)),
         Err(crossbeam_channel::RecvTimeoutError::Disconnected)

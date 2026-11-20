@@ -38,6 +38,17 @@ pub struct Process {
     closed: Mutex<Option<Result<(), String>>>,
 }
 
+pub(crate) struct StartError {
+    pub rpc: Error,
+    pub remote: bool,
+}
+
+impl From<Error> for StartError {
+    fn from(rpc: Error) -> Self {
+        Self { rpc, remote: false }
+    }
+}
+
 fn handshake(detail: impl std::fmt::Display) -> Error {
     error(Fault::Transport(format!(
         "deepseek rpc: initialization handshake failed: {detail}"
@@ -81,8 +92,16 @@ impl Process {
         deadline: Option<Instant>,
         cancel: &Receiver<()>,
     ) -> Result<Self, Error> {
+        Self::start_classified(config, deadline, cancel).map_err(|failure| failure.rpc)
+    }
+
+    pub(crate) fn start_classified(
+        config: ProcessConfig,
+        deadline: Option<Instant>,
+        cancel: &Receiver<()>,
+    ) -> Result<Self, StartError> {
         if config.path.is_empty() {
-            return Err(handshake("executable path is required"));
+            return Err(handshake("executable path is required").into());
         }
         validate_initialize_params(&config.initialize).map_err(handshake)?;
         let (child, stdout) = Child::spawn(&ChildConfig {
@@ -133,11 +152,11 @@ impl Process {
             let _ = reply.send(outcome);
         });
         let expiry = deadline.map_or_else(crossbeam_channel::never, crossbeam_channel::at);
-        let outcome: Result<InitializeResult, String> = loop {
+        let outcome = loop {
             select! {
                 recv(ready) -> outcome => break match outcome {
-                    Ok(outcome) => outcome.map_err(|failure| failure.to_string()),
-                    Err(_) => Err(process.client.err().unwrap_or_else(|| "EOF".into())),
+                    Ok(outcome) => outcome,
+                    Err(_) => Err(error(Fault::Transport(process.client.err().unwrap_or_else(|| "EOF".into())))),
                 },
                 recv(inbound) -> message => match message {
                     Ok(Inbound::Barrier(ack)) => {
@@ -145,23 +164,28 @@ impl Process {
                         inbound = crossbeam_channel::never();
                         done = crossbeam_channel::never();
                     }
-                    _ => break Err("native observation preceded initialize response".into()),
+                    _ => break Err(error(Fault::Transport("native observation preceded initialize response".into()))),
                 },
-                recv(done) -> _ => break Err(process.client.err().unwrap_or_else(|| "EOF".into())),
-                recv(expiry) -> _ => break Err("context deadline exceeded".into()),
-                recv(cancel) -> _ => break Err("context canceled".into()),
+                recv(done) -> _ => break Err(error(Fault::Transport(process.client.err().unwrap_or_else(|| "EOF".into())))),
+                recv(expiry) -> _ => break Err(error(Fault::DeadlineExceeded)),
+                recv(cancel) -> _ => break Err(error(Fault::Transport("context canceled".into()))),
             }
         };
-        match outcome
-            .and_then(|initialized| validate_initialize_result(&initialized).map(|()| initialized))
-        {
+        match outcome.and_then(|initialized| {
+            validate_initialize_result(&initialized)
+                .map_err(|detail| error(Fault::Transport(detail)))
+                .map(|()| initialized)
+        }) {
             Ok(initialize) => {
                 process.initialize = initialize;
                 Ok(process)
             }
-            Err(detail) => {
+            Err(failure) => {
                 process.abort();
-                Err(handshake(format!("{detail}; stderr: {}", process.stderr())))
+                Err(StartError {
+                    remote: matches!(failure.fault, Fault::Remote { .. }),
+                    rpc: handshake(format!("{failure}; stderr: {}", process.stderr())),
+                })
             }
         }
     }

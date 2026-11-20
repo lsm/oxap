@@ -83,3 +83,18 @@ when it emits nothing, or refused; the admitted count must equal the case's
 `run.started` events. Let a run that ends before admission answer its submit
 with a run id: the replay must fail. Start the replay's clock one tick later: the cases whose
 traces carry a timestamp must fail.
+
+## Switching a model over stdio
+
+```sh
+(cd rust && cargo build --locked -p oxap-serve --bin oap-rust-hub)
+python3 .claude/skills/verify/scripts/rust-deepseek-model-switch.py \
+  --hub rust/target/debug/oap-rust-hub --output-dir "$EVIDENCE/deepseek-switch"
+```
+
+Require exit 0 and `PASS`. The script drives the served OAP endpoint with
+the DeepSeek parity runtime. Inspect `oap.jsonl` for the correlated switch,
+the updated state, a completed run on the new model and both refusals.
+Inspect `stdin.log` and `patches` for the three initialize attempts, the
+successful runtimes' shutdowns and the retained reasoning and compaction
+settings. It runs with an isolated home and no provider credentials.
