@@ -31,6 +31,7 @@ const features = [_]contract.Feature{
     .{ .key = "session.message.delivery.queue", .level = .unavailable, .reason = "overlapping native followups are outside the adapter contract" },
     .{ .key = "session.message.delivery.steer", .level = .unavailable, .reason = "selected SDK wire has no steer request" },
     .{ .key = "session.message.submit", .level = .degraded, .reason = "receipt plus entered direct-user message proves start" },
+    .{ .key = contract.feature_model_switch, .level = .emulated, .reason = "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused" },
     .{ .key = "session.open", .level = .emulated, .reason = "one process and native session per OAP session" },
     .{ .key = contract.feature_open_reopen, .level = .unavailable, .reason = "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness" },
     .{ .key = contract.feature_session_reasoning, .level = .native, .reason = "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max", .modes = &.{contract.mode_session_open} },
@@ -139,6 +140,7 @@ pub const Session = struct {
     reply: ?Reply = null,
     ended: bool = false,
     reaped: bool = false,
+    rejected: bool = false,
 
     fn open(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!*Session {
         if (request.reopen) return refusal.unsupported(contract.feature_open_reopen, contract.reason_unadvertised);
@@ -147,6 +149,16 @@ pub const Session = struct {
             return refusal.fail(error.BackendFailed, "the deepseek harness needs an absolute working directory, a provider and a model");
         }
         const effort = try effortFor(request, refusal);
+        var rejected = false;
+        const self = try start(owner, arena, request, config.model, effort, &rejected, refusal);
+        errdefer self.destroy();
+        if (request.reasoning_level) |level| self.reported_level = try self.owned().dupe(u8, level);
+        if (request.compaction_policy_json) |policy| self.reported_policy = try self.owned().dupe(u8, policy);
+        return self;
+    }
+
+    fn start(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, model: []const u8, effort: []const u8, rejected: *bool, refusal: *contract.Refusal) contract.Failure!*Session {
+        const config = owner.config;
         const patch = try compactionPatch(arena, request, refusal);
         var args: []const []const u8 = config.args;
         var patch_path: ?[]const u8 = null;
@@ -162,9 +174,10 @@ pub const Session = struct {
         const self = try construct(owner, arena, request, args, refusal);
         errdefer self.destroy();
         self.effort = effort;
-        try self.handshake(arena, refusal);
-        if (request.reasoning_level) |level| self.reported_level = try self.owned().dupe(u8, level);
-        if (request.compaction_policy_json) |policy| self.reported_policy = try self.owned().dupe(u8, policy);
+        self.handshake(arena, model, refusal) catch |err| {
+            rejected.* = self.rejected;
+            return err;
+        };
         return self;
     }
 
@@ -228,6 +241,7 @@ pub const Session = struct {
         .readable = readable,
         .activity = activity,
         .close = close,
+        .switch_model = switchModel,
     };
 
     fn cast(ptr: *anyopaque) *Session {
@@ -306,12 +320,12 @@ pub const Session = struct {
         return refusal.fail(error.BackendFailed, message);
     }
 
-    fn handshake(self: *Session, arena: std.mem.Allocator, refusal: *contract.Refusal) contract.Failure!void {
+    fn handshake(self: *Session, arena: std.mem.Allocator, model: []const u8, refusal: *contract.Refusal) contract.Failure!void {
         const config = self.owner.config;
         var params: std.json.ObjectMap = .empty;
         try params.put(self.owned(), "cwd", .{ .string = config.working_directory });
         try params.put(self.owned(), "provider", .{ .string = config.provider });
-        try params.put(self.owned(), "model", .{ .string = config.model });
+        try params.put(self.owned(), "model", .{ .string = model });
         if (config.max_tokens) |limit| try params.put(self.owned(), "maxTokens", .{ .integer = limit });
         if (self.effort.len != 0) try params.put(self.owned(), "reasoningEffort", .{ .string = self.effort });
         if (!try self.send("initialize", .{ .object = params })) return refusal.fail(error.BackendFailed, "the deepseek harness exited before answering initialize");
@@ -330,6 +344,7 @@ pub const Session = struct {
             }
             self.take(received);
         }
+        self.rejected = self.reply.?.result == null;
         const result = try self.awaitReply(arena, "initialize", refusal);
         const info = member(result, "serverInfo") orelse std.json.Value.null;
         if (!std.mem.eql(u8, text(info, "name"), server_name) or !std.mem.eql(u8, text(info, "version"), server_version)) {
@@ -337,7 +352,7 @@ pub const Session = struct {
             const message = try std.fmt.allocPrint(arena, "the deepseek harness identified as \"{s}\"/\"{s}\", not the pinned {s}/{s}", .{ text(info, "name"), text(info, "version"), server_name, server_version });
             return refusal.fail(error.BackendFailed, message);
         }
-        session.initialize(&self.reducer, config.model) catch |err| return lift(err);
+        session.initialize(&self.reducer, model) catch |err| return lift(err);
     }
 
     const Received = struct { message: rpc.Message, document: std.json.Value };
@@ -490,6 +505,32 @@ pub const Session = struct {
             .status = .running,
             .model_id = model_id,
             .message_ids = message_ids,
+        };
+    }
+
+    fn switchModel(ptr: *anyopaque, arena: std.mem.Allocator, request: *const oap_types.SessionModelSwitchRequest, refusal: *contract.Refusal) contract.Failure!contract.Switched {
+        const self = cast(ptr);
+        if (self.closed()) return error.SessionClosed;
+        if (!std.mem.eql(u8, request.session_id, self.id) or request.model_id.len == 0) return error.InvalidSubmission;
+        const previous = try arena.dupe(u8, self.reducer.model);
+        if (!std.mem.eql(u8, request.model_id, previous)) {
+            if (self.reducer.reserved) return refusal.unsupportedField(contract.feature_model_switch, contract.reason_unsatisfiable, "model_id");
+            var rejected = false;
+            const restarted = start(self.owner, arena, .{ .session_id = self.id, .participant = "", .compaction_policy_json = self.reported_policy }, request.model_id, self.effort, &rejected, refusal) catch |err| {
+                if (rejected) return refusal.missingModel(request.model_id);
+                return err;
+            };
+            std.mem.swap(*process.Transport, &self.transport, &restarted.transport);
+            std.mem.swap(i64, &self.calls, &restarted.calls);
+            restarted.shutdown();
+            restarted.destroy();
+            self.reducer.model = try self.owned().dupe(u8, request.model_id);
+        }
+        const current = try arena.dupe(u8, self.reducer.model);
+        const reported = try state(ptr, arena, refusal);
+        return .{
+            .response = .{ .session_id = self.id, .model_id = current, .previous_model_id = previous },
+            .state = reported,
         };
     }
 
