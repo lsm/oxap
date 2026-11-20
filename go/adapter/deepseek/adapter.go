@@ -166,18 +166,19 @@ func (a *Adapter) Probe(ctx context.Context) (base.Descriptor, error) {
 		return base.Descriptor{}, err
 	}
 	features := map[string]protocol.FeatureSupport{
-		"protocol.initialize":            {Level: protocol.SupportEmulated, Reason: "adapter-owned one-shot initialization freeze"},
-		"capabilities":                   {Level: protocol.SupportEmulated, Reason: "conservative descriptor for pinned SDK wire"},
-		"session.open":                   {Level: protocol.SupportEmulated, Reason: "one process and native session per OAP session"},
-		protocol.FeatureOpenReopen:       {Level: protocol.SupportUnavailable, Reason: "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness"},
-		"session.state":                  {Level: protocol.SupportDegraded, Reason: "reducer-owned live projection; no native query"},
-		protocol.FeatureSessionReasoning: {Level: protocol.SupportNative, Modes: []string{protocol.ModeSessionOpen}, Reason: "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max"},
-		protocol.FeatureCompactionPolicy: {Level: protocol.SupportEmulated, Modes: []string{protocol.ModeSessionOpen}, Reason: "a --patch layer on this session's runtime sets compaction-basic's thresholdRatio for share, or disables it for off; its headroom still caps the threshold, and tokens is refused"},
-		"session.message.submit":         {Level: protocol.SupportDegraded, Reason: "receipt plus entered direct-user message proves start"},
-		"session.message.delivery.auto":  {Level: protocol.SupportDegraded, Reason: "accepted only for known idle sessions and normalized to start"},
-		"session.message.delivery.queue": {Level: protocol.SupportUnavailable, Reason: "overlapping native followups are outside the adapter contract"},
-		"session.message.delivery.steer": {Level: protocol.SupportUnavailable, Reason: "selected SDK wire has no steer request"},
-		"run.streaming":                  {Level: protocol.SupportNative}, "run.status": {Level: protocol.SupportEmulated},
+		"protocol.initialize":              {Level: protocol.SupportEmulated, Reason: "adapter-owned one-shot initialization freeze"},
+		"capabilities":                     {Level: protocol.SupportEmulated, Reason: "conservative descriptor for pinned SDK wire"},
+		"session.open":                     {Level: protocol.SupportEmulated, Reason: "one process and native session per OAP session"},
+		protocol.FeatureOpenReopen:         {Level: protocol.SupportUnavailable, Reason: "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness"},
+		"session.state":                    {Level: protocol.SupportDegraded, Reason: "reducer-owned live projection; no native query"},
+		protocol.FeatureSessionModelSwitch: {Level: protocol.SupportEmulated, Reason: "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused"},
+		protocol.FeatureSessionReasoning:   {Level: protocol.SupportNative, Modes: []string{protocol.ModeSessionOpen}, Reason: "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max"},
+		protocol.FeatureCompactionPolicy:   {Level: protocol.SupportEmulated, Modes: []string{protocol.ModeSessionOpen}, Reason: "a --patch layer on this session's runtime sets compaction-basic's thresholdRatio for share, or disables it for off; its headroom still caps the threshold, and tokens is refused"},
+		"session.message.submit":           {Level: protocol.SupportDegraded, Reason: "receipt plus entered direct-user message proves start"},
+		"session.message.delivery.auto":    {Level: protocol.SupportDegraded, Reason: "accepted only for known idle sessions and normalized to start"},
+		"session.message.delivery.queue":   {Level: protocol.SupportUnavailable, Reason: "overlapping native followups are outside the adapter contract"},
+		"session.message.delivery.steer":   {Level: protocol.SupportUnavailable, Reason: "selected SDK wire has no steer request"},
+		"run.streaming":                    {Level: protocol.SupportNative}, "run.status": {Level: protocol.SupportEmulated},
 		"run.cancel":           {Level: protocol.SupportUnavailable, Reason: "selected SDK wire has no cancel request"},
 		"run.resume":           {Level: protocol.SupportDegraded, Reason: "selected SDK wire has no resume request; OAP resume replays the adapter journal"},
 		"run.reconciliation":   {Level: protocol.SupportDegraded, Reason: "live status corroboration only"},
@@ -211,7 +212,7 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 	if err := base.RefuseUnadvertisedSettings(req, descriptor.Capabilities); err != nil {
 		return nil, err
 	}
-	client, model, err := a.start(ctx, req)
+	client, model, err := a.start(ctx, req, "")
 	if err != nil {
 		return nil, err
 	}
@@ -220,15 +221,15 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 		id = protocol.SessionID(a.ids.NewID("session"))
 	}
 	now := a.clock.Now().UnixMilli()
-	s := &Session{client: client, inbound: client.Inbound(), clock: a.clock, ids: a.ids, journal: journal.New(a.config.JournalCapacity), nativeID: string(id), model: model, state: protocol.SessionState{SessionID: id, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, ReasoningLevel: req.ReasoningLevel, CompactionPolicy: req.CompactionPolicy}, runs: map[protocol.RunID]*runState{}, tools: map[string]*toolState{}, children: map[string]*childState{}, stop: make(chan struct{})}
-	go s.dispatch()
+	s := &Session{client: client, inbound: client.Inbound(), clock: a.clock, ids: a.ids, journal: journal.New(a.config.JournalCapacity), nativeID: string(id), model: model, state: protocol.SessionState{SessionID: id, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, ReasoningLevel: req.ReasoningLevel, CompactionPolicy: req.CompactionPolicy}, runs: map[protocol.RunID]*runState{}, tools: map[string]*toolState{}, children: map[string]*childState{}, stop: make(chan struct{}), exited: make(chan struct{}), restart: func(ctx context.Context, model string) (Client, string, error) { return a.start(ctx, req, model) }}
+	go s.dispatch(s.client, s.inbound, s.stop, s.exited)
 	return s, nil
 }
 
 var deepseekEfforts = map[protocol.ReasoningLevel]bool{protocol.ReasoningOff: true, protocol.ReasoningLow: true, protocol.ReasoningHigh: true, protocol.ReasoningMax: true}
 
-func (a *Adapter) start(ctx context.Context, req base.OpenRequest) (Client, string, error) {
-	if req.ReasoningLevel == "" && req.CompactionPolicy == nil {
+func (a *Adapter) start(ctx context.Context, req base.OpenRequest, model string) (Client, string, error) {
+	if model == "" && req.ReasoningLevel == "" && req.CompactionPolicy == nil {
 		return a.config.Factory.Start(ctx)
 	}
 	if req.ReasoningLevel != "" && !deepseekEfforts[req.ReasoningLevel] {
@@ -238,12 +239,15 @@ func (a *Adapter) start(ctx context.Context, req base.OpenRequest) (Client, stri
 	if err != nil {
 		return nil, "", err
 	}
-	if req.ReasoningLevel == "" && patch == "" {
+	if model == "" && req.ReasoningLevel == "" && patch == "" {
 		return a.config.Factory.Start(ctx)
 	}
 	if a.process == nil {
 		feature, field := protocol.FeatureSessionReasoning, "reasoning_level"
-		if req.ReasoningLevel == "" {
+		switch {
+		case model != "":
+			feature, field = protocol.FeatureSessionModelSwitch, "model_id"
+		case req.ReasoningLevel == "":
 			feature, field = protocol.FeatureCompactionPolicy, "compaction_policy"
 		}
 		return nil, "", &base.UnsupportedControlError{Feature: feature, Reason: base.ControlUnsatisfiable, Field: field, Detail: "a supplied factory starts the runtime, so the adapter cannot configure it"}
@@ -251,6 +255,11 @@ func (a *Adapter) start(ctx context.Context, req base.OpenRequest) (Client, stri
 	pc := *a.process
 	pc.Args = append([]string(nil), pc.Args...)
 	pc.Initialize.ReasoningEffort = string(req.ReasoningLevel)
+	if model != "" {
+		pc.Initialize.Model = model
+	} else {
+		model = a.config.Model
+	}
 	if patch != "" {
 		file, err := os.CreateTemp("", "oap-deepseek-*.patch.yml")
 		if err != nil {
@@ -270,7 +279,7 @@ func (a *Adapter) start(ctx context.Context, req base.OpenRequest) (Client, stri
 	if err != nil {
 		return nil, "", err
 	}
-	return &processClient{Client: p.ClientHandle(), bridge: p}, a.config.Model, nil
+	return &processClient{Client: p.ClientHandle(), bridge: p}, model, nil
 }
 
 func compactionPatch(policy *protocol.CompactionPolicy) (string, error) {
