@@ -141,6 +141,7 @@ pub const Session = struct {
     ended: bool = false,
     reaped: bool = false,
     rejected: bool = false,
+    ran: bool = false,
 
     fn open(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!*Session {
         if (request.reopen) return refusal.unsupported(contract.feature_open_reopen, contract.reason_unadvertised);
@@ -469,6 +470,7 @@ pub const Session = struct {
             error.SessionClosed, error.SessionUnusable => error.SessionClosed,
             else => lift(err),
         };
+        self.ran = true;
         var params: std.json.ObjectMap = .empty;
         try params.put(self.owned(), "sessionId", .{ .string = self.id });
         try params.put(self.owned(), "contentBlocks", .{ .array = blocks });
@@ -514,7 +516,10 @@ pub const Session = struct {
         if (!std.mem.eql(u8, request.session_id, self.id) or request.model_id.len == 0) return error.InvalidSubmission;
         const previous = try arena.dupe(u8, self.reducer.model);
         if (!std.mem.eql(u8, request.model_id, previous)) {
-            if (self.reducer.reserved) return refusal.unsupportedField(contract.feature_model_switch, contract.reason_unsatisfiable, "model_id");
+            if (self.ran) {
+                refusal.* = .{ .feature = contract.feature_model_switch, .reason = contract.reason_unsatisfiable, .field = "model_id", .detail = "the runtime freezes its model at initialize, so a session that has run cannot change it" };
+                return error.UnsupportedFeature;
+            }
             var rejected = false;
             const restarted = start(self.owner, arena, .{ .session_id = self.id, .participant = "", .compaction_policy_json = self.reported_policy }, request.model_id, self.effort, &rejected, refusal) catch |err| {
                 if (rejected) return refusal.missingModel(request.model_id);
@@ -973,20 +978,31 @@ test "a switch before the first run restarts the runtime on the new model with t
     try testing.expectEqual(@as(usize, 2), initializes(try probe.fake.written(probe.arena.allocator())));
 }
 
-test "a switch after a run is refused as unsatisfiable and keeps the runtime" {
-    var probe: Probe = undefined;
-    try probe.init(fake_prelude ++ fake_text_turn ++ fake_idle);
-    defer probe.deinit();
-    var refusal = contract.Refusal{};
-    _ = try probe.open(&refusal);
-    _ = try probe.submit("hello", &refusal);
-    var seen = std.ArrayList(contract.Event).empty;
-    _ = try probe.pumpUntil("run.completed", &seen);
-    try testing.expectError(error.UnsupportedFeature, switchTo(&probe, "other", &refusal));
+fn expectSwitchRefused(probe: *Probe, refusal: *contract.Refusal) !void {
+    try testing.expectError(error.UnsupportedFeature, switchTo(probe, "other", refusal));
     try testing.expectEqualStrings(contract.feature_model_switch, refusal.feature);
     try testing.expectEqualStrings(contract.reason_unsatisfiable, refusal.reason);
     try testing.expectEqualStrings("model_id", refusal.field);
     try testing.expectEqual(@as(usize, 1), initializes(try probe.fake.written(probe.arena.allocator())));
+}
+
+test "a switch is refused while a run is active and after it finishes" {
+    var probe: Probe = undefined;
+    try probe.init(fake_prelude ++ fake_turn_admitted ++
+        \\until [ -f "$(dirname "$0")/finish" ]; do sleep 0.01; done
+        \\
+    ++ fake_text_turn[fake_turn_admitted.len..] ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    _ = try probe.open(&refusal);
+    _ = try probe.submit("hello", &refusal);
+    try testing.expectEqual(contract.Activity.running, probe.handle.?.activity());
+    try expectSwitchRefused(&probe, &refusal);
+    try probe.fake.tmp.dir.writeFile(testing.io, .{ .sub_path = "finish", .data = "" });
+    var seen = std.ArrayList(contract.Event).empty;
+    _ = try probe.pumpUntil("run.completed", &seen);
+    try testing.expectEqual(contract.Activity.idle, probe.handle.?.activity());
+    try expectSwitchRefused(&probe, &refusal);
 }
 
 test "a switch to a model the runtime rejects is model_not_found and keeps the session on its runtime" {
