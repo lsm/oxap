@@ -15,7 +15,8 @@ use oxap_adapter::{
 use oxap_protocol::{
     CapabilityDescriptor, CompactionKind, CompactionPolicy, EndpointDescriptor, FeatureSupport,
     ReasoningLevel, SessionState, SessionStatus, SupportLevel, FEATURE_COMPACTION_POLICY,
-    FEATURE_OPEN_REOPEN, FEATURE_SESSION_REASONING, MODE_SESSION_OPEN, PROFILE, VERSION,
+    FEATURE_OPEN_REOPEN, FEATURE_SESSION_MODEL_SWITCH, FEATURE_SESSION_REASONING,
+    MODE_SESSION_OPEN, PROFILE, VERSION,
 };
 
 use crate::native::{validate_initialize_params, InitializeParams};
@@ -59,7 +60,7 @@ fn harness(text: &str) -> Error {
     Error::Harness(text.into())
 }
 
-fn unsatisfiable(feature: &str, field: &str, detail: &str) -> Error {
+pub(crate) fn unsatisfiable(feature: &str, field: &str, detail: &str) -> Error {
     Error::UnsupportedControl(Box::new(UnsupportedControl {
         feature: feature.into(),
         reason: CONTROL_UNSATISFIABLE,
@@ -114,6 +115,7 @@ impl Adapter {
             ("session.open", feature(SupportLevel::EMULATED, "one process and native session per OAP session")),
             (FEATURE_OPEN_REOPEN, feature(SupportLevel::UNAVAILABLE, "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness")),
             ("session.state", feature(SupportLevel::DEGRADED, "reducer-owned live projection; no native query")),
+            (FEATURE_SESSION_MODEL_SWITCH, feature(SupportLevel::EMULATED, "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused")),
             (FEATURE_SESSION_REASONING, opening(SupportLevel::NATIVE, "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max")),
             (FEATURE_COMPACTION_POLICY, opening(SupportLevel::EMULATED, "a --patch layer on this session's runtime sets compaction-basic's thresholdRatio for share, or disables it for off; its headroom still caps the threshold, and tokens is refused")),
             ("session.message.submit", feature(SupportLevel::DEGRADED, "receipt plus entered direct-user message proves start")),
@@ -199,10 +201,8 @@ impl Adapter {
         refuse_unadvertised_tool_sources(&request, &[])?;
         refuse_unadvertised_tools(&request, &[])?;
         refuse_unadvertised_settings(&request, &self.describe().capabilities)?;
-        let deadline = Instant::now()
-            .checked_add(self.config.start_timeout)
-            .ok_or_else(|| harness("deepseek adapter: start timeout is out of range"))?;
-        let process = start(self.launch(&request)?, deadline, cancel)?;
+        let launch = self.launch(&request)?;
+        let process = launch.start(self.config.start_timeout, None, cancel)?;
         let session_id = if request.session_id.as_str().is_empty() {
             self.config.runtime.new_id("session").into()
         } else {
@@ -222,6 +222,8 @@ impl Adapter {
             state,
             self.config.journal_capacity,
             self.config.runtime.clone(),
+            launch,
+            self.config.start_timeout,
         ))
     }
 }
@@ -246,19 +248,40 @@ impl AdapterContract for Adapter {
     }
 }
 
-fn start(launch: Launch, deadline: Instant, cancel: &Receiver<()>) -> Result<Process, Error> {
-    let mut process = launch.process;
-    let Some(patch) = launch.patch else {
-        return Process::start_with(process, Some(deadline), cancel)
-            .map_err(|error| harness(&error.to_string()));
-    };
-    let path = write_patch(&patch, |_, file, bytes| file.write_all(bytes))
-        .map_err(|error| harness(&error.to_string()))?;
-    process.args.push("--patch".into());
-    process.args.push(path.to_string_lossy().into_owned());
-    let started = Process::start_with(process, Some(deadline), cancel);
-    let _ = std::fs::remove_file(&path);
-    started.map_err(|error| harness(&error.to_string()))
+impl Launch {
+    pub(crate) fn start(
+        &self,
+        timeout: Duration,
+        model: Option<&str>,
+        cancel: &Receiver<()>,
+    ) -> Result<Process, Error> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| harness("deepseek adapter: start timeout is out of range"))?;
+        let mut process = self.process.clone();
+        if let Some(model) = model {
+            process.initialize.model = model.into();
+        }
+        let patch = self
+            .patch
+            .as_ref()
+            .map(|patch| {
+                write_patch(patch, |_, file, bytes| file.write_all(bytes)).map_err(Error::harness)
+            })
+            .transpose()?;
+        if let Some(path) = &patch {
+            process.args.push("--patch".into());
+            process.args.push(path.to_string_lossy().into_owned());
+        }
+        let started = Process::start_classified(process, Some(deadline), cancel);
+        if let Some(path) = patch {
+            let _ = std::fs::remove_file(path);
+        }
+        started.map_err(|failure| match model {
+            Some(model) if failure.remote => Error::ModelNotFound(model.into()),
+            _ => Error::harness(failure.rpc),
+        })
+    }
 }
 
 fn write_patch(

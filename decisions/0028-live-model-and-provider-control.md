@@ -65,6 +65,23 @@ anchor its snapshot to the switch, rather than inventing a run position for a
 command that created no run. The existing `{run_id, sequence}` anchor remains
 for model-affecting run events. The two forms are exclusive.
 
+### A runtime that fixes its model when it starts
+
+An endpoint whose runtime takes its model once, at start, may implement the
+switch by restarting that session's own runtime on the new model, and it
+advertises `session.model.switch` as `emulated`. It may do so only while the
+session has run nothing: no run is active, queued or finished. The new runtime
+carries every open-time setting over unchanged, and the old one is shut down
+only after the new one has started.
+
+Once the session has run, a switch to a different model is refused as
+`unsupported_feature` with `details.reason: "unsatisfiable"`, because the
+history belongs to the old model; a switch to the current model stays an
+idempotent success. A model id the restarted runtime rejects is
+`model_not_found` with `details.model_id`, and the session keeps its previous
+runtime and model. Any other failure to start the runtime is reported as
+itself. The DeepSeek Harness adapter is the first endpoint to do this.
+
 ## Optional: `session.provider.attach`
 
 An endpoint advertises `action.providers.attach` with the `session_live` mode

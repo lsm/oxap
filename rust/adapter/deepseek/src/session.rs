@@ -1,10 +1,11 @@
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use crossbeam_channel::{select, Receiver};
 use futures_channel::oneshot;
 use oxap_adapter::journal::{Journal, Reservation};
 use oxap_adapter::{
-    BoxFuture, Error, EventStream, InteractionResolution, Recovery, ResumeRequest,
+    BoxFuture, Error, EventStream, InteractionResolution, ModelSwitcher, Recovery, ResumeRequest,
     Session as SessionContract, SubmitRequest,
 };
 use oxap_protocol::{
@@ -12,11 +13,12 @@ use oxap_protocol::{
     Envelope, EnvelopeId, EnvelopeType, Message, MessageId, MessageRole, MessageSubmitRequest,
     MessageSubmitResponse, ProtocolError, RequestedDeliveryMode, RunCancelResponse,
     RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus, SessionId,
-    SessionState, SessionStatus, SubmissionId, ToolCallId, Usage, SETTLED_BY_INFERRED,
+    SessionModelSwitchRequest, SessionModelSwitchResponse, SessionState, SessionStatus,
+    SubmissionId, ToolCallId, Usage, FEATURE_SESSION_MODEL_SWITCH, SETTLED_BY_INFERRED,
 };
 use serde_json::value::RawValue;
 
-use crate::adapter::ENDPOINT_ID;
+use crate::adapter::{unsatisfiable, Launch, ENDPOINT_ID};
 use crate::admission::{Admission, Candidate};
 use crate::content::{final_content, stream_parts};
 use crate::native::{
@@ -26,7 +28,7 @@ use crate::native::{
 };
 use crate::process::Process;
 use crate::prompt::native_prompt;
-use crate::rpc::{Inbound, NotificationMessage};
+use crate::rpc::{Inbound, NotificationMessage, RpcClient};
 use crate::runtime::Runtime;
 
 pub struct Session {
@@ -35,10 +37,13 @@ pub struct Session {
 
 struct Shared {
     prompting: Mutex<()>,
+    reducing: Mutex<()>,
     inner: Mutex<Inner>,
     journal: Journal,
     native_id: String,
     runtime: Runtime,
+    launch: Launch,
+    start_timeout: Duration,
 }
 
 struct Inner {
@@ -46,6 +51,7 @@ struct Inner {
     state: SessionState,
     unusable: bool,
     run: Option<Run>,
+    has_run: bool,
     last_seq: Option<i64>,
     children: Vec<Child>,
 }
@@ -114,9 +120,10 @@ impl Session {
         state: SessionState,
         journal_capacity: usize,
         runtime: Runtime,
+        launch: Launch,
+        start_timeout: Duration,
     ) -> Self {
-        let inbound = process.client.inbound();
-        let done = process.client.done();
+        let client = process.client.clone();
         let shared = Arc::new(Shared {
             native_id: state.session_id.as_str().into(),
             inner: Mutex::new(Inner {
@@ -124,15 +131,18 @@ impl Session {
                 state,
                 unusable: false,
                 run: None,
+                has_run: false,
                 last_seq: None,
                 children: Vec::new(),
             }),
             journal: Journal::new(journal_capacity),
             runtime,
             prompting: Mutex::new(()),
+            reducing: Mutex::new(()),
+            launch,
+            start_timeout,
         });
-        let reader = shared.clone();
-        std::thread::spawn(move || reader.dispatch(&inbound, &done));
+        shared.read(client);
         Self { shared }
     }
 
@@ -314,6 +324,10 @@ impl SessionContract for Session {
         Box::pin(async move { Session::state(self) })
     }
 
+    fn model_switcher(&self) -> Option<&dyn ModelSwitcher> {
+        Some(self)
+    }
+
     fn resolve(&self, resolution: InteractionResolution) -> BoxFuture<'_, ()> {
         Box::pin(async move { Session::resolve(self, resolution) })
     }
@@ -335,13 +349,98 @@ impl SessionContract for Session {
     }
 }
 
+impl ModelSwitcher for Session {
+    fn switch_model(
+        &self,
+        request: SessionModelSwitchRequest,
+    ) -> BoxFuture<'_, (SessionModelSwitchResponse, SessionState)> {
+        let shared = self.shared.clone();
+        Box::pin(async move {
+            let (cancel, cancelled) = crossbeam_channel::bounded::<()>(0);
+            let (reply, replied) = oneshot::channel();
+            std::thread::spawn(move || {
+                let _ = reply.send(shared.switch_model(request, &cancelled));
+            });
+            let result = replied.await.unwrap_or(Err(Error::SessionClosed));
+            drop(cancel);
+            result
+        })
+    }
+}
+
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.shut_down(self.shared.lock());
     }
 }
 
+fn model_switch_response(
+    previous_model_id: String,
+    state: SessionState,
+) -> (SessionModelSwitchResponse, SessionState) {
+    (
+        SessionModelSwitchResponse {
+            session_id: state.session_id.clone(),
+            model_id: state.current_model_id.clone(),
+            previous_model_id,
+        },
+        state,
+    )
+}
+
 impl Shared {
+    fn switch_model(
+        self: &Arc<Self>,
+        request: SessionModelSwitchRequest,
+        cancel: &Receiver<()>,
+    ) -> Result<(SessionModelSwitchResponse, SessionState), Error> {
+        let _prompting = hold(&self.prompting);
+        let reducing = hold(&self.reducing);
+        let previous = {
+            let inner = self.lock();
+            if inner.process.is_none() || inner.unusable {
+                return Err(Error::SessionClosed);
+            }
+            if request.session_id != inner.state.session_id || request.model_id.is_empty() {
+                return Err(Error::InvalidSubmission);
+            }
+            let previous = inner.state.current_model_id.clone();
+            if request.model_id == previous {
+                return Ok(model_switch_response(previous, inner.state.clone()));
+            }
+            if inner.has_run {
+                return Err(unsatisfiable(
+                    FEATURE_SESSION_MODEL_SWITCH,
+                    "model_id",
+                    "the runtime freezes its model at initialize, so a session that has run cannot change it",
+                ));
+            }
+            previous
+        };
+        let process = self
+            .launch
+            .start(self.start_timeout, Some(&request.model_id), cancel)?;
+        let client = process.client.clone();
+        let (old, state) = {
+            let mut inner = self.lock();
+            if inner.process.is_none()
+                || inner.unusable
+                || cancel.try_recv() == Err(crossbeam_channel::TryRecvError::Disconnected)
+            {
+                return Err(Error::SessionClosed);
+            }
+            let old = inner.process.replace(process);
+            inner.last_seq = None;
+            inner.state.current_model_id = request.model_id;
+            inner.state.updated_at_ms = self.runtime.now_ms();
+            (old, inner.state.clone())
+        };
+        self.read(client);
+        drop(reducing);
+        drop(old);
+        Ok(model_switch_response(previous, state))
+    }
+
     fn prompted(&self, request: MessageSubmitRequest, gate: &Arc<Gate>) -> Result<Prompted, Error> {
         let runtime = &self.runtime;
         let (blocks, message_ids) = native_prompt(&request, &|kind| runtime.new_id(kind))?;
@@ -361,6 +460,7 @@ impl Shared {
             if !gate.advance(Phase::Waiting, Phase::Sent) {
                 return Err(Error::SessionClosed);
             }
+            inner.has_run = true;
             let (start, started) = oneshot::channel();
             let stream = Arc::new(Mutex::new(self.journal.reserve()));
             inner.run = Some(Run {
@@ -473,21 +573,38 @@ impl Shared {
         hold(&self.inner)
     }
 
+    fn read(self: &Arc<Self>, client: RpcClient) {
+        let reader = self.clone();
+        std::thread::spawn(move || reader.dispatch(&client.inbound(), &client.done()));
+    }
+
     fn dispatch(&self, inbound: &Receiver<Inbound>, done: &Receiver<()>) {
+        let reduce = |message| {
+            let _reducing = hold(&self.reducing);
+            let mut inner = self.lock();
+            if !inner.owns_reader(done) {
+                return false;
+            }
+            self.reduce(&mut inner, message);
+            true
+        };
         loop {
             select! {
                 recv(inbound) -> message => match message {
-                    Ok(message) => self.reduce(message),
+                    Ok(message) => { if !reduce(message) { return; } }
                     Err(_) => break,
                 },
                 recv(done) -> _ => break,
             }
         }
         while let Ok(message) = inbound.try_recv() {
-            self.reduce(message);
+            if !reduce(message) {
+                return;
+            }
         }
+        let _reducing = hold(&self.reducing);
         let mut inner = self.lock();
-        if let Some(process) = &inner.process {
+        if let Some(process) = inner.process.as_ref().filter(|_| inner.owns_reader(done)) {
             let reason = process.client.err().unwrap_or_else(|| "<nil>".into());
             inner.unusable = true;
             self.fail_settled(
@@ -498,29 +615,27 @@ impl Shared {
         }
     }
 
-    fn reduce(&self, message: Inbound) {
+    fn reduce(&self, inner: &mut Inner, message: Inbound) {
         match message {
             Inbound::Barrier(ack) => drop(ack),
             Inbound::Request(_) => {
-                let mut inner = self.lock();
                 inner.unusable = true;
-                self.fail(&mut inner, (EXTERNAL, "reverse request"));
+                self.fail(inner, (EXTERNAL, "reverse request"));
             }
-            Inbound::Notification(notification) => self.apply_notification(&notification),
+            Inbound::Notification(notification) => self.apply_notification(inner, &notification),
         }
     }
 
-    fn apply_notification(&self, notification: &NotificationMessage) {
+    fn apply_notification(&self, inner: &mut Inner, notification: &NotificationMessage) {
         let params = notification.params.as_ref().map_or("", |raw| raw.get());
         let decoded = decode_notification(&notification.method, params.as_bytes()).ok();
-        let mut inner = self.lock();
         let after = inner.last_seq;
         if let Some(run) = inner.run.as_mut() {
             let Some(decoded) = decoded else { return };
             if !run.started {
                 run.buffered.push((decoded.clone(), after));
             }
-            return self.apply_native(&mut inner, &decoded);
+            return self.apply_native(inner, &decoded);
         }
         if let (false, Some(Notification::SessionStatus(status))) = (inner.unusable, &decoded) {
             if status.session_id == self.native_id {
@@ -1070,6 +1185,14 @@ impl Shared {
         if let Some(run) = inner.run.take_if(|run| run.owns(stream)) {
             run.end(error);
         }
+    }
+}
+
+impl Inner {
+    fn owns_reader(&self, done: &Receiver<()>) -> bool {
+        self.process
+            .as_ref()
+            .is_some_and(|process| process.client.done().same_channel(done))
     }
 }
 

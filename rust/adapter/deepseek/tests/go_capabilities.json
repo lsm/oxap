@@ -77,6 +77,10 @@
       "level": "degraded",
       "reason": "receipt plus entered direct-user message proves start"
     },
+    "session.model.switch": {
+      "level": "emulated",
+      "reason": "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused"
+    },
     "session.open": {
       "level": "emulated",
       "reason": "one process and native session per OAP session"
