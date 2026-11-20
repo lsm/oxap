@@ -823,6 +823,10 @@ func (s *Session) blocksContent(blocks []native.ContentBlock, run *runState) (pr
 	return protocol.PartsContent(parts), nil
 }
 
+func (s *Session) NativeSessionID() string {
+	return s.nativeID
+}
+
 func (s *Session) State(ctx context.Context) (protocol.SessionState, error) {
 	if err := ctx.Err(); err != nil {
 		return protocol.SessionState{}, err
