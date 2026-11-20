@@ -882,3 +882,96 @@ test "a harness that dies mid-run fails the run with its exit and closes the ses
     try testing.expectEqualStrings("child exited with status 4", failure.get("message").?.string);
     try testing.expectError(error.SessionClosed, probe.handle.?.state(probe.arena.allocator(), &refusal));
 }
+
+const fake_switching =
+    \\#!/bin/sh
+    \\exec 3>>"$(dirname "$0")/stdin.log"
+    \\for arg in "$@"; do [ -f "$arg" ] && cat "$arg" >>"$(dirname "$0")/patch.log"; done
+    \\take() { IFS= read -r line || exit 0; printf '%s\n' "$line" >&3; }
+    \\take
+    \\case "$line" in
+    \\  *'"model":"nope"'*) printf '{"id":1,"jsonrpc":"2.0","error":{"code":-32000,"message":"no such model"}}\n'; while take; do :; done; exit 0 ;;
+    \\  *'"model":"broken"'*) exit 3 ;;
+    \\esac
+    \\printf '{"id":1,"jsonrpc":"2.0","result":{"serverInfo":{"name":"deepseek-harness-sdk-runtime","version":"0.0.1"}}}\n'
+    \\
+;
+
+fn switchTo(probe: *Probe, model: []const u8, refusal: *contract.Refusal) contract.Failure!contract.Switched {
+    const request = oap_types.SessionModelSwitchRequest{ .session_id = "s1", .model_id = model };
+    return probe.handle.?.vtable.switch_model.?(probe.handle.?.ptr, probe.arena.allocator(), &request, refusal);
+}
+
+fn initializes(written: []const u8) usize {
+    return std.mem.count(u8, written, "\"method\":\"initialize\"");
+}
+
+test "a switch before the first run restarts the runtime on the new model with the open-time settings" {
+    var probe: Probe = undefined;
+    try probe.init(fake_switching ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    probe.handle = try probe.adapter.adapter().open(probe.arena.allocator(), .{ .session_id = "s1", .participant = "user", .reasoning_level = "high", .compaction_policy_json = "{\"kind\":\"share\",\"share_percent\":70}" }, &refusal);
+    const switched = try switchTo(&probe, "other", &refusal);
+    try testing.expectEqualStrings("other", switched.response.model_id);
+    try testing.expectEqualStrings("deepseek-chat", switched.response.previous_model_id.?);
+    try testing.expectEqualStrings("other", switched.state.current_model_id.?);
+    const written = try probe.fake.written(probe.arena.allocator());
+    try testing.expectEqual(@as(usize, 2), initializes(written));
+    try testing.expect(std.mem.indexOf(u8, written, "\"model\":\"deepseek-chat\",\"reasoningEffort\":\"high\"}") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "\"model\":\"other\",\"reasoningEffort\":\"high\"}") != null);
+    try testing.expect(std.mem.indexOf(u8, written, "shutdown answered\n") != null);
+    const patch = try probe.fake.tmp.dir.readFileAlloc(testing.io, "patch.log", probe.arena.allocator(), .limited(4096));
+    const layer = "- id: compaction-basic\n  config:\n    thresholdRatio: 0.7\n";
+    try testing.expectEqualStrings(layer ++ layer, patch);
+    const current = try probe.handle.?.state(probe.arena.allocator(), &refusal);
+    try testing.expectEqualStrings("other", current.current_model_id.?);
+    try testing.expectEqual(oap_types.SessionStatus.idle, current.status);
+    const again = try switchTo(&probe, "other", &refusal);
+    try testing.expectEqualStrings("other", again.response.previous_model_id.?);
+    try testing.expectEqual(@as(usize, 2), initializes(try probe.fake.written(probe.arena.allocator())));
+}
+
+test "a switch after a run is refused as unsatisfiable and keeps the runtime" {
+    var probe: Probe = undefined;
+    try probe.init(fake_prelude ++ fake_text_turn ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    _ = try probe.open(&refusal);
+    _ = try probe.submit("hello", &refusal);
+    var seen = std.ArrayList(contract.Event).empty;
+    _ = try probe.pumpUntil("run.completed", &seen);
+    try testing.expectError(error.UnsupportedFeature, switchTo(&probe, "other", &refusal));
+    try testing.expectEqualStrings(contract.feature_model_switch, refusal.feature);
+    try testing.expectEqualStrings(contract.reason_unsatisfiable, refusal.reason);
+    try testing.expectEqualStrings("model_id", refusal.field);
+    try testing.expectEqual(@as(usize, 1), initializes(try probe.fake.written(probe.arena.allocator())));
+}
+
+test "a switch to a model the runtime rejects is model_not_found and keeps the session on its runtime" {
+    var probe: Probe = undefined;
+    try probe.init(fake_switching ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    _ = try probe.open(&refusal);
+    try testing.expectError(error.ModelNotFound, switchTo(&probe, "nope", &refusal));
+    try testing.expectEqualStrings("nope", refusal.model_id);
+    const current = try probe.handle.?.state(probe.arena.allocator(), &refusal);
+    try testing.expectEqualStrings("deepseek-chat", current.current_model_id.?);
+    try testing.expect(std.mem.indexOf(u8, try probe.fake.written(probe.arena.allocator()), "shutdown answered") == null);
+}
+
+test "a switch that cannot start a runtime is not model_not_found" {
+    var probe: Probe = undefined;
+    try probe.init(fake_switching ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    _ = try probe.open(&refusal);
+    try testing.expectError(error.BackendFailed, switchTo(&probe, "broken", &refusal));
+    const current = try probe.handle.?.state(probe.arena.allocator(), &refusal);
+    try testing.expectEqualStrings("deepseek-chat", current.current_model_id.?);
+}
+
+test "the descriptor offers the model switch only as an emulation" {
+    try testing.expectEqual(oap_types.SupportLevel.emulated, descriptor.level(contract.feature_model_switch));
+}
