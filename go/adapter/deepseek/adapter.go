@@ -90,6 +90,10 @@ type Adapter struct {
 	process *rpc.ProcessConfig
 }
 
+func (a *Adapter) NativeLink(nativeID string) string {
+	return "deepseek://sessions/" + nativeID
+}
+
 func New(config Config) (*Adapter, error) {
 	if config.Factory == nil && config.ProcessFactory == nil && config.Executable == "" {
 		return nil, errors.New("deepseek adapter: factory or executable is required")
