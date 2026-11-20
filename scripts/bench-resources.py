@@ -309,10 +309,10 @@ def scenario_parked(agents, n, steps, seconds):
 
 
 def scenario_wake(agents, n, steps, seconds):
-    def turn(session, text):
-        agents.submit(session, text)
-        agents.settle(session)
     runs = scenario_parked(agents, n, [], seconds)
+    def turn(session, text):
+        runs[session] = agents.submit(session, text)["payload"]["run_id"]
+        agents.settle(session)
     for i in range(n):
         timed(steps, turn, f"s{i}", f"wake of agent {i}")
     park_all(agents, n, runs, seconds)
