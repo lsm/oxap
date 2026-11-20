@@ -2,6 +2,7 @@ package deepseek
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	base "github.com/lsm/oxap/go/adapter"
+	"github.com/lsm/oxap/go/adapter/deepseek/internal/native"
 	"github.com/lsm/oxap/go/adapter/deepseek/internal/rpc"
 	"github.com/lsm/oxap/go/protocol"
 )
@@ -103,18 +105,38 @@ func TestASwitchBeforeTheFirstRunRestartsTheRuntimeOnTheNewModel(t *testing.T) {
 	}
 }
 
-func TestASwitchAfterARunIsRefusedAndKeepsTheRuntime(t *testing.T) {
-	runtimes := &startedRuntimes{}
-	session := openOnRuntimes(t, runtimes, base.OpenRequest{})
-	admission(t, session, runtimes.clients[0], "m1")
+func assertSwitchRefused(t *testing.T, session base.Session, runtimes *startedRuntimes, when string) {
+	t.Helper()
 	_, _, err := switchTo(t, session, "other")
 	var refusal *base.UnsupportedControlError
 	if !errors.As(err, &refusal) || refusal.Feature != protocol.FeatureSessionModelSwitch || refusal.Reason != base.ControlUnsatisfiable || refusal.Field != "model_id" {
-		t.Fatalf("switch after a run answered %v, want an unsatisfiable model_id refusal", err)
+		t.Fatalf("switch %s answered %v, want an unsatisfiable model_id refusal", when, err)
 	}
 	if runtimes.started() != 1 {
-		t.Fatalf("the refusal started %d runtimes, want none", runtimes.started())
+		t.Fatalf("the refusal %s started %d runtimes, want none", when, runtimes.started())
 	}
+}
+
+func TestASwitchIsRefusedWhileARunIsActiveAndAfterItFinishes(t *testing.T) {
+	runtimes := &startedRuntimes{}
+	session := openOnRuntimes(t, runtimes, base.OpenRequest{})
+	client := runtimes.clients[0]
+	response, stream := admission(t, session, client, "m1")
+	assertSwitchRefused(t, session, runtimes, "while the run is active")
+
+	client.ev(5, "assistant/message", assistantMessage(1, 1, "a", []native.ContentBlock{{Type: "text", Text: "hi"}}, native.MessageSource{Kind: "model", Provider: "deepseek", Model: "chat"}, `[{"type":"chunk","time":5,"chunk":{"type":"text-delta","index":0,"text":"hi"}}]`, &native.TokenUsage{InputTokens: 2, OutputTokens: 1}))
+	client.ev(7, "step/end", native.StepBoundary{Turn: 1, Step: 1})
+	client.ev(8, "turn/end", native.TurnEnd{Turn: 1, Reason: json.RawMessage(`{"kind":"completed"}`)})
+	client.notify(&native.SessionStatusNotification{SessionID: "session", Status: "idle"})
+	events := drain(t, stream)
+	if last := events[len(events)-1]; last.Type != protocol.TypeRunCompleted {
+		t.Fatalf("the run ended with %s, want run.completed", last.Type)
+	}
+	current, err := session.State(context.Background())
+	if err != nil || current.Status != protocol.SessionIdle || response.RunID == "" {
+		t.Fatalf("state %+v, err %v, run %q, want an idle session after a finished run", current, err, response.RunID)
+	}
+	assertSwitchRefused(t, session, runtimes, "after the run finished")
 }
 
 func TestASwitchToAModelTheRuntimeRejectsIsModelNotFoundAndKeepsTheSession(t *testing.T) {
