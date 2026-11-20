@@ -125,7 +125,8 @@ printf '%s\n' "$line" >> "{dir}/wire"
 id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
 case "$line" in
 *'"method":"initialize"'*'"model":"nope"'*) printf '{{"jsonrpc":"2.0","id":%s,"error":{{"code":-32000,"message":"no such model"}}}}\n' "$id"; exit 0 ;;
-*'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{info}}}\n' "$id" ;;
+*'"method":"initialize"'*'"model":"late"'*) old=$(cat "{dir}/pid"); kill "$old"; n=0; while kill -0 "$old" 2>/dev/null && [ $n -lt 100 ]; do sleep 0.01; n=$((n+1)); done; sleep 0.2; printf '{{"jsonrpc":"2.0","id":%s,"result":{info}}}\n' "$id" ;;
+*'"method":"initialize"'*) printf '%s' "$$" > "{dir}/pid"; printf '{{"jsonrpc":"2.0","id":%s,"result":{info}}}\n' "$id" ;;
 *'"method":"session/prompt"'*)
 {on_prompt};;
 *'"method":"shutdown"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id"; exit 0 ;;
@@ -1310,6 +1311,21 @@ fn a_switch_to_a_model_rejected_by_initialize_leaves_the_old_runtime_running() {
     assert_eq!(submit(&session, hello("s")).unwrap().0.model_id, "m");
     let wire = fixture.wire();
     assert_eq!(wire[1]["params"]["model"], "nope");
+    assert_eq!(wire[2]["method"], "session/prompt");
+}
+
+#[test]
+fn a_switch_survives_the_old_runtime_exiting_while_the_new_one_starts() {
+    let fixture = Fixture::new();
+    let session = fixture.open(&(receipt() + &proof()));
+    let switcher = session.model_switcher().expect("DeepSeek model switcher");
+    let (response, _) =
+        futures::executor::block_on(switcher.switch_model(switch_request("s", "late"))).unwrap();
+    assert_eq!(response.model_id, "late");
+    assert_eq!(session.state().unwrap().current_model_id, "late");
+    assert_eq!(submit(&session, hello("s")).unwrap().0.model_id, "late");
+    let wire = fixture.wire();
+    assert_eq!(wire[1]["params"]["model"], "late");
     assert_eq!(wire[2]["method"], "session/prompt");
 }
 
