@@ -117,6 +117,7 @@ pub fn parse(frame: &[u8]) -> Result<Message, WireError> {
 #[derive(Clone, Debug, Default)]
 pub struct Event {
     pub session_id: String,
+    pub agent_id: String,
     pub kind: String,
     pub ephemeral: bool,
     pub data: Object,
@@ -150,6 +151,7 @@ pub fn decode_event(message: &Message) -> Result<Option<Event>, WireError> {
         .unwrap_or_default();
     Ok(Some(Event {
         session_id,
+        agent_id: text(&event, "agentId"),
         kind,
         ephemeral,
         data,

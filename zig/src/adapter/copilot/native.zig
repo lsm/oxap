@@ -124,6 +124,7 @@ pub const EventType = enum {
 
 pub const Event = struct {
     session_id: []const u8,
+    agent_id: []const u8 = "",
     type_name: []const u8,
     kind: ?EventType,
     ephemeral: bool,
@@ -144,6 +145,7 @@ pub fn decodeEvent(message: Message) Error!?Event {
     const ephemeral = event.object.get("ephemeral");
     return .{
         .session_id = session_id,
+        .agent_id = text(event.object, "agentId"),
         .type_name = type_name,
         .kind = EventType.parse(type_name),
         .ephemeral = ephemeral != null and ephemeral.? == .bool and ephemeral.?.bool,
@@ -163,7 +165,7 @@ test "a response, a failure, a notification and a request each parse as what the
     defer arena.deinit();
     const scratch = arena.allocator();
 
-    const pong = try parseMessage(scratch, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"version\":\"" ++ harness_pins.copilot_cli_endpoint_version ++ "\",\"protocolVersion\":3}}");
+    const pong = try parseMessage(scratch, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"version\":\"" ++ harness_pins.copilot_cli_endpoint_version ++ "\",\"protocolVersion\":4}}");
     try testing.expectEqual(Kind.response, pong.kind);
     try testing.expectEqual(@as(i64, 1), pong.id.?.integer);
     try testing.expectEqualStrings(harness_pins.copilot_cli_endpoint_version, text(pong.result.?.object, "version"));

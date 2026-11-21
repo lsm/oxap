@@ -129,8 +129,8 @@ func (a *Adapter) Open(ctx context.Context, request base.OpenRequest) (base.Sess
 	if err := call("ping", map[string]any{}, &pong); err != nil {
 		return nil, err
 	}
-	if pong.ProtocolVersion != 3 {
-		return nil, errors.New("copilot: server does not speak pinned protocol 3")
+	if pong.ProtocolVersion != 4 {
+		return nil, errors.New("copilot: server does not speak pinned protocol 4")
 	}
 	var status struct {
 		Version string `json:"version"`

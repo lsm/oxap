@@ -31,9 +31,9 @@ while True:
     message = read()
     method = message.get("method")
     if method == "ping":
-        reply(message, {"protocolVersion": 3})
+        reply(message, {"protocolVersion": 4})
     elif method == "status.get":
-        reply(message, {"version": "1.0.109"})
+        reply(message, {"version": "1.0.114"})
     elif method == "session.create":
         reply(message, {"sessionId": "ses"})
     elif method == "session.send":
