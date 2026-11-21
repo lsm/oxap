@@ -244,7 +244,7 @@ start and how it authenticates.
 | `oapx` | oxap's own loop, as the terminal UI builds it | — |
 | `claude` | a Claude Code child | 2.1.322 |
 | `codex` | a Codex app-server child | `rust-v0.167.2` |
-| `pi` | a Pi RPC child | `v1.5.2` |
+| `pi` | a Pi RPC child | `v1.6.0` |
 | `acp` | an ACP v1 agent named by a `--config` entry | `v1.17.0` |
 | `hermes` | a Hermes gateway | `v0.23.1` |
 | `deepseek` | a DeepSeek harness | `dsh-v0.2.2-rc.5` (release candidate) |
@@ -345,7 +345,7 @@ available only by explicit opt-in.
 
 `oxap serve agent --backend claude` serves a Claude Code child (pinned 2.1.322),
 `--backend codex` a Codex app-server child (pinned `rust-v0.167.2`), `--backend pi` a
-Pi RPC child (pinned `v1.5.2`), an `acp`
+Pi RPC child (pinned `v1.6.0`), an `acp`
 entry an ACP v1 agent (pinned `v1.17.0`), a `hermes` entry a Hermes gateway (pinned `v0.23.1`), a `deepseek` entry a DeepSeek harness (pinned release candidate `dsh-v0.2.2-rc.5`), and an `opencode` entry an OpenCode server (pinned `v2.2.7`), behind the same stdio door instead of the built-in loop, following
 [the endpoint binding](drafts/endpoint-stdio.md). Without `--config` it runs
 `claude` from `PATH` with only `HOME` and `PATH` in its environment and the
@@ -1114,7 +1114,7 @@ Research:
 - [Pinned Codex app-server mapping](research/codex-app-server-0.167.2-mapping.md), over the [0.167.0](research/codex-app-server-0.167.0-mapping.md), [0.163.0](research/codex-app-server-0.163.0-mapping.md), [0.162.1](research/codex-app-server-0.162.1-mapping.md), [0.160.1](research/codex-app-server-0.160.1-mapping.md), [0.160.0](research/codex-app-server-0.160.0-mapping.md), [0.157.0](research/codex-app-server-0.157.0-mapping.md) and [8d7cc24 base](research/codex-app-server-8d7cc24-mapping.md) mappings
 - [Pinned OpenCode server mapping](research/opencode-v2.2.7-mapping.md), over the [v2.2.6](research/opencode-v2.2.6-mapping.md) and [v2.0.24 mappings](research/opencode-v2.0.24-mapping.md)
 - [Pinned ACP v1 and Devin Desktop mapping](research/acp-v1.17.0-mapping.md), over the [v1.15.1](research/acp-v1.15.1-mapping.md), [v1.11.0](research/acp-v1.11.0-mapping.md), [v1.10.2](research/acp-v1.10.2-mapping.md) and [v1.7.0 base mapping](research/acp-v1.7.0-mapping.md)
-- [Pinned Pi coding-agent mapping](research/pi-v1.5.2-mapping.md), over the [v1.5.0](research/pi-v1.5.0-mapping.md), [v1.3.0](research/pi-v1.3.0-mapping.md), [v1.1.0](research/pi-v1.1.0-mapping.md), [v1.0.4](research/pi-v1.0.4-mapping.md), [v1.0.1](research/pi-v1.0.1-mapping.md), [v0.87.1](research/pi-v0.87.1-mapping.md) and [v0.85.1 base](research/pi-v0.85.1-mapping.md) mappings
+- [Pinned Pi coding-agent mapping](research/pi-v1.6.0-mapping.md), over the [v1.5.2](research/pi-v1.5.2-mapping.md), [v1.5.0](research/pi-v1.5.0-mapping.md), [v1.3.0](research/pi-v1.3.0-mapping.md), [v1.1.0](research/pi-v1.1.0-mapping.md), [v1.0.4](research/pi-v1.0.4-mapping.md), [v1.0.1](research/pi-v1.0.1-mapping.md), [v0.87.1](research/pi-v0.87.1-mapping.md) and [v0.85.1 base](research/pi-v0.85.1-mapping.md) mappings
 - [Pinned DeepSeek Harness release-candidate mapping](research/deepseek-harness-dsh-v0.2.2-rc.5-mapping.md), over [dsh-v0.2.2-rc.2](research/deepseek-harness-dsh-v0.2.2-rc.2-mapping.md), [dsh-v0.2.2-rc.1](research/deepseek-harness-dsh-v0.2.2-rc.1-mapping.md), [dsh-v0.2.1-rc.2](research/deepseek-harness-dsh-v0.2.1-rc.2-mapping.md), the [dsh-v0.2.1-alpha.2](research/deepseek-harness-dsh-v0.2.1-alpha.2-mapping.md), [dsh-v0.1.7-rc.2](research/deepseek-harness-dsh-v0.1.7-rc.2-mapping.md) and [47f9438 base](research/deepseek-harness-47f9438-mapping.md) mappings
 - [Pinned Hermes agent mapping](research/hermes-v0.23.1-mapping.md), over the [v0.22.2](research/hermes-v0.22.2-mapping.md), [v0.21.6](research/hermes-v0.21.6-mapping.md), [v2026.9.24](research/hermes-v2026.9.24-mapping.md) and [v2026.8.31 base](research/hermes-v2026.8.31-mapping.md) mappings
 - [Pinned Claude Code CLI and Agent SDK mapping](research/claude-code-agent-sdk-2.1.322-mapping.md), over the [2.1.319](research/claude-code-agent-sdk-2.1.319-mapping.md), [2.1.302](research/claude-code-agent-sdk-2.1.302-mapping.md), [2.1.296](research/claude-code-agent-sdk-2.1.296-mapping.md), [2.1.288](research/claude-code-agent-sdk-2.1.288-mapping.md), [2.1.282](research/claude-code-agent-sdk-2.1.282-mapping.md) and [2.1.280](research/claude-code-agent-sdk-2.1.280-mapping.md) mappings and the [2.1.263 base mapping](research/claude-code-agent-sdk-2.1.263-mapping.md)
@@ -1235,7 +1235,7 @@ not survive. The loopback gate also verifies conversation history survives a
 new process, and `OAP_PI_CAPTURE_DIR` optionally records its native exchange.
 
 Pi real-process checks are also explicitly opt-in and skipped by ordinary CI.
-Provide an absolute Pi v1.5.2 executable in `OAP_PI_BIN`, then set
+Provide an absolute Pi v1.6.0 executable in `OAP_PI_BIN`, then set
 `OAP_PI_SMOKE=1` for the credential-free readiness check or
 `OAP_PI_INTEGRATION=1` for the loopback-provider path. The executable's reported
 semver is runtime-version evidence only; it does not prove the source commit.
