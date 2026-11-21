@@ -21,17 +21,18 @@ import (
 	"github.com/lsm/oxap/go/adapter/opencode/internal/httpapi"
 	"github.com/lsm/oxap/go/adapter/opencode/internal/native"
 	"github.com/lsm/oxap/go/protocol"
+	"github.com/lsm/oxap/harnesses"
 )
 
 var opencodeCommitTree = pin.Source("opencode").Tree
 
 const (
-	opencodeSessionEvent  = "51608b6cf620a426b3f7f62ee6c0506eea2bc35e"
+	opencodeSessionEvent  = "ee3a2393f757623e53e82a6a3be51d13b547e319"
 	opencodeSessionInput  = "16e900189369130b6ed690b82866fc09f1006c81"
-	opencodeDeliveryBlob  = "ce11a7a0f97dc235bcd351eca3e60ebc02a02588"
-	opencodeSessionGroup  = "b0f8be8dc5cbcff5ab4da664ef009315f9caf41a"
+	opencodeDeliveryBlob  = "5e99b7ee54c8e1ee39bfd720fe810c18dacfb592"
+	opencodeSessionGroup  = "1ac6b5bb460ac443f6f4c214129c0f212764581a"
 	opencodeServerHandler = "6092f5f19e602c21c181409407ea484ce1d57829"
-	opencodeCoreSession   = "76b2b7b279e79d7c8280f3ca73b31d9c714a7149"
+	opencodeCoreSession   = "e0be028543e783bd3ec0d90cc7c1570de74e905e"
 )
 
 var opencodeLedgerFixtures = map[string]bool{
@@ -109,9 +110,19 @@ type opencodeCorpusOmission struct {
 }
 
 func TestOpenCodeEvidenceCorpus(t *testing.T) {
-	root := opencodeCorpusRoot(t)
+	runOpenCodeCorpus(t, opencodeCorpusRoot(t), pin, false)
+}
+
+func TestOpenCodeEvidenceFloor(t *testing.T) {
+	floor := harnesses.Versioned("opencode", "floor")
+	root := filepath.Join(filepath.Dir(opencodeCorpusRoot(t)), filepath.Base(floor.Corpus))
+	runOpenCodeCorpus(t, root, floor, true)
+}
+
+func runOpenCodeCorpus(t *testing.T, root string, version harnesses.Pin, floor bool) {
+	source := version.Source("opencode")
 	manifest := opencodeLoadJSON[opencodeCorpusManifest](t, filepath.Join(root, "manifest.json"))
-	if manifest.Version != 1 || manifest.Adapter != "opencode-http-sse" || manifest.Tag != PinnedTag || manifest.Commit != PinnedCommit || manifest.CommitTree != opencodeCommitTree {
+	if manifest.Version != 1 || manifest.Adapter != "opencode-http-sse" || manifest.Tag != source.Tag || manifest.Commit != source.Commit || manifest.CommitTree != source.Tree {
 		t.Fatalf("corpus provenance pin mismatch: %+v", manifest)
 	}
 	seenIDs, seenPaths, covered := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -128,7 +139,7 @@ func TestOpenCodeEvidenceCorpus(t *testing.T) {
 				covered[fixture] = true
 			}
 			seenIDs[entry.ID], seenPaths[entry.Path] = true, true
-			runOpenCodeCorpusCase(t, root, entry)
+			runOpenCodeCorpusCase(t, root, entry, source, floor)
 		})
 	}
 	for fixture := range opencodeLedgerFixtures {
@@ -139,13 +150,20 @@ func TestOpenCodeEvidenceCorpus(t *testing.T) {
 	assertOpenCodeCorpusInventory(t, root, manifest)
 }
 
-func runOpenCodeCorpusCase(t *testing.T, root string, entry opencodeCorpusCaseEntry) {
+func runOpenCodeCorpusCase(t *testing.T, root string, entry opencodeCorpusCaseEntry, source harnesses.Source, floor bool) {
 	dir := filepath.Join(root, entry.Path)
 	definition := opencodeLoadJSON[opencodeCorpusCase](t, filepath.Join(dir, "case.json"))
 	p := definition.Provenance
-	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != "https://github.com/anomalyco/opencode" || p.Tag != PinnedTag || p.Commit != PinnedCommit ||
-		p.CommitTree != opencodeCommitTree || p.SessionEvent != opencodeSessionEvent || p.SessionInput != opencodeSessionInput ||
-		p.Delivery != opencodeDeliveryBlob || p.SessionGroup != opencodeSessionGroup || p.ServerHandler != opencodeServerHandler || p.CoreSession != opencodeCoreSession ||
+	eventBlob, deliveryBlob := opencodeSessionEvent, opencodeDeliveryBlob
+	groupBlob, coreBlob := opencodeSessionGroup, opencodeCoreSession
+	if floor {
+		eventBlob = "51608b6cf620a426b3f7f62ee6c0506eea2bc35e"
+		deliveryBlob = "ce11a7a0f97dc235bcd351eca3e60ebc02a02588"
+		groupBlob = "b0f8be8dc5cbcff5ab4da664ef009315f9caf41a"
+		coreBlob = "76b2b7b279e79d7c8280f3ca73b31d9c714a7149"
+	}
+	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != "https://github.com/anomalyco/opencode" || p.Tag != source.Tag || p.Commit != source.Commit || p.CommitTree != source.Tree ||
+		p.SessionEvent != eventBlob || p.SessionInput != opencodeSessionInput || p.Delivery != deliveryBlob || p.SessionGroup != groupBlob || p.ServerHandler != opencodeServerHandler || p.CoreSession != coreBlob ||
 		len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
 		t.Fatalf("invalid case metadata: %+v", definition)
 	}

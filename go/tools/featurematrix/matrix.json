@@ -268,22 +268,22 @@
     },
     {
       "harness": "opencode",
-      "pin": "v2.2.7",
-      "capability_revision": "opencode-v2.2.7-oap-v5",
-      "corpus": "fixtures/adapters/opencode-v2.2.7",
+      "pin": "v2.3.2",
+      "capability_revision": "opencode-v2.3.2-oap-v5",
+      "corpus": "fixtures/adapters/opencode-v2.3.2",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a prompt is admitted and the run completes",
           "evidence": [
-            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.2.7/completed-text" }
+            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.3.2/completed-text" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "text parts stream as four content.delta envelopes",
           "evidence": [
-            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/text-streaming", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.2.7/text-streaming" }
+            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/text-streaming", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.3.2/text-streaming" }
           ]
         },
         {
@@ -304,7 +304,7 @@
           "column": "tool-observation",
           "claim": "call progress and completion are observed",
           "evidence": [
-            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.2.7/tool-lifecycle" }
+            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.3.2/tool-lifecycle" }
           ]
         }
       ]
