@@ -341,6 +341,10 @@ pub const Reducer = struct {
             if (children == .array and children.array.items.len > 0) self.spawned = true;
             return;
         }
+        if (std.mem.eql(u8, kind, "subAgentActivity")) {
+            if (!started and std.mem.eql(u8, native.text(params, &.{ "item", "kind" }), "started") and native.text(params, &.{ "item", "agentThreadId" }).len > 0) self.spawned = true;
+            return;
+        }
         if (!std.mem.eql(u8, kind, "commandExecution")) return;
         const id = native.text(params, &.{ "item", "id" });
         if (id.len == 0) return;
@@ -2101,7 +2105,7 @@ test "a new thread holds work until its first turn completes, and a resumed one 
     try testing.expect(!reducer.holdsWork());
 }
 
-test "a spawn that completes with a child holds the session after its turn, a spawn that never completes or names no child does not, and another thread's command does not" {
+test "a v1 spawn that completes with a child or a v2 started activity holds the session after its turn, a spawn that never completes or names no child and a v2 interaction do not, and another thread's command does not" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const spawn_started = "{\"method\":\"item/started\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-1\",\"tool\":\"spawnAgent\",\"status\":\"inProgress\",\"receiverThreadIds\":[]}}}";
@@ -2121,6 +2125,19 @@ test "a spawn that completes with a child holds the session after its turn, a sp
     try feed(&childless, "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-1\",\"tool\":\"spawnAgent\",\"status\":\"failed\",\"receiverThreadIds\":[]}}}");
     try feed(&childless, turn_completed_frame);
     try testing.expect(!childless.holdsWork());
+
+    const activity = "{{\"method\":\"item/{s}\",\"params\":{{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{{\"type\":\"subAgentActivity\",\"id\":\"spawn-2\",\"kind\":\"{s}\",\"agentThreadId\":\"{s}\",\"agentPath\":\"/root/child\"}}}}}}";
+    var activated = try running(&arena);
+    try feed(&activated, try std.fmt.allocPrint(arena.allocator(), activity, .{ "started", "started", "child-thread" }));
+    try feed(&activated, try std.fmt.allocPrint(arena.allocator(), activity, .{ "completed", "started", "child-thread" }));
+    try feed(&activated, turn_completed_frame);
+    try testing.expect(activated.holdsWork());
+
+    var interacted = try running(&arena);
+    try feed(&interacted, try std.fmt.allocPrint(arena.allocator(), activity, .{ "started", "interacted", "child-thread" }));
+    try feed(&interacted, try std.fmt.allocPrint(arena.allocator(), activity, .{ "completed", "interacted", "child-thread" }));
+    try feed(&interacted, turn_completed_frame);
+    try testing.expect(!interacted.holdsWork());
 
     var elsewhere = try running(&arena);
     try feed(&elsewhere, "{\"method\":\"item/started\",\"params\":{\"threadId\":\"other-thread\",\"turnId\":\"other-turn\",\"item\":{\"type\":\"commandExecution\",\"id\":\"other-item\",\"command\":\"sleep 9\"}}}");
