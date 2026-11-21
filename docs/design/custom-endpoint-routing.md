@@ -130,16 +130,19 @@ Per kind, `oapx` appends after the entry's own `environment`:
   beside it, plus `--provider oapx --model <model-id>` appended after the
   entry's own `args` — the flags Pi documents for deterministic selection —
   with the id taken from the required `oapx/<model-id>` `model` member and
-  malformed values refused as for OpenCode. The directory is one per entry,
-  named by the entry, stable across restarts; two routed pi entries therefore
-  never share a `models.json`. It is written once at adapter build; the
-  document is immutable while the hub runs, so every session of the entry sees
-  the same content, and a changed document builds a new adapter and rewrites
-  the file before any new session, never under running ones. The user's own
-  agent directory is never read or written for this entry — which also means
-  settings and extensions it holds do not load for a routed pi entry; that is
-  the trade-off of the only deterministic path Pi offers, recorded as an open
-  question.
+  malformed values refused as for OpenCode. The directory is content-addressed
+  — `<state>/pi/<hash of base_url, credential_env, and the model id>` — so two
+  routed pi entries with different configs never share a `models.json`, and
+  neither do two hub processes running different documents against the same
+  state directory: a different config lands in a different directory, and the
+  same config writes byte-identical content, making any rewrite idempotent.
+  The file is written atomically at adapter build (a temp file beside it, then
+  rename), so a concurrently starting session never reads a partial file; a
+  changed document builds a new adapter and writes before any new session. The
+  user's own agent directory is never read or written for this entry — which
+  also means settings and extensions it holds do not load for a routed pi
+  entry; that is the trade-off of the only deterministic path Pi offers,
+  recorded as an open question.
 - `hermes`: `OPENAI_BASE_URL=<base_url>` and `OPENAI_API_KEY=<key>`. The
   entry's `model` member must name the provider explicitly
   (`openai-api/<model-id>`), which is what binds the key to the endpoint's
@@ -192,9 +195,8 @@ Each names the entry, at startup:
   `opencode` entry that names `endpoint` gets the same refusal for the same
   reason: that path attaches to a server already running, which cannot apply
   the overlay.
-- A `pi` entry whose name is not a safe single path component (it names the
-  per-entry directory), or whose `args` already pass `--model` or
-  `--provider`: the appended selection flags must not be contradicted.
+- A `pi` entry whose `args` already pass `--model` or `--provider`: the
+  appended selection flags must not be contradicted.
 - A `deepseek` entry whose `args` contain `--patch`: a patch overlay can set
   `baseURL` and `apiKeyEnv`, which take precedence over the environment and
   would silently shadow the route (dsh config precedence, verified in the
