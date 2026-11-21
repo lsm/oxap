@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/adapters/claude-code-2.1.322")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/adapters/claude-code-2.1.330")
 }
 
 fn traces() -> Vec<PathBuf> {

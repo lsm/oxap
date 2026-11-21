@@ -2,7 +2,7 @@
 
 The Rust port of `go/adapter/claude`: an OAP adapter over Claude Code's
 stream-json control protocol on stdio, pinned by `harnesses/claude-code.json`
-and judged by the corpus in `fixtures/adapters/claude-code-2.1.322`.
+and judged by the corpus in `fixtures/adapters/claude-code-2.1.330`.
 
 `rpc` is the control-plane codec: `Decoder` and `Encoder` frame one JSON object
 per LF-terminated line at Go's 8 MiB limit, `parse_message` classifies a line as

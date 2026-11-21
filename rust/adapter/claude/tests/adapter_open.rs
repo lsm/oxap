@@ -23,12 +23,12 @@ fn a_probe_describes_the_pinned_endpoint_the_features_and_the_process_memory_jou
         "claude-code.cli"
     );
     assert_eq!(described.capabilities.endpoint.name, "Claude Code Adapter");
-    assert_eq!(described.capabilities.endpoint.version, "v2.1.322");
+    assert_eq!(described.capabilities.endpoint.version, "v2.1.330");
     assert_eq!(
         described.capabilities.endpoint.adapter,
         "claude-code-stream-json"
     );
-    assert_eq!(described.capability_revision, "claude-code-2.1.322-oap-v1");
+    assert_eq!(described.capability_revision, "claude-code-2.1.330-oap-v1");
     assert_eq!(described.capabilities.protocol_versions, ["0.1"]);
     assert_eq!(
         described.capabilities.profiles,
