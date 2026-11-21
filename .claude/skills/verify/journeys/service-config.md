@@ -12,6 +12,7 @@ The probe starts the Agent through its config loader and production binding
 loops. It stays outside the installed CLI until config-based dispatch ships.
 The journey opens sessions through multi-session and raw stdio using a single
 registry definition with the memory adapter and a synthetic Codex peer. It
+also lists both adapters over loopback HTTP and checks the Host allowlist. It
 requires invalid configs to exit 1 with a diagnostic, no listener output,
 and no state created in the isolated home or data directories. The provider
 cases exercise configuration validation only. The journey reports the number

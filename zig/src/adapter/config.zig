@@ -54,6 +54,26 @@ pub const File = struct {
     }
 };
 
+pub const HttpBinding = struct {
+    address: []const u8,
+    port: u16,
+    ipv6: bool,
+};
+
+pub const AgentService = struct {
+    registry: File,
+    binding: union(enum) {
+        multi_session_stdio,
+        raw_stdio: AdapterEntry,
+        http: HttpBinding,
+    },
+};
+
+pub const ServiceConfig = struct {
+    agent: ?AgentService = null,
+    provider: ?union(enum) { raw_stdio, http: HttpBinding } = null,
+};
+
 pub const Posture = union(enum) {
     unrestricted,
     allowed: []const []const u8,
@@ -144,14 +164,109 @@ const Reader = struct {
     }
 };
 
-pub fn parse(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.process.Environ.Map, diagnostic: *Diagnostic) Error!File {
-    const reader = Reader{ .arena = arena, .diagnostic = diagnostic };
-    const root = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{}) catch |err| {
+fn readJson(reader: Reader, bytes: []const u8) Error!std.json.Value {
+    return std.json.parseFromSliceLeaky(std.json.Value, reader.arena, bytes, .{}) catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;
         return reader.refuse("not one JSON object: {s}", .{@errorName(err)});
     };
-    const top = try reader.members(root, "the file", &top_members) orelse return .{};
+}
 
+pub fn parse(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.process.Environ.Map, diagnostic: *Diagnostic) Error!File {
+    const reader = Reader{ .arena = arena, .diagnostic = diagnostic };
+    const top = try reader.members(try readJson(reader, bytes), "the file", &top_members) orelse return .{};
+    return readRegistry(reader, top, environ);
+}
+
+pub fn parseService(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.process.Environ.Map, diagnostic: *Diagnostic) Error!ServiceConfig {
+    const reader = Reader{ .arena = arena, .diagnostic = diagnostic };
+    const top = try reader.members(try readJson(reader, bytes), "the file", &.{ "agent", "provider", "hub" }) orelse
+        return reader.refuse("the file: must be an object", .{});
+    if (top.contains("hub")) return reader.refuse("hub is reserved", .{});
+    var config = ServiceConfig{};
+    if (top.get("agent")) |value| {
+        const agent = try reader.members(value, "agent", &.{ "binding", "adapters", "tool_sources" }) orelse
+            return reader.refuse("agent: must be an object", .{});
+        const binding = try readBinding(reader, agent, "agent");
+        const registry = try readRegistry(reader, agent, environ);
+        config.agent = .{ .registry = registry, .binding = switch (binding.kind) {
+            .multi_session_stdio => .multi_session_stdio,
+            .http => .{ .http = try readHttp(reader, binding.address, false) },
+            .raw_stdio => raw: {
+                if (binding.adapter.len == 0) return reader.refuse("agent.binding: adapter name is required", .{});
+                const entry = registry.adapter(binding.adapter) orelse
+                    return reader.refuse("agent.adapters: no adapter named \"{s}\"", .{binding.adapter});
+                break :raw .{ .raw_stdio = entry };
+            },
+        } };
+    }
+    if (top.get("provider")) |value| {
+        const provider = try reader.members(value, "provider", &.{"binding"}) orelse
+            return reader.refuse("provider: must be an object", .{});
+        const binding = try readBinding(reader, provider, "provider");
+        config.provider = switch (binding.kind) {
+            .raw_stdio => .raw_stdio,
+            .http => .{ .http = try readHttp(reader, binding.address, true) },
+            .multi_session_stdio => unreachable,
+        };
+    }
+    if (config.agent == null and config.provider == null) return reader.refuse("at least one service is required", .{});
+    if (config.agent) |agent| if (config.provider) |provider| {
+        if (agent.binding == .multi_session_stdio and provider == .raw_stdio)
+            return reader.refuse("multi_session_stdio requires exclusive use of stdio", .{});
+        if (agent.binding == .http and provider == .http) {
+            if (!agent.binding.http.ipv6 and agent.binding.http.port == provider.http.port)
+                return reader.refuse("Agent and Provider HTTP listeners conflict", .{});
+        }
+    };
+    return config;
+}
+
+const Binding = struct {
+    const Kind = enum { raw_stdio, multi_session_stdio, http };
+
+    kind: Kind,
+    address: []const u8,
+    adapter: []const u8,
+};
+
+fn readBinding(reader: Reader, service: std.json.ObjectMap, name: []const u8) Error!Binding {
+    const where = try std.fmt.allocPrint(reader.arena, "{s}.binding", .{name});
+    const object = try reader.members(service.get("binding") orelse .null, where, &.{ "type", "address", "adapter" }) orelse
+        return reader.refuse("{s} is required", .{where});
+    const kind = std.meta.stringToEnum(Binding.Kind, try reader.string(object, where, "type"));
+    const provider = std.mem.eql(u8, name, "provider");
+    if (kind == null or (provider and kind == .multi_session_stdio))
+        return reader.refuse("invalid {s} binding type", .{name});
+    if (object.contains("address") and kind != .http) return reader.refuse("{s}: address is only valid for http", .{where});
+    if (object.contains("adapter") and (provider or kind != .raw_stdio))
+        return reader.refuse("{s}: adapter is only valid for raw_stdio on Agent", .{where});
+    return .{
+        .kind = kind.?,
+        .address = try reader.string(object, where, "address"),
+        .adapter = try reader.string(object, where, "adapter"),
+    };
+}
+
+fn readHttp(reader: Reader, address: []const u8, provider: bool) Error!HttpBinding {
+    if (address.len == 0) return reader.refuse("HTTP binding requires an explicit address", .{});
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return reader.refuse("invalid HTTP address; expected host:port", .{});
+    const host = address[0..colon];
+    const port = std.fmt.parseInt(u16, address[colon + 1 ..], 10) catch
+        return reader.refuse("invalid HTTP address port", .{});
+    const ipv4 = std.mem.eql(u8, host, "127.0.0.1");
+    const ipv6 = std.mem.eql(u8, host, "[::1]");
+    const localhost = std.mem.eql(u8, host, "localhost");
+    if (provider) {
+        if (!ipv4 or port == 0) return reader.refuse("Provider HTTP requires 127.0.0.1 and a nonzero port", .{});
+    } else if (!ipv4 and !ipv6 and !localhost) {
+        return reader.refuse("Agent HTTP requires a loopback address", .{});
+    }
+    const literal = try std.fmt.allocPrint(reader.arena, "{s}:{d}", .{ if (localhost) "127.0.0.1" else host, port });
+    return .{ .address = literal, .port = port, .ipv6 = ipv6 };
+}
+
+fn readRegistry(reader: Reader, top: std.json.ObjectMap, environ: *const std.process.Environ.Map) Error!File {
+    const arena = reader.arena;
     var adapters = std.ArrayList(AdapterEntry).empty;
     if (top.get("adapters")) |listed_adapters| {
         if (listed_adapters == .object) {

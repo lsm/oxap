@@ -1,8 +1,11 @@
 import argparse
+import http.client
 import json
 import os
 from pathlib import Path
 import runpy
+import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -83,7 +86,8 @@ def main():
             endpoints = [frame['payload']['endpoint']['id'] for frame in frames
                          if frame['type'] == 'capabilities.response']
             assert endpoints == [endpoint_id], frames
-            assert any(frame.get('payload', {}).get('session_id') == name for frame in frames), frames
+            opened = [frame['payload']['session_id'] for frame in frames if frame['type'] == 'session.open.response']
+            assert opened == [name], frames
             if name == 'scripted':
                 assert not native.exists()
             else:
@@ -104,10 +108,37 @@ def main():
         assert methods.count('thread/start') == 1, result
         print(f'multi-session opened {len(requests)} sessions and exited {result.returncode}')
 
+        agent['binding'] = {'type': 'http', 'address': 'localhost:0'}
+        config.write_text(json.dumps({'agent': agent, 'provider': provider}))
+        with subprocess.Popen([args.probe, config], cwd=root, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True) as process:
+            try:
+                assert select.select([process.stdout], [], [], 15)[0], 'HTTP listener did not start'
+                host, port = process.stdout.readline().strip().removeprefix('listening on http://').split(':')
+                assert host == '127.0.0.1' and int(port) > 0, (host, port)
+                connection = http.client.HTTPConnection(host, int(port), timeout=5)
+                for header, expected in [(host, 200), ('unexpected.invalid', 403)]:
+                    try:
+                        connection.request('GET', '/adapters', headers={'Host': header})
+                        response = connection.getresponse()
+                        body = response.read().decode()
+                        assert response.status == expected, (response.status, body)
+                        if expected == 200:
+                            assert {entry['name'] for entry in json.loads(body)['adapters']} == set(adapters), body
+                    finally:
+                        connection.close()
+                process.send_signal(signal.SIGTERM)
+                _, stderr = process.communicate(timeout=10)
+                assert process.returncode == 0, (process.returncode, stderr)
+                print(f'multi-session HTTP listed {len(adapters)} adapters on loopback, rejected a foreign Host, and exited {process.returncode}')
+            finally:
+                if process.poll() is None:
+                    process.kill()
+
         result = run({'provider': {'binding': {'type': 'http', 'address': '127.0.0.1:6271'}}})
         assert result.returncode == 0 and not result.stdout, result
         print(f'provider-only configuration validation exited {result.returncode}')
-        print(f'PASS: {invalid_count} refusals, 2 raw sessions, {len(requests)} multi-session opens, 1 provider-only config')
+        print(f'PASS: {invalid_count} refusals, 2 raw sessions, {len(requests)} multi-session opens, 2 HTTP responses, 1 provider-only config')
 
 
 if __name__ == '__main__':
