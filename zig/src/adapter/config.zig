@@ -732,7 +732,7 @@ test "parsing frees what it built when any allocation fails" {
     try testing.checkAllAllocationFailures(testing.allocator, parseExample, .{});
 }
 
-test "model_provider is read on a claude or codex adapter and refused by name on any other" {
+test "model_provider is read on claude, codex and deepseek adapters and refused by name on any other" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -743,6 +743,9 @@ test "model_provider is read on a claude or codex adapter and refused by name on
 
     const routed = try parse(arena, "{\"adapters\":{\"codex\":{\"model_provider\":\"openai\"}}}", &environ, &diagnostic);
     try std.testing.expectEqualStrings("openai", routed.adapter("codex").?.model_provider);
+
+    const deepseek = try parse(arena, "{\"adapters\":{\"ds\":{\"type\":\"deepseek\",\"model_provider\":\"opencode-go\"}}}", &environ, &diagnostic);
+    try std.testing.expectEqualStrings("opencode-go", deepseek.adapter("ds").?.model_provider);
 
     try std.testing.expectError(error.ConfigInvalid, parse(arena, "{\"adapters\":{\"pi\":{\"model_provider\":\"deepseek\"}}}", &environ, &diagnostic));
     try std.testing.expectEqualStrings("config: adapter \"pi\": \"model_provider\" routes only a claude or codex adapter; a pi adapter has no provider setting oxap translates it into", diagnostic.message);

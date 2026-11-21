@@ -6171,6 +6171,37 @@ test "a claude entry naming a catalog provider hands the child that row's endpoi
     try std.testing.expectEqual(@as(usize, 1), unrouted.backend.environment.len);
 }
 
+test "a deepseek entry routes the catalog endpoint and hub key to dsh after the entry environment" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var environ = std.process.Environ.Map.init(arena);
+    try environ.put("OPENCODE_API_KEY", "go-env");
+
+    var entry: adapter_config.AdapterEntry = .{
+        .name = "ds",
+        .kind = "deepseek",
+        .executable = "/bin/echo",
+        .working_directory = "/",
+        .environment = &.{"DSH_HOME=/fixture"},
+        .provider = "deepseek-official",
+        .model = "deepseek-v4-pro",
+        .model_provider = "opencode-go",
+    };
+    const config = try deepseekBackendConfig(hub_config_surface, arena, entry, &environ);
+    try std.testing.expectEqual(@as(usize, 3), config.environment.len);
+    try std.testing.expectEqualStrings("DSH_HOME=/fixture", config.environment[0]);
+    try std.testing.expectEqualStrings("DEEPSEEK_BASE_URL=https://opencode.ai/inference/go", config.environment[1]);
+    try std.testing.expectEqualStrings("DEEPSEEK_API_KEY=go-env", config.environment[2]);
+    try std.testing.expectEqualStrings(entry.provider, config.provider);
+    try std.testing.expectEqualStrings(entry.model, config.model);
+
+    entry.model_provider = "";
+    const unrouted = try deepseekBackendConfig(hub_config_surface, arena, entry, &environ);
+    try std.testing.expectEqual(@as(usize, 1), unrouted.environment.len);
+    try std.testing.expectEqualStrings(entry.environment[0], unrouted.environment[0]);
+}
+
 test "a claude entry naming a provider it cannot route to is refused by name before the child starts" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
