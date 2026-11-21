@@ -291,7 +291,6 @@ fn recvLine(context: ?*anyopaque, allocator: std.mem.Allocator) !?[]u8 {
     const line = if (state.pending.items.len > 0) state.pending.orderedRemove(0) else null;
     state.mutex.unlock(defaultIo());
     const owned = line orelse return null;
-    if (allocator.ptr == state.allocator.ptr) return owned;
     defer state.allocator.free(owned);
     return try allocator.dupe(u8, owned);
 }
