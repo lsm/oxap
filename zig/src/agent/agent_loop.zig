@@ -2287,6 +2287,47 @@ const Run = struct {
     }
 };
 
+fn appendSteering(allocator: std.mem.Allocator, context: *AgentContext, event_stream: *AgentEventStream, messages: []const ai_types.Message) !void {
+    defer allocator.free(messages);
+    for (messages) |message| {
+        try context.appendMessage(message);
+        try pushAgentEvent(event_stream, .{ .message_start = .{ .message = message } });
+        try pushAgentEvent(event_stream, .{ .message_end = .{ .message = message, .steering = true } });
+    }
+}
+
+fn startTurn(allocator: std.mem.Allocator, run: *Run, config: AgentLoopConfig, context: *AgentContext, event_stream: *AgentEventStream) !bool {
+    if (runCancelled(config)) {
+        run.end(true);
+        return false;
+    }
+    if (run.state.iterations > 0) {
+        run.switchModel(config);
+        if (config.compact_between_turns_fn) |compact| {
+            if (try compact(config.compact_between_turns_ctx, context, event_stream)) {
+                const request = try compactedRequest(context.allocator);
+                context.appendMessage(request) catch |err| {
+                    var owned = request;
+                    owned.deinit(context.allocator);
+                    return err;
+                };
+                try pushAgentEvent(event_stream, .{ .message_start = .{ .message = request } });
+                try pushAgentEvent(event_stream, .{ .message_end = .{ .message = request } });
+            }
+            if (runCancelled(config)) {
+                run.end(true);
+                return false;
+            }
+        }
+    }
+    if (config.get_steering_messages_fn) |get_steering| {
+        if (try get_steering(config.get_steering_messages_ctx, allocator)) |messages| try appendSteering(allocator, context, event_stream, messages);
+    }
+    _ = try appendNotice(allocator, config, context, event_stream);
+    try pushAgentEvent(event_stream, .turn_start);
+    return true;
+}
+
 fn runLoop(
     allocator: std.mem.Allocator,
     prompts: ?[]const ai_types.Message,
@@ -2313,249 +2354,167 @@ fn runLoop(
                 .message = prompt,
                 .steering = config.prompts_are_steering,
             } });
-
         }
     }
 
     try pushAgentEvent(event_stream, .agent_start);
 
     outer: while (withinTurnLimit(run.state.iterations, config.max_iterations)) {
-        if (config.cancel_token) |token| {
-            if (token.isCancelled()) {
-                run.end(true);
-                break;
-            }
-        }
+        if (!try startTurn(allocator, &run, config, context, event_stream)) break :outer;
 
-        while (withinTurnLimit(run.state.iterations, config.max_iterations)) {
-            if (runCancelled(config)) {
-                run.end(true);
-                break :outer;
-            }
-            if (run.state.iterations > 0) {
-                run.switchModel(config);
-                if (config.compact_between_turns_fn) |compact| {
-                    if (try compact(config.compact_between_turns_ctx, context, event_stream)) {
-                        const request = try compactedRequest(context.allocator);
-                        context.appendMessage(request) catch |err| {
-                            var owned = request;
-                            owned.deinit(context.allocator);
-                            return err;
-                        };
-                        try pushAgentEvent(event_stream, .{ .message_start = .{
-                            .message = request,
-                        } });
-                        try pushAgentEvent(event_stream, .{ .message_end = .{
-                            .message = request,
-                        } });
-                    }
-                    if (runCancelled(config)) {
-                        run.end(true);
-                        break :outer;
-                    }
-                }
-            }
-            var steering_messages: ?[]const ai_types.Message = null;
-            if (config.get_steering_messages_fn) |get_steering| {
-                steering_messages = try get_steering(config.get_steering_messages_ctx, allocator);
-            }
+        const assistant_message = streamRetriedTurn(
+            allocator,
+            context,
+            run.turn_config,
+            event_stream,
+            &run.withheld,
+        ) catch |err| {
+            const error_content = [_]ai_types.AssistantContent{.{
+                .text = .{ .text = "" },
+            }};
+            const error_msg = ai_types.AssistantMessage{
+                .content = &error_content,
+                .api = run.turn_config.model.api,
+                .provider = run.turn_config.model.provider,
+                .model = run.turn_config.model.id,
+                .usage = .{},
+                .stop_reason = .@"error",
+                .error_message = ai_types.OwnedSlice(u8).initBorrowed(@errorName(err)),
+                .timestamp = compat.time.nowMillis(),
+                .is_owned = false,
+            };
+            try setFinalMessage(&run.state, allocator, error_msg);
 
-            if (steering_messages) |msgs| {
-                if (msgs.len > 0) {
-                    for (msgs) |steering_msg| {
-                        try context.appendMessage(steering_msg);
-                        try pushAgentEvent(event_stream, .{ .message_start = .{
-                            .message = steering_msg,
-                        } });
-                        try pushAgentEvent(event_stream, .{ .message_end = .{
-                            .message = steering_msg,
-                            .steering = true,
-                        } });
-                    }
-                    allocator.free(msgs);
-                } else {
-                    allocator.free(msgs);
-                }
-            }
-            _ = try appendNotice(allocator, config, context, event_stream);
+            const final_error_msg = run.state.final_message orelse error_msg;
+            try pushAgentEvent(event_stream, .{ .turn_end = .{
+                .message = final_error_msg,
+                .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
+            } });
 
-            try pushAgentEvent(event_stream, .turn_start);
+            run.end(runCancelled(config));
+            break :outer;
+        };
 
-            const assistant_message = streamRetriedTurn(
-                allocator,
-                context,
-                run.turn_config,
-                event_stream,
-                &run.withheld,
-            ) catch |err| {
-                const error_content = [_]ai_types.AssistantContent{.{
-                    .text = .{ .text = "" },
-                }};
-                const error_msg = ai_types.AssistantMessage{
-                    .content = &error_content,
-                    .api = run.turn_config.model.api,
-                    .provider = run.turn_config.model.provider,
-                    .model = run.turn_config.model.id,
-                    .usage = .{},
-                    .stop_reason = .@"error",
-                    .error_message = ai_types.OwnedSlice(u8).initBorrowed(@errorName(err)),
-                    .timestamp = compat.time.nowMillis(),
-                    .is_owned = false,
-                };
-                try setFinalMessage(&run.state, allocator, error_msg);
+        run.state.iterations += 1;
+        const loop_owns_message = assistant_message.is_owned or assistant_message.error_message.is_owned;
+        var message_transferred = false;
+        errdefer if (loop_owns_message and !message_transferred) retained.park(assistant_message);
+        try setFinalMessage(&run.state, allocator, assistant_message);
 
-                const final_error_msg = run.state.final_message orelse error_msg;
+        const outcome = run.judge(config, assistant_message);
+        switch (outcome) {
+            .failed => {
+                const cancelled = runCancelled(config);
+                const final_error_msg = run.state.final_message orelse assistant_message;
                 try pushAgentEvent(event_stream, .{ .turn_end = .{
                     .message = final_error_msg,
                     .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
+                    .input_dropped = run.withheld.input_dropped,
+                } });
+                if (loop_owns_message) {
+                    retained.park(assistant_message);
+                    message_transferred = true;
+                }
+                run.end(cancelled);
+                break :outer;
+            },
+            .answered => {
+                try pushAgentEvent(event_stream, .{ .turn_end = .{
+                    .message = assistant_message,
+                    .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
                 } });
 
-                run.end(runCancelled(config));
-                break :outer;
-            };
+                try context.appendMessage(.{ .assistant = assistant_message });
+                message_transferred = true;
 
-            run.state.iterations += 1;
-            const loop_owns_message = assistant_message.is_owned or assistant_message.error_message.is_owned;
-            var message_transferred = false;
-            errdefer if (loop_owns_message and !message_transferred) retained.park(assistant_message);
-            try setFinalMessage(&run.state, allocator, assistant_message);
-
-            const outcome = run.judge(config, assistant_message);
-            switch (outcome) {
-                .failed => {
-                    const cancelled = runCancelled(config);
-                    const final_error_msg = run.state.final_message orelse assistant_message;
-                    try pushAgentEvent(event_stream, .{ .turn_end = .{
-                        .message = final_error_msg,
-                        .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
-                        .input_dropped = run.withheld.input_dropped,
-                    } });
-                    if (loop_owns_message) {
-                        retained.park(assistant_message);
-                        message_transferred = true;
-                    }
-                    run.end(cancelled);
-                    break :outer;
-                },
-                .answered => {
-                    try pushAgentEvent(event_stream, .{ .turn_end = .{
-                        .message = assistant_message,
-                        .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
-                    } });
-
-                    try context.appendMessage(.{ .assistant = assistant_message });
-                    message_transferred = true;
-
-                    if (config.get_steering_messages_fn) |get_steering| {
-                        if (try get_steering(config.get_steering_messages_ctx, allocator)) |queued_steering| {
-                            if (queued_steering.len > 0) {
-                                for (queued_steering) |steering_msg| {
-                                    try context.appendMessage(steering_msg);
-                                    try pushAgentEvent(event_stream, .{ .message_start = .{
-                                        .message = steering_msg,
-                                    } });
-                                    try pushAgentEvent(event_stream, .{ .message_end = .{
-                                        .message = steering_msg,
-                                        .steering = true,
-                                    } });
-                                }
-                                allocator.free(queued_steering);
-                                continue;
-                            }
-                            allocator.free(queued_steering);
+                if (config.get_steering_messages_fn) |get_steering| {
+                    if (try get_steering(config.get_steering_messages_ctx, allocator)) |queued_steering| {
+                        if (queued_steering.len > 0) {
+                            try appendSteering(allocator, context, event_stream, queued_steering);
+                            continue;
                         }
+                        allocator.free(queued_steering);
                     }
+                }
 
-                    if (try appendNotice(allocator, config, context, event_stream)) continue;
+                if (try appendNotice(allocator, config, context, event_stream)) continue;
 
-                    if (config.get_follow_up_messages_fn) |get_follow_up| {
-                        if (try get_follow_up(config.get_follow_up_messages_ctx, allocator)) |follow_ups| {
-                            if (follow_ups.len > 0) {
-                                for (follow_ups) |follow_up| {
-                                    try context.appendMessage(follow_up);
-                                    try pushAgentEvent(event_stream, .{ .message_start = .{
-                                        .message = follow_up,
-                                    } });
-                                    try pushAgentEvent(event_stream, .{ .message_end = .{
-                                        .message = follow_up,
-                                    } });
-                                }
-                                allocator.free(follow_ups);
-                                continue :outer;
+                if (config.get_follow_up_messages_fn) |get_follow_up| {
+                    if (try get_follow_up(config.get_follow_up_messages_ctx, allocator)) |follow_ups| {
+                        if (follow_ups.len > 0) {
+                            for (follow_ups) |follow_up| {
+                                try context.appendMessage(follow_up);
+                                try pushAgentEvent(event_stream, .{ .message_start = .{
+                                    .message = follow_up,
+                                } });
+                                try pushAgentEvent(event_stream, .{ .message_end = .{
+                                    .message = follow_up,
+                                } });
                             }
                             allocator.free(follow_ups);
+                            continue :outer;
                         }
+                        allocator.free(follow_ups);
                     }
+                }
 
-                    run.end(false);
-                    break :outer;
-                },
-                .reasoned_only, .cut_off => {
-                    try pushAgentEvent(event_stream, .{ .turn_end = .{
-                        .message = assistant_message,
-                        .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
-                    } });
-                    try context.appendMessage(.{ .assistant = assistant_message });
-                    message_transferred = true;
+                run.end(false);
+                break :outer;
+            },
+            .reasoned_only, .cut_off => {
+                try pushAgentEvent(event_stream, .{ .turn_end = .{
+                    .message = assistant_message,
+                    .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
+                } });
+                try context.appendMessage(.{ .assistant = assistant_message });
+                message_transferred = true;
 
-                    const request = try requestMessage(context.allocator, if (outcome == .reasoned_only) answer_request_text else continue_request_text);
-                    context.appendMessage(request) catch |err| {
-                        var owned = request;
-                        owned.deinit(context.allocator);
-                        return err;
-                    };
+                const request = try requestMessage(context.allocator, if (outcome == .reasoned_only) answer_request_text else continue_request_text);
+                context.appendMessage(request) catch |err| {
+                    var owned = request;
+                    owned.deinit(context.allocator);
+                    return err;
+                };
+                try pushAgentEvent(event_stream, .{ .message_start = .{
+                    .message = request,
+                } });
+                try pushAgentEvent(event_stream, .{ .message_end = .{
+                    .message = request,
+                } });
+            },
+            .called_tools => {
+                var tool_result = try executeToolCalls(
+                    allocator,
+                    assistant_message,
+                    config,
+                    event_stream,
+                );
+                defer tool_result.deinitAfterToolResultsTransferred(allocator);
+
+                try pushAgentEvent(event_stream, .{ .turn_end = .{
+                    .message = assistant_message,
+                    .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(tool_result.tool_results),
+                } });
+
+                try context.appendMessage(.{ .assistant = assistant_message });
+                message_transferred = true;
+
+                for (tool_result.tool_results) |tool_result_msg| {
+                    const msg: ai_types.Message = .{ .tool_result = tool_result_msg };
                     try pushAgentEvent(event_stream, .{ .message_start = .{
-                        .message = request,
+                        .message = msg,
                     } });
+                    try context.appendMessage(msg);
                     try pushAgentEvent(event_stream, .{ .message_end = .{
-                        .message = request,
+                        .message = msg,
                     } });
-                },
-                .called_tools => {
-                    var tool_result = try executeToolCalls(
-                        allocator,
-                        assistant_message,
-                        config,
-                        event_stream,
-                    );
-                    defer tool_result.deinitAfterToolResultsTransferred(allocator);
+                }
 
-                    try pushAgentEvent(event_stream, .{ .turn_end = .{
-                        .message = assistant_message,
-                        .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(tool_result.tool_results),
-                    } });
-
-                    try context.appendMessage(.{ .assistant = assistant_message });
-                    message_transferred = true;
-
-                    for (tool_result.tool_results) |tool_result_msg| {
-                        const msg: ai_types.Message = .{ .tool_result = tool_result_msg };
-                        try pushAgentEvent(event_stream, .{ .message_start = .{
-                            .message = msg,
-                        } });
-                        try context.appendMessage(msg);
-                        try pushAgentEvent(event_stream, .{ .message_end = .{
-                            .message = msg,
-                        } });
-                    }
-
-                    if (tool_result.steering_messages) |steering_msgs| {
-                        tool_result.steering_messages = null;
-                        for (steering_msgs) |steering_msg| {
-                            try context.appendMessage(steering_msg);
-                            try pushAgentEvent(event_stream, .{ .message_start = .{
-                                .message = steering_msg,
-                            } });
-                            try pushAgentEvent(event_stream, .{ .message_end = .{
-                                .message = steering_msg,
-                                .steering = true,
-                            } });
-                        }
-                        const mutable_msgs: []ai_types.Message = @constCast(steering_msgs);
-                        allocator.free(mutable_msgs);
-                    }
-                },
-            }
+                if (tool_result.steering_messages) |steering_msgs| {
+                    tool_result.steering_messages = null;
+                    try appendSteering(allocator, context, event_stream, steering_msgs);
+                }
+            },
         }
     }
 
