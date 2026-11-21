@@ -1361,8 +1361,8 @@ the tools, metadata and allowed degraded features a session opened with in memor
 for the reopen; a park lasts only as long as the process, so they never reach the
 binding store.
 
-`oapx serve --park-after <seconds>` parks a parkable session once it has been idle
-that long; with no flag nothing parks on its own. Input to a session and its events
+`oapx serve` parks a parkable session once it has been idle for five seconds.
+`--park-after <seconds>` changes that limit, and `--park-after 0` turns parking off. Input to a session and its events
 count as activity. Reading it does not, so a client polling `state` keeps nothing
 awake. A refused park does not restart that clock, so a session parks as soon as what
 refused it ends.

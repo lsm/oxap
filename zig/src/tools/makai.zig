@@ -651,9 +651,10 @@ fn sweepHubSessions(core: *hub.Hub, stderr: std.Io.File) void {
     compat.stdio.writeAll(stderr, message) catch {};
 }
 
+const default_park_after_ns: u64 = 5 * std.time.ns_per_s;
+
 fn parkAfterNs(text: []const u8) error{InvalidHubOption}!u64 {
     const seconds = std.fmt.parseInt(u64, text, 10) catch return error.InvalidHubOption;
-    if (seconds == 0) return error.InvalidHubOption;
     return std.math.mul(u64, seconds, std.time.ns_per_s) catch error.InvalidHubOption;
 }
 
@@ -669,7 +670,7 @@ fn runHub(
     var addr: ?[]const u8 = null;
     var history_path: ?[]const u8 = null;
     var save_sessions: ?bool = null;
-    var park_after_ns: u64 = 0;
+    var park_after_ns: u64 = default_park_after_ns;
     var index: usize = 0;
     while (index < args.len) : (index += 1) {
         const argument = args[index];
@@ -1390,7 +1391,7 @@ fn printUsage(file: std.Io.File) !void {
         \\  oxap serve provider --http 127.0.0.1:<port>
         \\  oxap serve agent,provider --stdio [--model <model-ref>]
         \\  oxap serve --stdio | --addr <host:port> [--config <path>] [--session-history <path>] [--no-save-oapx-sessions]
-        \\                  [--park-after <seconds>]         Stop an idle session's harness; its next input reopens it
+        \\                  [--park-after <seconds>]         Stop a session's harness once idle that long (default 5, 0 never); its next input reopens it
         \\                                                   Many sessions on one wire; hub is its old name
         \\  oxap validate [--format human|json] [--mode strict|tolerant] [--pack DIR]... <trace.json>...
         \\  oxap conformance --command CMD [--session <id>] [--timeout-ms <n>]
