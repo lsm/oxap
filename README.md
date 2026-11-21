@@ -246,7 +246,7 @@ start and how it authenticates.
 | `codex` | a Codex app-server child | `rust-v0.167.2` |
 | `pi` | a Pi RPC child | `v1.6.0` |
 | `acp` | an ACP v1 agent named by a `--config` entry | `v1.17.0` |
-| `hermes` | a Hermes gateway | `v0.23.1` |
+| `hermes` | a Hermes gateway | `v0.23.3` |
 | `deepseek` | a DeepSeek harness | `dsh-v0.2.2-rc.5` (release candidate) |
 | `opencode` | an OpenCode server, started by oxap or already running | `v2.3.2` |
 | `memory` | the in-memory reference script that conformance runs against | — |
@@ -346,7 +346,7 @@ available only by explicit opt-in.
 `oxap serve agent --backend claude` serves a Claude Code child (pinned 2.1.322),
 `--backend codex` a Codex app-server child (pinned `rust-v0.167.2`), `--backend pi` a
 Pi RPC child (pinned `v1.6.0`), an `acp`
-entry an ACP v1 agent (pinned `v1.17.0`), a `hermes` entry a Hermes gateway (pinned `v0.23.1`), a `deepseek` entry a DeepSeek harness (pinned release candidate `dsh-v0.2.2-rc.5`), and an `opencode` entry an OpenCode server (pinned `v2.3.2`), behind the same stdio door instead of the built-in loop, following
+entry an ACP v1 agent (pinned `v1.17.0`), a `hermes` entry a Hermes gateway (pinned `v0.23.3`), a `deepseek` entry a DeepSeek harness (pinned release candidate `dsh-v0.2.2-rc.5`), and an `opencode` entry an OpenCode server (pinned `v2.3.2`), behind the same stdio door instead of the built-in loop, following
 [the endpoint binding](drafts/endpoint-stdio.md). Without `--config` it runs
 `claude` from `PATH` with only `HOME` and `PATH` in its environment and the
 harness-default tool posture, so every gated tool call still reaches the host
@@ -1116,7 +1116,7 @@ Research:
 - [Pinned ACP v1 and Devin Desktop mapping](research/acp-v1.17.0-mapping.md), over the [v1.15.1](research/acp-v1.15.1-mapping.md), [v1.11.0](research/acp-v1.11.0-mapping.md), [v1.10.2](research/acp-v1.10.2-mapping.md) and [v1.7.0 base mapping](research/acp-v1.7.0-mapping.md)
 - [Pinned Pi coding-agent mapping](research/pi-v1.6.0-mapping.md), over the [v1.5.2](research/pi-v1.5.2-mapping.md), [v1.5.0](research/pi-v1.5.0-mapping.md), [v1.3.0](research/pi-v1.3.0-mapping.md), [v1.1.0](research/pi-v1.1.0-mapping.md), [v1.0.4](research/pi-v1.0.4-mapping.md), [v1.0.1](research/pi-v1.0.1-mapping.md), [v0.87.1](research/pi-v0.87.1-mapping.md) and [v0.85.1 base](research/pi-v0.85.1-mapping.md) mappings
 - [Pinned DeepSeek Harness release-candidate mapping](research/deepseek-harness-dsh-v0.2.2-rc.5-mapping.md), over [dsh-v0.2.2-rc.2](research/deepseek-harness-dsh-v0.2.2-rc.2-mapping.md), [dsh-v0.2.2-rc.1](research/deepseek-harness-dsh-v0.2.2-rc.1-mapping.md), [dsh-v0.2.1-rc.2](research/deepseek-harness-dsh-v0.2.1-rc.2-mapping.md), the [dsh-v0.2.1-alpha.2](research/deepseek-harness-dsh-v0.2.1-alpha.2-mapping.md), [dsh-v0.1.7-rc.2](research/deepseek-harness-dsh-v0.1.7-rc.2-mapping.md) and [47f9438 base](research/deepseek-harness-47f9438-mapping.md) mappings
-- [Pinned Hermes agent mapping](research/hermes-v0.23.1-mapping.md), over the [v0.22.2](research/hermes-v0.22.2-mapping.md), [v0.21.6](research/hermes-v0.21.6-mapping.md), [v2026.9.24](research/hermes-v2026.9.24-mapping.md) and [v2026.8.31 base](research/hermes-v2026.8.31-mapping.md) mappings
+- [Pinned Hermes agent mapping](research/hermes-v0.23.3-mapping.md), over the [v0.23.1](research/hermes-v0.23.1-mapping.md), [v0.22.2](research/hermes-v0.22.2-mapping.md), [v0.21.6](research/hermes-v0.21.6-mapping.md), [v2026.9.24](research/hermes-v2026.9.24-mapping.md) and [v2026.8.31 base](research/hermes-v2026.8.31-mapping.md) mappings
 - [Pinned Claude Code CLI and Agent SDK mapping](research/claude-code-agent-sdk-2.1.322-mapping.md), over the [2.1.319](research/claude-code-agent-sdk-2.1.319-mapping.md), [2.1.302](research/claude-code-agent-sdk-2.1.302-mapping.md), [2.1.296](research/claude-code-agent-sdk-2.1.296-mapping.md), [2.1.288](research/claude-code-agent-sdk-2.1.288-mapping.md), [2.1.282](research/claude-code-agent-sdk-2.1.282-mapping.md) and [2.1.280](research/claude-code-agent-sdk-2.1.280-mapping.md) mappings and the [2.1.263 base mapping](research/claude-code-agent-sdk-2.1.263-mapping.md)
 - [Z.ai China Coding Plan evidence matrix](research/zai-china-coding-plan-evidence.md)
 - [OpenCode provider breadth and its model catalog](research/opencode-provider-catalog-mapping.md), with [Decision 0035](decisions/0035-a-model-entry-publishes-its-facts-and-absence-means-unknown.md) accepted on it
@@ -1259,8 +1259,8 @@ required.
 
 Hermes agent real-process checks follow the same opt-in gate. Provide an
 absolute python interpreter in `OAP_HERMES_BIN` (able to import the pinned
-checkout's dependencies, which v0.23.1 declares only for Python 3.14) and the
-pinned hermes-agent v0.23.1 checkout in
+checkout's dependencies) and the
+pinned hermes-agent v0.23.3 checkout in
 `OAP_HERMES_ROOT` (the gateway's cwd), then set `OAP_HERMES_SMOKE=1` for the
 credential-free ready/session.create/EOF-teardown check or
 `OAP_HERMES_INTEGRATION=1` for the loopback-provider paths (streaming OpenAI
