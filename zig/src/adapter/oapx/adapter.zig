@@ -2024,7 +2024,7 @@ pub const Session = struct {
 
     fn liveWork(ptr: *anyopaque) bool {
         const self = cast(ptr);
-        return self.pending_tasks > 0 or self.outbox.items.len > 0 or self.jobs.anyRunning() or self.jobs.noticeWaiting();
+        return self.pending_tasks > 0 or self.outbox.items.len > 0 or !self.jobs.isEmpty();
     }
 
     fn activity(ptr: *anyopaque) contract.Activity {
@@ -3382,7 +3382,7 @@ fn countKind(harness: *const Harness, kind: []const u8) usize {
     return count;
 }
 
-test "a job that ends on an idle session starts a run that tells the model" {
+test "a job that ends on an idle session starts a run that tells the model, and its record keeps the session from parking" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3404,7 +3404,8 @@ test "a job that ends on an idle session starts a run that tells the model" {
     const trigger = started.get("trigger").?.object;
     try testing.expectEqualStrings("background_task", trigger.get("kind").?.string);
     try testing.expectEqualStrings(session.jobs.list.items[0].id, trigger.get("task_id").?.string);
-    try testing.expect(harness.session.holdsNoLiveWork());
+    try testing.expect(!session.jobs.anyRunning());
+    try testing.expect(!harness.session.holdsNoLiveWork());
 }
 
 test "a job that ends during a turn folds into its next request and starts no run" {
