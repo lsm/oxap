@@ -78,13 +78,8 @@ pub const SseReceiver = struct {
                 const data = self.pending.items[self.pending_index];
                 self.pending_index += 1;
 
-                if (allocator.ptr == self.allocator.ptr) {
-                    return data;
-                } else {
-                    const copy = try allocator.dupe(u8, data);
-                    self.allocator.free(data);
-                    return copy;
-                }
+                defer self.allocator.free(data);
+                return try allocator.dupe(u8, data);
             }
 
             self.pending.clearRetainingCapacity();
@@ -223,7 +218,6 @@ pub const SseHttpClient = struct {
             if (self.pending_index < self.pending.items.len) {
                 const data = self.pending.items[self.pending_index];
                 self.pending_index += 1;
-                if (allocator.ptr == self.allocator.ptr) return data;
                 defer self.allocator.free(data);
                 return try allocator.dupe(u8, data);
             }
