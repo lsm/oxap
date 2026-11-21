@@ -9,3 +9,5 @@ The release's darwin-arm64 archive SHA-256 is `f357ec6679f05e12e238c99eb9112f342
 The session event schema removes the deprecated `parentToolCallId` member from several event data objects and removes `tool.execution_partial_result`. User message data adds optional `hasSubmittedTask`. Session open and update options also change. The adapter's ownership, progress and request mappings require review against these changes before repinning.
 
 The new schema identifies subagent-originated events by the event envelope's `agentId`. The current adapter decoders do not retain that member. Whether subagent events reach the subscribed stream, and how to keep their output associated with the correct participant, must be resolved before treating this release as compatible.
+
+The Go, Rust and Zig reducers now retain the event's `agentId` and omit child-agent events from the root run. This preserves root message ownership; child output and tool calls are not projected by this adapter. A live v1.0.114 run has not yet verified the event stream.

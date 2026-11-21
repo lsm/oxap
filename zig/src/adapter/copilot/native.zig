@@ -124,6 +124,7 @@ pub const EventType = enum {
 
 pub const Event = struct {
     session_id: []const u8,
+    agent_id: []const u8 = "",
     type_name: []const u8,
     kind: ?EventType,
     ephemeral: bool,
@@ -144,6 +145,7 @@ pub fn decodeEvent(message: Message) Error!?Event {
     const ephemeral = event.object.get("ephemeral");
     return .{
         .session_id = session_id,
+        .agent_id = text(event.object, "agentId"),
         .type_name = type_name,
         .kind = EventType.parse(type_name),
         .ephemeral = ephemeral != null and ephemeral.? == .bool and ephemeral.?.bool,

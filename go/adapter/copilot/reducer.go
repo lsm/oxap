@@ -75,6 +75,9 @@ func (r *reducer) observe(event native.Event) error {
 		}
 		return nil
 	}
+	if event.AgentID != "" {
+		return nil
+	}
 	if id := native.Text(event.Data, "interactionId"); event.Type != "user.message" && id != "" && (r.current == nil || r.current.interaction != id) {
 		return nil
 	}

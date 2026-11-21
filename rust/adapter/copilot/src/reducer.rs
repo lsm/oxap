@@ -115,6 +115,9 @@ impl Reducer {
             }
             return Ok(());
         }
+        if !event.agent_id.is_empty() {
+            return Ok(());
+        }
         let interaction = text(&event.data, "interactionId");
         let foreign = self
             .current

@@ -379,3 +379,32 @@ func TestCrashReplayRetainsMoreThanOneFollowerBuffer(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentEventsDoNotEnterRootRun(t *testing.T) {
+	r := newReducer("s1", "ses", &corpusIDs{}, &corpusClock{})
+	run, err := r.admit(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.nativeMessage = "m1"
+	for _, frame := range []string{
+		`{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"user.message","data":{"messageId":"m1"}}}}`,
+		`{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"assistant.message_delta","agentId":"child","data":{"deltaContent":"child"}}}}`,
+		`{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"assistant.message_delta","data":{"deltaContent":"root"}}}}`,
+	} {
+		message, err := native.Parse([]byte(frame))
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := native.DecodeEvent(message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.observe(*event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(r.events) != 2 || r.events[1].Type != protocol.TypeContentDelta {
+		t.Fatalf("events = %+v", r.events)
+	}
+}

@@ -210,6 +210,7 @@ pub const Reducer = struct {
             const run = self.current orelse return;
             return self.fail(run, "copilot_foreign_session", "an event for another Copilot session reached this one");
         }
+        if (event.agent_id.len > 0) return;
         const interaction = native.text(event.data, "interactionId");
         if (!std.mem.eql(u8, event.type_name, "user.message") and interaction.len > 0) {
             const run = self.current orelse return;
@@ -1113,4 +1114,18 @@ test "a question without choices asks for text, and one Copilot settles itself o
     try feed(&reducer, scratch, "user_input.requested", "{\"requestId\":\"req-3\",\"question\":\"Bad\",\"choices\":[7]}");
     const last = reducer.envelopes.items[reducer.envelopes.items.len - 1];
     try testing.expectEqualStrings("copilot_invalid_user_input", last.object.get("payload").?.object.get("error").?.object.get("code").?.string);
+}
+
+test "subagent events do not enter the root run" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    var reducer = Reducer.init(&arena, .{ .session_id = "s1", .native_id = "ses", .revision = "copilot-test-oap-v1" });
+    const admission = try reducer.admit("s1");
+    try reducer.bind(admission.run_id, "m1");
+    try feed(&reducer, scratch, "user.message", "{\"messageId\":\"m1\"}");
+    const frame = "{\"jsonrpc\":\"2.0\",\"method\":\"session.event\",\"params\":{\"sessionId\":\"ses\",\"event\":{\"type\":\"assistant.message_delta\",\"agentId\":\"child\",\"data\":{\"deltaContent\":\"child\"}}}}";
+    try reducer.observe((try native.decodeEvent(try native.parseMessage(scratch, frame))).?);
+    try feed(&reducer, scratch, "assistant.message_delta", "{\"deltaContent\":\"root\"}");
+    try testing.expectEqualStrings("run.started:run-1 content.delta:run-1", try kinds(&reducer, scratch));
 }
