@@ -5415,6 +5415,28 @@ fn routedClaudeEnvironment(
     return environment;
 }
 
+fn routedDeepseekEnvironment(
+    surface: ConfigSurface,
+    arena: std.mem.Allocator,
+    entry: adapter_config.AdapterEntry,
+    environ: *const std.process.Environ.Map,
+) ![]const []const u8 {
+    const id = entry.model_provider;
+    const row = try routedRow(surface, entry);
+    const base = provider_catalog.baseUrl(id, "anthropic-messages", provider_catalog.defaultRegion(id)) orelse {
+        try surface.refuse("{s} \"{s}\" names model_provider \"{s}\", which serves no anthropic-messages endpoint, the wire the DeepSeek harness uses", .{ surface.noun, entry.name, id });
+        return error.BackendRefused;
+    };
+    try refuseRoutedVariables(surface, entry, &.{ "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY" });
+    const credential = try routedCredential(surface, arena, entry, row, environ, routeStorage);
+
+    const environment = try arena.alloc([]const u8, entry.environment.len + 2);
+    @memcpy(environment[0..entry.environment.len], entry.environment);
+    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "DEEPSEEK_BASE_URL={s}", .{base});
+    environment[entry.environment.len + 1] = try std.fmt.allocPrint(arena, "DEEPSEEK_API_KEY={s}", .{credential.key});
+    return environment;
+}
+
 const codex_route_key_variable = "OAPX_PROVIDER_API_KEY";
 
 const CodexRoute = struct {
@@ -5620,7 +5642,10 @@ fn deepseekBackendConfig(
     return .{
         .executable = executable,
         .args = entry.args,
-        .environment = entry.environment,
+        .environment = if (entry.model_provider.len > 0)
+            try routedDeepseekEnvironment(surface, arena, entry, environ)
+        else
+            entry.environment,
         .working_directory = working_directory,
         .provider = entry.provider,
         .model = entry.model,

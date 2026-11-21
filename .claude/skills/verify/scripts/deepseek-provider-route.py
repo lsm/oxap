@@ -20,21 +20,22 @@ def main():
     opening = json.loads((FIXTURE / "scenario.jsonl").read_text().splitlines()[2])
 
     with tempfile.TemporaryDirectory(prefix="deepseek-provider-route-") as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         home = root / "home"
         home.mkdir()
         child = root / "child.sh"
         child.write_text((FIXTURE / "child.sh").read_text().replace(
             "#!/bin/sh\n",
-            """#!/bin/sh
-[ "$DEEPSEEK_BASE_URL" = 'https://opencode.ai/inference/go' ] || exit 11
-[ "$DEEPSEEK_API_KEY" = 'fixture-route' ] || exit 12
-! /usr/bin/printenv OPENCODE_API_KEY >/dev/null || exit 13
-[ "$DSH_HOME" = "$PWD/home" ] || exit 14
+            r"""#!/bin/sh
+fail() { printf '%s\n' "$1" > route-failure; exit 1; }
+[ "$DEEPSEEK_BASE_URL" = 'https://opencode.ai/inference/go' ] || fail 'endpoint mismatch'
+[ "$DEEPSEEK_API_KEY" = 'fixture-route' ] || fail 'credential mismatch'
+! /usr/bin/printenv OPENCODE_API_KEY >/dev/null || fail 'hub credential name leaked'
+[ "$DSH_HOME" = "$PWD/home" ] || fail 'entry environment missing'
 """,
         ))
         child.chmod(0o700)
-        entry = json.loads((FIXTURE / "registry.json").read_text().replace("@DIR@", directory))["adapters"]["deepseek"]
+        entry = json.loads((FIXTURE / "registry.json").read_text().replace("@DIR@", str(root)))["adapters"]["deepseek"]
         entry.update(model_provider="opencode-go", provider="deepseek-official", model="deepseek-v4-pro")
         entry["environment"].append(f"DSH_HOME={home}")
         registry = root / "registry.json"
@@ -43,7 +44,8 @@ def main():
         cmd = [str(binary), "serve", "--stdio", "--no-save-oapx-sessions", "--config", str(registry)]
 
         registry.write_text(json.dumps({"adapters": {"routed": entry}}))
-        with (root / "stderr").open("w+") as stderr, subprocess.Popen(
+        stderr_path = root / "stderr"
+        with stderr_path.open("w") as stderr, subprocess.Popen(
             cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
             env={**env, "OPENCODE_API_KEY": "fixture-route"}, bufsize=0,
         ) as hub:
@@ -52,12 +54,14 @@ def main():
                 for _ in range(10):
                     assert select.select([hub.stdout], [], [], 10)[0], "hub open timed out"
                     line = hub.stdout.readline()
-                    stderr.seek(0)
-                    assert line, stderr.read()
+                    assert line, stderr_path.read_text()
                     reply = json.loads(line)
                     if reply.get("id") == 1:
                         break
-                assert reply.get("id") == 1 and "error" not in reply, reply
+                failure = root / "route-failure"
+                assert reply.get("id") == 1 and "error" not in reply, (
+                    failure.read_text().strip() if failure.exists() else reply
+                )
                 assert reply["result"]["type"] == "session.open.response", reply
                 hub.stdin.close()
                 assert hub.wait(timeout=10) == 0, hub.returncode
