@@ -30,10 +30,16 @@ below) resolves its endpoint and key per request, not at build:
 - `packages/llm/llm-deepseek/src/messages-api.ts` — the wire is Anthropic
   Messages: the request goes to `<baseURL>/v1/messages` (the `/v1` appended
   unless the base already ends in it).
+- `packages/llm/llm-deepseek/src/adapter.ts` — the request authenticates with
+  `x-api-key` and, whenever the harness has a session id, carries it as
+  `x-deepseek-harness-session-id`.
 
-**dsh itself needs no change.** The only endpoint behavior it cannot express
-is a custom request header, which matters only if OpenCode Go requires one
-(open question below).
+**dsh itself needs no change.** The one header it cannot send is
+`x-opencode-session`, and OpenCode Go does not require it: the service's
+client table recognizes dsh's native `x-deepseek-harness-session-id` and lists
+DeepSeek Harness as problematic only because some model paths omit that
+native header (opencode.ai/docs/console/go, discussion #5495). What remains
+open is measured below, not blocking.
 
 ## Design
 
@@ -76,13 +82,17 @@ and Rust change nothing.
 ### What HyperNeo changes (its own repo)
 
 The `oxap-deepseek` harness row gains one optional setting, the `model_provider`
-id, and its `environment` list gains `OPENCODE_API_KEY` (forwarded by
-reference, only when the daemon's environment carries it). The row's `entry()`
-emits `model_provider` when the setting is present, and `buildHubConfig`
-skips injecting its stored `row.key` (`DEEPSEEK_API_KEY`) in that case, since
-`oapx` refuses an entry that sets the name twice. The Settings screen for
-DeepSeek's harness shows one field; the key field stays for the official path.
-No key value is stored or forwarded under a name it did not already have.
+id. The daemon's environment already carries `OPENCODE_API_KEY`; what changes
+is that the hub process is launched with it, so `oapx` resolves the row's
+credential from its own environment (`routedCredential` reads the hub's, not
+the adapter's). The adapter entry's `environment` member does **not** gain the
+name: dsh receives only the two translated variables, and the raw OpenCode key
+never enters the harness process under its own name. The row's `entry()` emits
+`model_provider` when the setting is present, and `buildHubConfig` skips
+injecting its stored `row.key` (`DEEPSEEK_API_KEY`) in that case, since `oapx`
+refuses an entry that sets the name twice. The Settings screen for DeepSeek's
+harness shows one field; the key field stays for the official path. No key
+value is stored or forwarded under a name it did not already have.
 
 ## Alternatives rejected
 
@@ -103,16 +113,20 @@ No key value is stored or forwarded under a name it did not already have.
 
 ## Open questions
 
-1. **Does OpenCode Go's Anthropic endpoint require `x-opencode-session`?**
-   The catalog records the header on all three `opencode-go` wires and `oxap`
-   sends it on its own requests; dsh cannot add a custom request header. If
-   the endpoint refuses a request without it, this design is blocked until
-   dsh grows header support — that is the one case where dsh needs a change.
-   Decisive probe, once the key is exported: one request to
-   `.../inference/go/v1/messages` with and without the header.
-2. **Which model ids does the Go plan serve?** dsh sends the entry's `model`
-   (HyperNeo defaults `deepseek-v4-pro`); the OpenCode Go catalog must serve
-   that exact id or the entry's model member must change with the routing.
+1. **Does dsh's native session header arrive on every model path?** OpenCode
+   Go recommends `x-opencode-session` for routing and prompt caching but does
+   not require it, and it recognizes dsh's native
+   `x-deepseek-harness-session-id` instead; its client table records that the
+   header reaches it only on some dsh model paths. The live run should first
+   confirm a routed request works with the native header alone, then measure
+   whether adding `x-opencode-session` changes the outcome. A model path that
+   omits the native header entirely is the one residual case that would need
+   an upstream dsh change.
+2. **Is the served listing entitled and streamable?** The public model
+   listing at `.../inference/go/v1/models` serves `deepseek-v4-pro` — the id
+   the entry would send — and `deepseek-v4.1-flash` (checked 2026-11-21).
+   Account entitlement and a streamed inference through the Go plan remain
+   verified only by the live run this design unblocks.
 3. **DeepSeek-specific request extensions.** The plugin sends DeepSeek beta
    headers (`MESSAGES_FILES_BETA`, `MESSAGES_TOOL_CHANGES_BETA`) and a files
    API on the same wire; whether OpenCode Go accepts or ignores them is only
