@@ -26,19 +26,27 @@ local binding on the public internet.
 The first local binding is a Unix-domain stream socket in an owner-only
 directory. The Hub and clients verify that the directory and socket belong to
 their effective operating-system user and that other users have no access. The
-directory must be owned by that user with mode `0700`; neither side follows a
-symlink, and a wrong owner or mode is an error, not something to repair. Each
+directory must be owned by that user with mode `0700`, and the Hub sets the
+socket mode to `0600` after binding; neither side follows a symlink, and a wrong owner or mode is an error, not something to repair. Each
 side also checks the connected peer credentials and requires the peer user ID
 to equal its own effective user ID. It fails closed if credentials are
 unavailable or differ. These checks are required on macOS and Linux; another
 platform, including Windows, needs a separately specified secure binding.
 
-The Hub holds an exclusive lock in the protected directory for its entire
-lifetime. Only the lock holder may remove a stale socket, bind or remove the
-socket on shutdown. A second server fails without disturbing the first. A socket
+The Hub holds an exclusive operating-system lock, released by the kernel on
+process exit, in the protected directory for its entire lifetime. Only the lock
+holder may remove a stale socket, bind or remove the socket on shutdown; it
+removes its socket before releasing the lock. A second server fails without disturbing the first. A socket
 path too long for the platform fails with a diagnostic; no silent fallback to a
 less protected directory is allowed. A co-hosted Agent or Provider service does not register clients automatically. Remote deployment and its
 transport authentication require a separate binding.
+
+The server's `hub.socket` configuration selects the socket path. If absent,
+`OXAP_HUB_SOCKET` selects it for the server and clients. Otherwise Linux uses
+`$XDG_RUNTIME_DIR/oxap/hub.sock` and macOS uses
+`$HOME/Library/Caches/oxap/hub.sock`. Linux without `XDG_RUNTIME_DIR`, or macOS
+without `HOME`, requires an explicit path. A client and server configured with
+different paths do not discover each other.
 
 Each connection registers exactly once before any other operation. The Hub
 allocates an opaque `instance_id` containing at least 128 random bits from a
@@ -66,8 +74,9 @@ logs or banners. The binding does not accept ancillary file descriptors. Every
 envelope has `protocol: "oxap"`, `version: "0.2"`, and
 `profile: "oxap.hub-messaging"`. A request has `id`, `type`, and `payload`;
 a response has its own `id`, `type`, `in_reply_to`, and `payload`. An event
-has `id`, `type`, and `payload`, and no `in_reply_to`. Envelope IDs are unique
-per connection and direction. A repeated request ID closes the connection.
+has `id`, `type`, and `payload`, and no `in_reply_to`. Envelope IDs are unique per connection and direction as a sender obligation.
+The Hub enforces request-ID uniqueness among outstanding requests; a duplicate
+outstanding ID closes the connection. It need not retain IDs after settlement.
 The server checks protocol and version before profile routing; a correlatable
 unsupported version receives `error.response` with `unsupported_version`.
 Unknown members and operations are refused rather than silently ignored.
@@ -131,10 +140,12 @@ not receipt or processing. Admission and disconnects are serialized so the
 snapshot excludes registrations already removed; the operation cannot wait on
 network writes. This best-effort fan-out is not atomic across recipients.
 
-The Hub keeps one bounded, coalesced pending-drop notice per subscription. When
-a publication skips that subscription, the notice becomes pending; once the
-subscriber can read again, `hub.deliveries.dropped` reports its topic and that
-one or more deliveries were missed. Multiple drops can share one notice. An
+The Hub reserves one bounded, coalesced pending-drop notice per subscription
+outside the delivery queue. When a publication skips that subscription, the
+notice becomes pending; the writer emits `hub.deliveries.dropped` before that
+subscription's next delivery, reporting its topic and that one or more
+deliveries were missed. The writer also emits a pending notice if no later
+delivery arrives and the subscriber can read again. Multiple drops can share one notice. An
 unsubscribe or disconnect can discard its pending notice; on reconnect the
 client must reconcile the authoritative source after subscribing again.
 
@@ -175,7 +186,8 @@ frames, messages, IDs, names, kinds, topics, registrations and subscriptions.
 A frame limit applies to the complete encoded line, including the envelope and
 newline. The message limit applies to the encoded `message` object; the Hub
 must reserve enough frame overhead for the largest delivery it accepts. The
-instance-list response must fit the frame limit or use bounded pagination. The
+instance-list response must fit the frame limit: the schema caps connections,
+IDs, names and kinds so a complete list always fits one response. The
 Hub advertises actual limits on registration, and registration itself must fit
 a fixed protocol minimum before that response is known. The exact finite limits
 and the notice payload are also binding requirements
