@@ -15,54 +15,56 @@
     "timestamp_ms": 4,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
-    "type": "run.compaction.started",
-    "id": "event-7",
+    "type": "content.delta",
+    "id": "event-6",
     "payload": {
       "session_id": "session",
       "run_id": "run-2",
-      "compaction_id": "compaction-6",
-      "reason": "threshold"
+      "message_id": "message-3",
+      "part": {
+        "type": "reasoning",
+        "reasoning": "consider"
+      }
     },
     "sequence": 2,
     "timestamp_ms": 5,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
-    "type": "run.compaction.ended",
-    "id": "event-8",
+    "type": "content.delta",
+    "id": "event-7",
     "payload": {
       "session_id": "session",
       "run_id": "run-2",
-      "compaction_id": "compaction-6",
-      "outcome": "failed",
-      "error": {
-        "code": "pi_compaction_failed",
-        "message": "Auto-compaction failed: Turn prefix summarization failed: oap-loopback API error (500): 500 providertest: no queued case\n"
+      "message_id": "message-3",
+      "part": {
+        "type": "text",
+        "text": "answer"
       }
     },
     "sequence": 3,
     "timestamp_ms": 6,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
     "type": "run.completed",
-    "id": "event-9",
+    "id": "event-8",
     "payload": {
       "session_id": "session",
       "run_id": "run-2",
@@ -72,7 +74,7 @@
         "content": [
           {
             "type": "text",
-            "text": "hello"
+            "text": "answer"
           }
         ]
       },
@@ -82,6 +84,6 @@
     "timestamp_ms": 7,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   }
 ]

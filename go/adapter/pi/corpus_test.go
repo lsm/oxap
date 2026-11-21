@@ -26,12 +26,12 @@ var piCommitTree = pin.Source("pi").Tree
 
 const (
 	piRPCTypesBlob     = "7fc71516aebb8b68ea019f1df4eef966eeaa17c7"
-	piRPCModeBlob      = "afd8267a1078e86dba06ab6e98aa4432c8217b16"
-	piAgentSessionBlob = "f76247d5647a6ab17923425ebb0cee5b4ca6495b"
-	piSessionMgrBlob   = "20b6edaa913f691b1bbbdbd8c824788b1f9ddd22"
+	piRPCModeBlob      = "adcd6adefb85a665a80859d3ebfbaeadeb56f0aa"
+	piAgentSessionBlob = "6a89c5b4133628bf1b39483b7af35d7fb6c26833"
+	piSessionMgrBlob   = "2420f8a72d80478888e0cb8bad2370be11f9cc3d"
 	piAgentTypesBlob   = "24bdd7531caf7035653255acab9c04e0ef5f485f"
 	piRPCEntryBlob     = "11059a8d47f6d4f22469802f8dca0a6af6c8db88"
-	piCLIArgsBlob      = "8de8441c43185db446cdb1290c1d4f0f9a1f5cb0"
+	piCLIArgsBlob      = "bf38841d2f052acbcb252f7c612cad3be39755e3"
 )
 
 var piLedgerFixtures = map[string]bool{
@@ -116,6 +116,16 @@ type piCorpusOmission struct {
 	Reason string `json:"reason"`
 }
 
+var carriedPiSources = piCorpusSources{
+	RPCTypes:       "7fc71516aebb8b68ea019f1df4eef966eeaa17c7",
+	RPCMode:        "afd8267a1078e86dba06ab6e98aa4432c8217b16",
+	AgentSession:   "f76247d5647a6ab17923425ebb0cee5b4ca6495b",
+	SessionManager: "20b6edaa913f691b1bbbdbd8c824788b1f9ddd22",
+	AgentTypes:     "24bdd7531caf7035653255acab9c04e0ef5f485f",
+	RPCEntry:       "11059a8d47f6d4f22469802f8dca0a6af6c8db88",
+	CLIArgs:        "8de8441c43185db446cdb1290c1d4f0f9a1f5cb0",
+}
+
 func pinnedPiSources() piCorpusSources {
 	return piCorpusSources{piRPCTypesBlob, piRPCModeBlob, piAgentSessionBlob, piSessionMgrBlob, piAgentTypesBlob, piRPCEntryBlob, piCLIArgsBlob}
 }
@@ -156,7 +166,7 @@ func runPiCorpusCase(t *testing.T, root string, entry piCorpusManifestCase) {
 	dir := filepath.Join(root, entry.Path)
 	definition := piLoadJSON[piCorpusCase](t, filepath.Join(dir, "case.json"))
 	p := definition.Provenance
-	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != "https://github.com/earendil-works/pi" || p.Tag != PinnedVersion || p.Commit != PinnedCommit || p.CommitTree != piCommitTree || !samePiSources(p.Sources, pinnedPiSources()) || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
+	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != "https://github.com/earendil-works/pi" || p.Tag != "v1.5.2" || p.Commit != "b4afdddf44e059c67ccf5097e5317d913521b470" || p.CommitTree != "ed418d79cb44d3690f110e1077c4612db033f2c9" || p.Sources != carriedPiSources || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
 		t.Fatalf("invalid case metadata: %+v", definition)
 	}
 	frames, decoded := piLoadFrames(t, filepath.Join(dir, definition.Native))
