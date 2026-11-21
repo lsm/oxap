@@ -583,6 +583,7 @@ pub const Session = struct {
         .drain_mixed = drain,
         .activity = activity,
         .live_work = liveWork,
+        .retained_tasks = retainedTasks,
         .close = close,
         .prepare_close = prepareClose,
         .tools = tools,
@@ -2022,9 +2023,13 @@ pub const Session = struct {
         return .{ .events = try suffix.toOwnedSlice(allocator) };
     }
 
+    fn retainedTasks(ptr: *anyopaque) bool {
+        return !cast(ptr).jobs.isEmpty();
+    }
+
     fn liveWork(ptr: *anyopaque) bool {
         const self = cast(ptr);
-        return self.pending_tasks > 0 or self.outbox.items.len > 0 or !self.jobs.isEmpty();
+        return self.pending_tasks > 0 or self.outbox.items.len > 0 or self.jobs.anyRunning() or self.jobs.noticeWaiting();
     }
 
     fn activity(ptr: *anyopaque) contract.Activity {
@@ -3382,7 +3387,7 @@ fn countKind(harness: *const Harness, kind: []const u8) usize {
     return count;
 }
 
-test "a job that ends on an idle session starts a run that tells the model, and its record keeps the session from parking" {
+test "a job that ends on an idle session starts a run that tells the model, and its record is retained without live work" {
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -3404,8 +3409,8 @@ test "a job that ends on an idle session starts a run that tells the model, and 
     const trigger = started.get("trigger").?.object;
     try testing.expectEqualStrings("background_task", trigger.get("kind").?.string);
     try testing.expectEqualStrings(session.jobs.list.items[0].id, trigger.get("task_id").?.string);
-    try testing.expect(!session.jobs.anyRunning());
-    try testing.expect(!harness.session.holdsNoLiveWork());
+    try testing.expect(harness.session.holdsNoLiveWork());
+    try testing.expect(harness.session.retainsTasks());
 }
 
 test "a job that ends during a turn folds into its next request and starts no run" {
