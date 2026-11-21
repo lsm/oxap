@@ -168,7 +168,10 @@ arguments.
   **stored**, the growth in bytes of every file under the case's directory, to
   see write amplification.
 - **step p50/p99**: the timed step above, measured from the driver. It includes
-  the driver's stdio round trips and its polling of `state`.
+  the driver's stdio round trips and its polling of `state`. The scripted
+  provider sets `TCP_NODELAY`, as production HTTP servers do. Without it, oapx's
+  reused connection turns each reply's separate header and body writes into a
+  wait on Linux's delayed ACK, about 40 ms per model call.
 - **per agent**: the least-squares slope over the N values that finished,
   in the unit shown. Fixed process cost drops out; a slope that rises with N,
   or a row that stops, is where the target does not scale.

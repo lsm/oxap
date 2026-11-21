@@ -415,6 +415,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
     """A scripted openai-completions endpoint: text, or one Shell call when asked."""
 
     protocol_version = "HTTP/1.1"
+    disable_nagle_algorithm = True
     workspace = ""
 
     def log_message(self, *_):
