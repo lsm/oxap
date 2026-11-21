@@ -5,3 +5,5 @@ This comparison is in progress. The ACP tags `v1.20.0` and `schema-v1.34.0` in h
 The catalog pin and corpus have not yet been updated. No new harness process has been run.
 
 The stable v1 `SessionUpdate` union adds `plan_removed`, `plan_update`, `session_message`, `session_message_chunk` and `subagent_update` since v1.17.0. The schema changelog records stabilization of subagent sessions and plan operations. These updates require an adapter mapping review before the catalog can admit the new version; no behavior is claimed by this preliminary comparison.
+
+Go, Zig and Rust already admit `plan_update` and `plan_removed` as observed-only updates. The three inter-session and subagent update variants still need mapping: the current reducers treat unknown stable updates as errors, and child-session traffic can arrive on the parent connection. Their handling cannot be inferred from the existing plan support.
