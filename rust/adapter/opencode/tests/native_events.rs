@@ -164,3 +164,12 @@ fn archive_events_are_durable() {
         assert!(durable(&event.kind));
     }
 }
+
+#[test]
+fn first_token_event_is_durable() {
+    let event = decode_event(
+        r#"{"id":"evt_1","type":"session.step.first-token","data":{"sessionID":"ses_a","assistantMessageID":"msg_a"},"durable":{"aggregateID":"ses_a","seq":1,"version":1}}"#,
+    )
+    .unwrap();
+    holds_go_s_invariants(&event);
+}

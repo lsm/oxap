@@ -23,6 +23,7 @@ pub const EventType = enum {
     execution_failed,
     execution_interrupted,
     step_started,
+    step_first_token,
     step_streamed,
     step_ended,
     step_failed,
@@ -72,21 +73,21 @@ pub const EventType = enum {
         "session.inbox.enqueued",         "session.inbox.delivered",       "session.inbox.cancelled",
         "session.inbox.delivery.changed", "session.execution.started",     "session.execution.succeeded",
         "session.execution.failed",       "session.execution.interrupted", "session.step.started",
-        "session.step.streamed",          "session.step.ended",            "session.step.failed",
-        "session.text.started",           "session.text.delta",            "session.text.ended",
-        "session.reasoning.started",      "session.reasoning.delta",       "session.reasoning.ended",
-        "session.tool.input.started",     "session.tool.input.delta",      "session.tool.input.ended",
-        "session.tool.called",            "session.tool.progress",         "session.tool.success",
-        "session.tool.failed",            "session.created",               "session.agent.selected",
-        "session.model.selected",         "session.moved",                 "session.renamed",
-        "session.metadata.updated",       "session.permissions",           "session.viewed",
-        "session.archived",               "session.unarchived",            "session.usage.updated",
-        "session.deleted",                "session.forked",                "session.instructions.updated",
-        "session.synthetic",              "session.skill.activated",       "session.shell.started",
-        "session.shell.ended",            "session.retry.scheduled",       "session.compaction.started",
-        "session.compaction.delta",       "session.compaction.ended",      "session.compaction.failed",
-        "session.revert.staged",          "session.revert.cleared",        "session.revert.committed",
-        "permission.asked",               "permission.replied",
+        "session.step.first-token",       "session.step.streamed",         "session.step.ended",
+        "session.step.failed",            "session.text.started",          "session.text.delta",
+        "session.text.ended",             "session.reasoning.started",     "session.reasoning.delta",
+        "session.reasoning.ended",        "session.tool.input.started",    "session.tool.input.delta",
+        "session.tool.input.ended",       "session.tool.called",           "session.tool.progress",
+        "session.tool.success",           "session.tool.failed",           "session.created",
+        "session.agent.selected",         "session.model.selected",        "session.moved",
+        "session.renamed",                "session.metadata.updated",      "session.permissions",
+        "session.viewed",                 "session.archived",              "session.unarchived",
+        "session.usage.updated",          "session.deleted",               "session.forked",
+        "session.instructions.updated",   "session.synthetic",             "session.skill.activated",
+        "session.shell.started",          "session.shell.ended",           "session.retry.scheduled",
+        "session.compaction.started",     "session.compaction.delta",      "session.compaction.ended",
+        "session.compaction.failed",      "session.revert.staged",         "session.revert.cleared",
+        "session.revert.committed",       "permission.asked",              "permission.replied",
     };
 
     pub fn wire(self: EventType) []const u8 {
@@ -109,6 +110,12 @@ pub const EventType = enum {
 };
 
 pub const server_connected = "server.connected";
+
+test "first token event is durable" {
+    const kind = EventType.parse("session.step.first-token") orelse return error.TestUnexpectedResult;
+    try std.testing.expect(kind.durable());
+    try std.testing.expectEqualStrings("session.step.first-token", kind.wire());
+}
 
 test "archive events have durable positions" {
     for ([_][]const u8{ "session.archived", "session.unarchived" }) |name| {
