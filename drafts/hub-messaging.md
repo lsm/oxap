@@ -27,7 +27,8 @@ The first local binding is a Unix-domain stream socket in an owner-only
 directory. The Hub and clients verify that the directory and socket belong to
 their effective operating-system user and that other users have no access. The
 directory must be owned by that user with mode `0700`, and the Hub sets the
-socket mode to `0600` after binding; neither side follows a symlink, and a wrong owner or mode is an error, not something to repair. Each
+socket mode to `0600` after binding and before announcing readiness; a client
+that connects earlier fails closed and may retry. Neither side follows a symlink, and a wrong owner or mode is an error, not something to repair. Each
 side also checks the connected peer credentials and requires the peer user ID
 to equal its own effective user ID. It fails closed if credentials are
 unavailable or differ. These checks are required on macOS and Linux; another
@@ -44,7 +45,7 @@ transport authentication require a separate binding.
 The server's `hub.socket` configuration selects the socket path. If absent,
 `OXAP_HUB_SOCKET` selects it for the server and clients. Otherwise Linux uses
 `$XDG_RUNTIME_DIR/oxap/hub.sock` and macOS uses
-`$HOME/Library/Caches/oxap/hub.sock`. Linux without `XDG_RUNTIME_DIR`, or macOS
+`$HOME/.oxap/run/hub.sock`. Linux without `XDG_RUNTIME_DIR`, or macOS
 without `HOME`, requires an explicit path. A client and server configured with
 different paths do not discover each other.
 
