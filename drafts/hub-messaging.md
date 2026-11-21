@@ -41,9 +41,9 @@ IDs deliberately. IDs are opaque strings; clients must not parse them.
 
 The local binding trusts all accepted local clients equally. Any connected
 client can enumerate registrations, subscribe to any topic and address any
-instance. Payloads and metadata must not be logged by the Hub. Operating-system
-account isolation is the security boundary; no confidentiality is promised
-against another process running as the same user.
+instance. Payloads and metadata must not be logged by the Hub. A loopback listener does not distinguish local operating-system users. No
+confidentiality or authorization is promised against any local process that can
+connect; deployments requiring user isolation need an authenticated binding.
 
 ## Wire and operations
 
