@@ -1054,7 +1054,7 @@ pub const Hub = struct {
         const entry = self.findSession(session_id) orelse return error.UnknownSession;
         if (entry.parked) return true;
         if (!entry.reopenable or self.heldFor(entry) != null) return false;
-        if (!entry.session.holdsNoLiveWork()) return false;
+        if (!entry.session.holdsNoLiveWork() or entry.session.retainsTasks()) return false;
         var refusal = contract.Refusal{};
         const reported = entry.session.state(arena, &refusal) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -1924,7 +1924,7 @@ pub const Hub = struct {
 
     fn eligibleForIdlePark(self: *const Hub, entry: *const Entry) bool {
         return !entry.parked and entry.reopenable and self.heldFor(entry) == null and
-            entry.session.holdsNoLiveWork() and entry.session.activity() == .idle;
+            entry.session.holdsNoLiveWork() and !entry.session.retainsTasks() and entry.session.activity() == .idle;
     }
 
     pub fn closeSessions(self: *Hub) Sweep {
@@ -4225,7 +4225,7 @@ test "state answers a parked session from what it stored and does not wake it" {
     try testing.expectEqual(before.updated_at_ms, after.updated_at_ms);
 }
 
-test "parking stops the harness, and no run, live job or hold lets it" {
+test "parking stops the harness, and no run, live job, retained task or hold lets it" {
     var flaky = Flaky{ .allocator = testing.allocator, .fail_drain = false };
     flaky.keep = std.heap.ArenaAllocator.init(testing.allocator);
     defer flaky.keep.deinit();
@@ -4251,6 +4251,12 @@ test "parking stops the harness, and no run, live job or hold lets it" {
     try testing.expectEqual(@as(usize, 0), flaky.closes);
 
     flaky.live_job = false;
+    flaky.retained_task = true;
+    try testing.expect(!try hub.park(arena, "stopping"));
+    try testing.expect(!hub.eligibleForIdlePark(hub.findSession("stopping").?));
+    try testing.expectEqual(@as(usize, 0), flaky.closes);
+
+    flaky.retained_task = false;
     _ = try hub.hold(arena, "stopping");
     try testing.expect(!try hub.park(arena, "stopping"));
     try testing.expectEqual(@as(usize, 0), flaky.closes);
@@ -5288,6 +5294,7 @@ const Flaky = struct {
     saw_tools: ?[]const u8 = null,
     saw_reopen: bool = false,
     live_job: bool = false,
+    retained_task: bool = false,
     reasoning: ?[]const u8 = null,
     policy: ?[]const u8 = null,
     saw_reasoning: ?[]const u8 = null,
@@ -5375,6 +5382,7 @@ fn flakyOpen(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRe
         .tools = flakyTools,
         .stream_failure = flakyStreamFailure,
         .live_work = flakyLiveWork,
+        .retained_tasks = flakyRetainedTasks,
     } };
     self.owned_id = id;
     return self.session;
@@ -5383,6 +5391,11 @@ fn flakyOpen(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRe
 fn flakyLiveWork(ptr: *anyopaque) bool {
     const self: *Flaky = @ptrCast(@alignCast(ptr));
     return self.live_job;
+}
+
+fn flakyRetainedTasks(ptr: *anyopaque) bool {
+    const self: *Flaky = @ptrCast(@alignCast(ptr));
+    return self.retained_task;
 }
 
 fn flakyReadable(ptr: *anyopaque) ?std.Io.File.Handle {

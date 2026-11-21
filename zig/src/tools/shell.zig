@@ -15,7 +15,6 @@ pub const schema_job =
     \\{"type":"object","properties":{"description":{"type":"string","description":"Why this tool call is needed and what information or change it is intended to produce."},"workspace_root":{"type":"string"},"path":{"type":"string","description":"The output_path the background Shell call returned."},"kill":{"type":"boolean"},"wake_on":{"type":"string","description":"An RE2 regular expression. The session is woken once, with the matching line, when the job writes a line it matches anywhere in; output since the offset you last saw counts. The rule then ends, so set it again to be woken again."}},"required":["description","workspace_root","path"],"additionalProperties":false}
 ;
 
-
 pub const job_tool_name = "ShellJob";
 
 pub const Jobs = struct {
@@ -743,6 +742,12 @@ pub const Jobs = struct {
             if (job.owesNotice()) job.noticed = true;
         }
         return .{ .task_id = task_id, .text = owned };
+    }
+
+    pub fn isEmpty(self: *Jobs) bool {
+        self.lock();
+        defer self.mutex.unlock();
+        return self.list.items.len == 0;
     }
 
     pub fn anyRunning(self: *Jobs) bool {
