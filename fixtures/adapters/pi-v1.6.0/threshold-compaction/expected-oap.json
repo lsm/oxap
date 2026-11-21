@@ -15,7 +15,7 @@
     "timestamp_ms": 4,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
@@ -33,32 +33,38 @@
     "timestamp_ms": 5,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
     "type": "run.compaction.ended",
-    "id": "event-8",
+    "id": "event-9",
     "payload": {
       "session_id": "session",
       "run_id": "run-2",
       "compaction_id": "compaction-6",
-      "outcome": "completed"
+      "outcome": "completed",
+      "summary": {
+        "id": "message-8",
+        "role": "assistant",
+        "content": "No prior history.\n\n---\n\n**Turn Context (split turn):**\n\nfixture response"
+      },
+      "history_tokens": 1547
     },
     "sequence": 3,
     "timestamp_ms": 6,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
     "type": "run.completed",
-    "id": "event-9",
+    "id": "event-10",
     "payload": {
       "session_id": "session",
       "run_id": "run-2",
@@ -68,7 +74,7 @@
         "content": [
           {
             "type": "text",
-            "text": "recovered"
+            "text": "hello"
           }
         ]
       },
@@ -78,6 +84,6 @@
     "timestamp_ms": 7,
     "session_id": "session",
     "run_id": "run-2",
-    "capability_revision": "pi-v1.5.2-oap-v1"
+    "capability_revision": "pi-v1.6.0-oap-v1"
   }
 ]
