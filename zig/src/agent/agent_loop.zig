@@ -2236,6 +2236,57 @@ test "turnOutcome ends the run on a cut-off tool call once three in a row were a
     try std.testing.expectEqual(TurnOutcome.called_tools, outcomeOf(.tool_use, &calls, 3));
 }
 
+const Run = struct {
+    state: LoopState = .{ .iterations = 0, .final_message = null },
+    withheld: WithheldResults,
+    turn_config: AgentLoopConfig,
+    ended_before_cap: bool = false,
+    cancelled: bool = false,
+    cut_off_tool_turns: u32 = 0,
+    asked_for_answer: bool = false,
+
+    fn init(config: AgentLoopConfig, history_len: usize) Run {
+        return .{ .withheld = .{ .history_at_start = history_len }, .turn_config = config };
+    }
+
+    fn deinit(self: *Run, allocator: std.mem.Allocator) void {
+        self.state.deinit(allocator);
+    }
+
+    fn end(self: *Run, cancelled: bool) void {
+        self.ended_before_cap = true;
+        self.cancelled = cancelled;
+    }
+
+    fn termination(self: *const Run) ?types.AgentTermination {
+        if (self.cancelled) return .cancelled;
+        if (!self.ended_before_cap) return .max_turns;
+        return null;
+    }
+
+    fn switchModel(self: *Run, config: AgentLoopConfig) void {
+        const next_model = config.next_model_fn orelse return;
+        const model = next_model(config.next_model_ctx) orelse return;
+        self.turn_config.model = model;
+        if (self.turn_config.max_tokens) |requested| {
+            if (model.max_tokens > 0 and requested > model.max_tokens) self.turn_config.max_tokens = model.max_tokens;
+        }
+    }
+
+    fn judge(self: *Run, config: AgentLoopConfig, message: ai_types.AssistantMessage) TurnOutcome {
+        const raised = if (config.raise_max_tokens_on_cut_off and message.stop_reason == .length) raisedOutput(self.turn_config.max_tokens, self.turn_config.model) else null;
+        if (raised) |higher| self.turn_config.max_tokens = higher;
+        const outcome = switch (turnOutcome(message, self.cut_off_tool_turns)) {
+            .reasoned_only => if (self.asked_for_answer) TurnOutcome.answered else TurnOutcome.reasoned_only,
+            .answered => if (raised != null) TurnOutcome.cut_off else TurnOutcome.answered,
+            else => |value| value,
+        };
+        self.cut_off_tool_turns = if (outcome == .called_tools and message.stop_reason == .length) self.cut_off_tool_turns + 1 else 0;
+        if (outcome == .reasoned_only) self.asked_for_answer = true;
+        return outcome;
+    }
+};
+
 fn runLoop(
     allocator: std.mem.Allocator,
     prompts: ?[]const ai_types.Message,
@@ -2244,14 +2295,10 @@ fn runLoop(
     event_stream: *AgentEventStream,
     retained: *types.StreamRetention,
 ) !void {
-    var withheld = WithheldResults{ .history_at_start = context.messages.items.len };
-    var state = LoopState{
-        .iterations = 0,
-        .final_message = null,
-    };
-    defer state.deinit(allocator);
-    errdefer if (state.final_message) |final_message| {
-        state.final_message = null;
+    var run = Run.init(config, context.messages.items.len);
+    defer run.deinit(allocator);
+    errdefer if (run.state.final_message) |final_message| {
+        run.state.final_message = null;
         retained.park(final_message);
     };
 
@@ -2272,36 +2319,21 @@ fn runLoop(
 
     try pushAgentEvent(event_stream, .agent_start);
 
-    var ended_before_cap = false;
-    var cancelled_run = false;
-    var cut_off_tool_turns: u32 = 0;
-    var asked_for_answer = false;
-    var turn_config = config;
-
-    outer: while (withinTurnLimit(state.iterations, config.max_iterations)) {
+    outer: while (withinTurnLimit(run.state.iterations, config.max_iterations)) {
         if (config.cancel_token) |token| {
             if (token.isCancelled()) {
-                ended_before_cap = true;
-                cancelled_run = true;
+                run.end(true);
                 break;
             }
         }
 
-        while (withinTurnLimit(state.iterations, config.max_iterations)) {
+        while (withinTurnLimit(run.state.iterations, config.max_iterations)) {
             if (runCancelled(config)) {
-                ended_before_cap = true;
-                cancelled_run = true;
+                run.end(true);
                 break :outer;
             }
-            if (state.iterations > 0) {
-                if (config.next_model_fn) |next_model| {
-                    if (next_model(config.next_model_ctx)) |model| {
-                        turn_config.model = model;
-                        if (turn_config.max_tokens) |requested| {
-                            if (model.max_tokens > 0 and requested > model.max_tokens) turn_config.max_tokens = model.max_tokens;
-                        }
-                    }
-                }
+            if (run.state.iterations > 0) {
+                run.switchModel(config);
                 if (config.compact_between_turns_fn) |compact| {
                     if (try compact(config.compact_between_turns_ctx, context, event_stream)) {
                         const request = try compactedRequest(context.allocator);
@@ -2318,8 +2350,7 @@ fn runLoop(
                         } });
                     }
                     if (runCancelled(config)) {
-                        ended_before_cap = true;
-                        cancelled_run = true;
+                        run.end(true);
                         break :outer;
                     }
                 }
@@ -2353,65 +2384,57 @@ fn runLoop(
             const assistant_message = streamRetriedTurn(
                 allocator,
                 context,
-                turn_config,
+                run.turn_config,
                 event_stream,
-                &withheld,
+                &run.withheld,
             ) catch |err| {
                 const error_content = [_]ai_types.AssistantContent{.{
                     .text = .{ .text = "" },
                 }};
                 const error_msg = ai_types.AssistantMessage{
                     .content = &error_content,
-                    .api = turn_config.model.api,
-                    .provider = turn_config.model.provider,
-                    .model = turn_config.model.id,
+                    .api = run.turn_config.model.api,
+                    .provider = run.turn_config.model.provider,
+                    .model = run.turn_config.model.id,
                     .usage = .{},
                     .stop_reason = .@"error",
                     .error_message = ai_types.OwnedSlice(u8).initBorrowed(@errorName(err)),
                     .timestamp = compat.time.nowMillis(),
                     .is_owned = false,
                 };
-                try setFinalMessage(&state, allocator, error_msg);
+                try setFinalMessage(&run.state, allocator, error_msg);
 
-                const final_error_msg = state.final_message orelse error_msg;
+                const final_error_msg = run.state.final_message orelse error_msg;
                 try pushAgentEvent(event_stream, .{ .turn_end = .{
                     .message = final_error_msg,
                     .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
                 } });
 
-                ended_before_cap = true;
-                cancelled_run = runCancelled(config);
+                run.end(runCancelled(config));
                 break :outer;
             };
 
-            state.iterations += 1;
+            run.state.iterations += 1;
             const loop_owns_message = assistant_message.is_owned or assistant_message.error_message.is_owned;
             var message_transferred = false;
             errdefer if (loop_owns_message and !message_transferred) retained.park(assistant_message);
-            try setFinalMessage(&state, allocator, assistant_message);
+            try setFinalMessage(&run.state, allocator, assistant_message);
 
-            const raised = if (config.raise_max_tokens_on_cut_off and assistant_message.stop_reason == .length) raisedOutput(turn_config.max_tokens, turn_config.model) else null;
-            if (raised) |higher| turn_config.max_tokens = higher;
-            const outcome = switch (turnOutcome(assistant_message, cut_off_tool_turns)) {
-                .reasoned_only => if (asked_for_answer) TurnOutcome.answered else TurnOutcome.reasoned_only,
-                .answered => if (raised != null) TurnOutcome.cut_off else TurnOutcome.answered,
-                else => |value| value,
-            };
-            cut_off_tool_turns = if (outcome == .called_tools and assistant_message.stop_reason == .length) cut_off_tool_turns + 1 else 0;
+            const outcome = run.judge(config, assistant_message);
             switch (outcome) {
                 .failed => {
-                    cancelled_run = runCancelled(config);
-                    const final_error_msg = state.final_message orelse assistant_message;
+                    const cancelled = runCancelled(config);
+                    const final_error_msg = run.state.final_message orelse assistant_message;
                     try pushAgentEvent(event_stream, .{ .turn_end = .{
                         .message = final_error_msg,
                         .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
-                        .input_dropped = withheld.input_dropped,
+                        .input_dropped = run.withheld.input_dropped,
                     } });
                     if (loop_owns_message) {
                         retained.park(assistant_message);
                         message_transferred = true;
                     }
-                    ended_before_cap = true;
+                    run.end(cancelled);
                     break :outer;
                 },
                 .answered => {
@@ -2464,11 +2487,10 @@ fn runLoop(
                         }
                     }
 
-                    ended_before_cap = true;
+                    run.end(false);
                     break :outer;
                 },
                 .reasoned_only, .cut_off => {
-                    if (outcome == .reasoned_only) asked_for_answer = true;
                     try pushAgentEvent(event_stream, .{ .turn_end = .{
                         .message = assistant_message,
                         .tool_results = types.OwnedSlice(ai_types.ToolResultMessage).initBorrowed(&.{}),
@@ -2537,22 +2559,17 @@ fn runLoop(
         }
     }
 
-    const termination: ?types.AgentTermination = if (cancelled_run)
-        .cancelled
-    else if (!ended_before_cap)
-        .max_turns
-    else
-        null;
+    const termination = run.termination();
 
-    const result_final_message: ai_types.AssistantMessage = if (state.final_message) |fm| blk: {
-        state.final_message = null;
+    const result_final_message: ai_types.AssistantMessage = if (run.state.final_message) |fm| blk: {
+        run.state.final_message = null;
         break :blk fm;
     } else blk: {
         break :blk .{
             .content = try allocator.alloc(ai_types.AssistantContent, 0),
-            .api = turn_config.model.api,
-            .provider = turn_config.model.provider,
-            .model = turn_config.model.id,
+            .api = run.turn_config.model.api,
+            .provider = run.turn_config.model.provider,
+            .model = run.turn_config.model.id,
             .usage = .{},
             .stop_reason = .stop,
             .timestamp = compat.time.nowMillis(),
@@ -2562,7 +2579,7 @@ fn runLoop(
 
     const result = AgentLoopResult{
         .final_message = result_final_message,
-        .iterations = state.iterations,
+        .iterations = run.state.iterations,
         .termination = termination,
     };
     var result_owned = false;
