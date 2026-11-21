@@ -78,6 +78,18 @@ open.
 | `waiting` | submits, then stops at the first permission request (`zig-loop` opens in `ask` mode and the call is a foreground `Shell`) | submit until the request is pending |
 | `jobs` (`zig-loop` only) | runs one turn whose `Shell` call starts `true` with `run_in_background`, which exits at once | the turn |
 | `burst` | all N submit back to back, then every run is driven to completion | each submit |
+| `parked` (Zig only) | runs three turns as in `history`, then sits idle until it parks | each turn |
+| `wake` (Zig only) | as `parked`, then one more turn that wakes it, then parks again | each wake turn |
+
+`parked` and `wake` serve the hub with `--park-after 2` unless `--park-after`
+names another limit, and wait past it. Parking is not visible in `state` or
+`sessions`, so the driver proves it: a park drops the session's journal, and an
+`events` read with a cursor from before it must answer `oap-replay-gap`. A
+session that answers anything else fails the case, so a parked row cannot
+quietly measure sessions that never parked. Compare `parked` with `history` for
+what a park frees per agent, and `wake` with `parked` for what a wake and a
+second park leave behind; the `wake` step against a `history` turn is what a
+wake adds to a turn. Go and Rust cannot park, so both scenarios skip them.
 
 The memory adapter's script raises a permission request and then a user input
 request; the driver approves and answers both. Go and Rust have no shell jobs,
@@ -174,8 +186,8 @@ the row then records how many steps it reached.
 - Concurrency inside the hub beyond what one stdio client drives: outside the
   flights the driver issues one request at a time, so `burst` holds N runs
   active at once but does not submit them in parallel.
-- Recovery, restart or reopen, apart from the memory `--park-after` frees: no step
-  wakes a parked session, so the cost of a wake is not measured.
+- Recovery or restart: a wake reopens a parked session inside a live process,
+  and nothing here restarts the process.
 - The file run stores (`zig/src/hub/run_store.zig`, `go/binding/runs.go`,
   `rust/binding/src/runs.rs`): none of the three served hubs calls them yet, so
   their append cost is not on any path this drives. The session history and

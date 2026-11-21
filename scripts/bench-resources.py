@@ -33,10 +33,12 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 HISTORY_TURNS = 3
-SCENARIOS = ("empty", "history", "waiting", "jobs", "burst")
+SCENARIOS = ("empty", "history", "waiting", "jobs", "burst", "parked", "wake")
 FLIGHTS = ("working", "mixed", "hold-model", "hold-tool", "hold-gate")
 TARGETS = ("zig", "go", "rust", "zig-loop")
 LOOP_ONLY = {"jobs", *FLIGHTS}
+PARK_ONLY = {"parked", "wake"}
+PARK_SECONDS = 2
 WINDOW = 64
 SLOT, SLOT_FIELDS = 64, ("in_model", "served", "calls", "results", "bad")
 
@@ -126,6 +128,7 @@ class Hub:
         self.process = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                         stderr=stderr, text=True, bufsize=1, start_new_session=True)
         self.replies = queue.Queue()
+        self.signals = queue.Queue()
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
         self.number = 0
@@ -133,7 +136,9 @@ class Hub:
     def _read(self):
         for line in self.process.stdout:
             message = json.loads(line)
-            if "id" in message:
+            if "event" in message:
+                self.signals.put(message)
+            elif "id" in message:
                 self.replies.put(message)
         self.replies.put(None)
 
@@ -214,10 +219,19 @@ class Agents:
 
     def submit(self, session, text):
         op, fields = self.submit_call(session, text)
-        self.hub.call(op, **fields)
+        return self.hub.call(op, **fields)
 
     def state(self, session):
         return self.hub.call("state", session_id=session)["payload"]
+
+    def parked(self, session, run):
+        """A park drops the journal, so a cursor from before it is a replay gap; the read does not wake it."""
+        self.hub.call("events", session_id=session, run_id=run, after=0)
+        number = self.hub.number
+        while True:
+            signal = self.hub.signals.get(timeout=120)
+            if signal["id"] == number:
+                return signal["event"] == "oap-replay-gap"
 
     def pending(self, session):
         runs = self.state(session).get("active_runs") or []
@@ -272,6 +286,36 @@ def scenario_history(agents, n, steps):
         agents.open(f"s{i}")
         for t in range(HISTORY_TURNS):
             timed(steps, turn, f"s{i}", f"turn {t} of agent {i}")
+
+
+def park_all(agents, n, runs, seconds):
+    time.sleep(seconds + 1)
+    idle = [f"s{i}" for i in range(n) if not agents.parked(f"s{i}", runs[f"s{i}"])]
+    if idle:
+        raise RuntimeError(f"{len(idle)} of {n} sessions did not park, first {idle[0]}")
+
+
+def scenario_parked(agents, n, steps, seconds):
+    runs = {}
+    def turn(session, text):
+        runs[session] = agents.submit(session, text)["payload"]["run_id"]
+        agents.settle(session)
+    for i in range(n):
+        agents.open(f"s{i}")
+        for t in range(HISTORY_TURNS):
+            timed(steps, turn, f"s{i}", f"turn {t} of agent {i}")
+    park_all(agents, n, runs, seconds)
+    return runs
+
+
+def scenario_wake(agents, n, steps, seconds):
+    runs = scenario_parked(agents, n, [], seconds)
+    def turn(session, text):
+        runs[session] = agents.submit(session, text)["payload"]["run_id"]
+        agents.settle(session)
+    for i in range(n):
+        timed(steps, turn, f"s{i}", f"wake of agent {i}")
+    park_all(agents, n, runs, seconds)
 
 
 def scenario_waiting(agents, n, steps):
@@ -364,7 +408,7 @@ def scenario_flight(agents, n, steps, shape, work, poll_s, phases):
 
 
 RUNNERS = {"empty": scenario_empty, "history": scenario_history, "waiting": scenario_waiting,
-           "jobs": scenario_jobs, "burst": scenario_burst}
+           "jobs": scenario_jobs, "burst": scenario_burst, "parked": scenario_parked, "wake": scenario_wake}
 
 
 class Provider(http.server.BaseHTTPRequestHandler):
@@ -687,7 +731,8 @@ def run_case(target, binary, scenario, n, scratch, timeout, cap, options):
         adapter, metadata = "loop", {"workspace_root": str(work)}
         config = {"adapters": {"loop": {"type": "oapx"}}}
     (root / "hub.json").write_text(json.dumps(config))
-    park = ["--park-after", str(options.park_after)] if options.park_after and target.startswith("zig") else []
+    park_after = options.park_after or (PARK_SECONDS if scenario in PARK_ONLY else 0)
+    park = ["--park-after", str(park_after)] if park_after and target.startswith("zig") else []
     command = sandboxed([str(binary), "serve", "--stdio", "--config", str(root / "hub.json"),
                          "--session-history", str(data / "sessions.jsonl"), *park], root)
     stderr = (root / "hub-stderr.txt").open("w")
@@ -705,6 +750,8 @@ def run_case(target, binary, scenario, n, scratch, timeout, cap, options):
         started = time.perf_counter()
         outcome = {}
         runner, phases, timeline = RUNNERS.get(scenario), {"gates": 0, "polls": 0, "refused": 0}, None
+        if scenario in PARK_ONLY:
+            runner = lambda a, count, s: RUNNERS[scenario](a, count, s, park_after)
         if flight:
             shape = shape_of(scenario, n, options.hold or max(15.0, n / 50))
             runner = lambda a, count, s: scenario_flight(a, count, s, shape, work, options.poll, phases)
@@ -739,7 +786,7 @@ def run_case(target, binary, scenario, n, scratch, timeout, cap, options):
             timeline.join(timeout=5)
         if result["status"] == "ok":
             settle = options.idle_settle if scenario == "empty" else 1.0
-            settle += options.park_after + 1 if park else 0
+            settle += park_after + 1 if park and scenario not in PARK_ONLY else 0
             time.sleep(settle)
         sampler.stop()
         result.update(peak_rss=sampler.peak["rss"], peak_threads=sampler.peak["threads"])
@@ -990,6 +1037,8 @@ def main():
         for target in targets:
             for scenario in scenarios:
                 if scenario in LOOP_ONLY and target != "zig-loop":
+                    continue
+                if scenario in PARK_ONLY and not target.startswith("zig"):
                     continue
                 for n in counts:
                     if scenario in FLIGHTS and user_processes() + 2 * n >= arguments.max_user_processes:
