@@ -1859,7 +1859,7 @@ test "handleAuth login surfaces typed error for unknown provider via CLI wrapper
 }
 
 pub fn main(init: std.process.Init) !void {
-    const allocator = init.gpa;
+    const allocator = if (builtin.link_libc) std.heap.c_allocator else init.gpa;
 
     const stdout = compat.stdio.stdout();
     const stderr = compat.stdio.stderr();
