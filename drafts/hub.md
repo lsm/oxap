@@ -125,8 +125,8 @@ and `TestTheExampleCopilotEntryUsesAnExplicitNativeEnvironment`; the public
 refusing the Go-only example. It claims no live Copilot authentication or model
 response.
 
-`model_provider` names a catalog row as a claude or codex entry's model provider (#361),
-and is `oapx`'s own under Decision 0038: Go's decoder refuses it as an unknown
+`model_provider` names a catalog row as a claude, codex, or deepseek entry's model provider,
+and is `oapx`'s own under Decision 0038: Go and Rust refuse it as an unknown
 member, so a document carrying it is an `oapx` document. `oapx` translates it
 into Claude Code's official settings, recorded in the 2.1.282 ledger's
 *Model-provider settings* section, and nothing else: `ANTHROPIC_BASE_URL` is the
@@ -139,8 +139,8 @@ catalog's: a `base_url_env` or a `providers.json` override moves `oapx`'s own
 requests, not the harness's. Each of these is refused at startup, naming the
 entry: a row that is not catalogued, one with no `anthropic-messages` endpoint, an
 `environment` that already sets one of the three variables, a row with no key,
-a key that is an OAuth login, and `model_provider` on any type but `claude` or
-`codex`.
+a key that is an OAuth login, and `model_provider` on any type except `claude`,
+`codex`, or `deepseek`.
 
 A codex entry is routed through Codex's own `-c` settings, recorded in the
 0.160.1 ledger's *Model-provider settings* section: `model_provider` names a
@@ -152,6 +152,14 @@ holding the row's key. The settings follow the entry's own `args`. A row with no
 `openai-responses` endpoint at a fixed address is refused, as are an
 `environment` that sets `OAPX_PROVIDER_API_KEY` and a codex `endpoint`, whose
 running app-server chose its provider when it started.
+
+A deepseek entry passes the row's catalogued `anthropic-messages` endpoint
+as `DEEPSEEK_BASE_URL` and its key as `DEEPSEEK_API_KEY`, after the entry's
+`environment`. For `opencode-go`, `oapx` reads `OPENCODE_API_KEY` from the hub
+process environment and falls back to its credential store. Startup refuses
+the named entry for an unknown row, a missing endpoint or key, an OAuth login,
+or either translated variable already set in `environment`. The dsh
+`provider` and the adapter's capabilities stay the same.
 
 `any_directory: true` makes the entry a template: a `work.start` naming another
 absolute directory gets a session from an adapter built from this entry with
