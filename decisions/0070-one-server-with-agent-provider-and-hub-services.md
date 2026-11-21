@@ -5,8 +5,10 @@ Date: 2026-11-20
 Profiles: Agent Control and Model Provider; a separate messaging protocol is proposed
 Amends: [the CLI draft](../drafts/cli.md), the [multi-session binding](../drafts/hub.md),
 the [raw stdio binding](../drafts/endpoint-stdio.md), the CLI form in
-[Decision 0027](0027-composed-stdio-profiles.md), and the compatibility policy
-in [Decision 0067](0067-the-project-is-named-oxap.md) for the 0.2 release
+[Decision 0027](0027-composed-stdio-profiles.md), the daemon naming and command
+in [Decision 0038](0038-one-released-binary-and-a-library-for-every-language.md),
+and the compatibility policy in [Decision 0067](0067-the-project-is-named-oxap.md)
+for the 0.2 release
 
 ## Context
 
@@ -88,19 +90,23 @@ before Hub ships. The Agent and Provider cutover can ship independently in
   data-directory fallbacks. When only legacy state exists, startup reports
   that it needs migration before creating new state. Keep the existing OS
   credential-store identifier and leave stored credentials in place.
-- Set the protocol identity to `oxap` and the wire version to `0.2`. Define
-  the new profile values and Agent Service transport event names with the
-  schemas and conformance fixtures. Validate the protocol and version before
-  profile routing. A recoverable request on the retired wire receives a
-  correlated `unsupported_version` error. The 0.2 binding specs define its wire
-  form and framing for raw stdio, multi-session stdio, and HTTP. Existing
-  framing error rules apply when a request cannot be correlated. Preserve
-  capability revision pins, native harness identifiers, and release artifacts.
+- Set the protocol identity to `oxap` and the wire version to `0.2`. Replace
+  the `open-agent-protocol.` prefix of each profile with `oxap.`, giving
+  `oxap.agent-control-core` and `oxap.model-provider-core`. For Agent Service
+  transport events, replace the `oap-` prefix with `oxap-` and retain each
+  event's suffix. Validate the protocol and version before profile routing.
+  A recoverable request on the retired wire receives a correlated
+  `unsupported_version` error. Agent Control gains this error code in 0.2.
+  The 0.2 binding specs define the error's form and framing for raw stdio,
+  multi-session stdio, and HTTP. Existing framing error rules apply when a
+  request cannot be correlated. Preserve capability revision pins, native
+  harness identifiers, and release artifacts.
 
 ## Consequences
 
-- Ship one server binary, as in [Decision 0038](0038-one-released-binary-and-a-library-for-every-language.md).
-  Agent and Provider keep separate protocol responsibilities within it.
+- Decision 0038's multi-session daemon becomes the Agent Service, reachable
+  through the `agent` section under `oxap serve --config`. The single released
+  binary continues to carry Agent and Provider as separate protocols.
 - Update the CLI draft, bindings, SDK launchers, and migration guide in the
   implementation PRs. This decision records the target architecture and
   supersedes the older naming policy when the 0.2 cutover ships.
