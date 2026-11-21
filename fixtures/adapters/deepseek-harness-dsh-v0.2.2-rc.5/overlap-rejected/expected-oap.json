@@ -16,33 +16,33 @@
     "timestamp_ms": 3,
     "session_id": "session",
     "run_id": "run-c",
-    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3"
+    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
     "type": "run.completed",
-    "id": "event-e",
+    "id": "event-f",
     "payload": {
       "session_id": "session",
       "run_id": "run-c",
       "final_response": {
         "id": "message-b",
         "role": "assistant",
-        "content": "delegated"
+        "content": "busy"
       },
       "stop_reason": "completed",
       "usage": {
-        "input_tokens": 3,
-        "output_tokens": 3,
-        "total_tokens": 6
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "total_tokens": 2
       }
     },
     "sequence": 2,
     "timestamp_ms": 4,
     "session_id": "session",
     "run_id": "run-c",
-    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3"
+    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
   }
 ]

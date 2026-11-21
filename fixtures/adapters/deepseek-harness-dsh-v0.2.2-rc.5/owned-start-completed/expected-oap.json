@@ -16,7 +16,7 @@
     "timestamp_ms": 3,
     "session_id": "session",
     "run_id": "run-c",
-    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3"
+    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
   },
   {
     "protocol": "open-agent-protocol",
@@ -37,27 +37,33 @@
     "timestamp_ms": 4,
     "session_id": "session",
     "run_id": "run-c",
-    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3"
+    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
-    "type": "run.failed",
+    "type": "run.completed",
     "id": "event-f",
     "payload": {
       "session_id": "session",
       "run_id": "run-c",
-      "error": {
-        "code": "deepseek_process_exit",
-        "message": "fixture process exit"
+      "final_response": {
+        "id": "message-b",
+        "role": "assistant",
+        "content": "Hello"
       },
-      "settled_by": "inferred"
+      "stop_reason": "completed",
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 2,
+        "total_tokens": 3
+      }
     },
     "sequence": 3,
     "timestamp_ms": 5,
     "session_id": "session",
     "run_id": "run-c",
-    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3"
+    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
   }
 ]

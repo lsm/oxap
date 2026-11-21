@@ -182,22 +182,22 @@
     },
     {
       "harness": "deepseek-harness",
-      "pin": "dsh-v0.2.2-rc.2",
-      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3",
-      "corpus": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.2",
+      "pin": "dsh-v0.2.2-rc.5",
+      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3",
+      "corpus": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "an owned start admits the run and the turn completes",
           "evidence": [
-            { "package": "go/adapter/deepseek", "test": "TestDSHEvidenceCorpus/owned-start-completed", "kind": "positive", "fixture": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.2/owned-start-completed" }
+            { "package": "go/adapter/deepseek", "test": "TestDSHEvidenceCorpus/owned-start-completed", "kind": "positive", "fixture": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5/owned-start-completed" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "three streamed chunks arrive as content.delta",
           "evidence": [
-            { "package": "go/adapter/deepseek", "test": "TestDSHEvidenceCorpus/streaming-chunks", "kind": "positive", "fixture": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.2/streaming-chunks" }
+            { "package": "go/adapter/deepseek", "test": "TestDSHEvidenceCorpus/streaming-chunks", "kind": "positive", "fixture": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5/streaming-chunks" }
           ]
         },
         {
@@ -218,7 +218,7 @@
           "column": "tool-observation",
           "claim": "completed and failed tool turns are observed",
           "evidence": [
-            { "package": "go/adapter/deepseek", "test": "TestDSHEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.2/tool-lifecycle" }
+            { "package": "go/adapter/deepseek", "test": "TestDSHEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5/tool-lifecycle" }
           ]
         }
       ]
