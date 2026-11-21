@@ -1354,7 +1354,9 @@ The `claude` adapter counts a session as busy until its first turn settles, sinc
 `--resume` finds nothing before that. It also counts each task Claude Code reports
 started and has not reported ended. Once a task ends, the session stays busy until
 the next `result` or an `idle` session state, because Claude Code may start a turn
-of its own to report the task. The hub keeps
+of its own to report the task. A session that has called `CronCreate`, in a subagent
+too, stays busy until it closes: its cron fires only while the child runs, and Claude
+Code reports no pending crons on the wire. The hub keeps
 the tools, metadata and allowed degraded features a session opened with in memory
 for the reopen; a park lasts only as long as the process, so they never reach the
 binding store.
