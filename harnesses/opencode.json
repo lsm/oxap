@@ -26,7 +26,9 @@
     },
     {
       "label": "v2.2.7",
-      "status": "retired",
+      "status": "floor",
+      "corpus": "fixtures/adapters/opencode-v2.2.7",
+      "corpus_from": "v2.0.24",
       "ledgers": ["research/opencode-v2.2.7-mapping.md", "research/opencode-v2.2.6-mapping.md", "research/opencode-v2.0.32-mapping.md", "research/opencode-v2.0.26-mapping.md"],
       "components": [
         { "name": "opencode", "version": "v2.2.7", "repository": "https://github.com/anomalyco/opencode" }

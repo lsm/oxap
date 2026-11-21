@@ -5,7 +5,7 @@
   "expected_oap": "expected-oap.json",
   "mapping": "mapping.json",
   "omissions": "omissions.json",
-  "provenance": {"repository": "https://github.com/anomalyco/opencode", "tag": "v2.2.7", "commit": "fedc6f208aa2bd54c1019227214568083f6380ad", "commit_tree": "ff57370148d7897dd17de9f491e4d2499526ebeb", "session_event_blob": "51608b6cf620a426b3f7f62ee6c0506eea2bc35e", "session_input_blob": "16e900189369130b6ed690b82866fc09f1006c81", "session_delivery_blob": "ce11a7a0f97dc235bcd351eca3e60ebc02a02588", "session_group_blob": "b0f8be8dc5cbcff5ab4da664ef009315f9caf41a", "server_handler_blob": "6092f5f19e602c21c181409407ea484ce1d57829", "core_session_blob": "76b2b7b279e79d7c8280f3ca73b31d9c714a7149"},
+  "provenance": {"repository": "https://github.com/anomalyco/opencode", "tag": "v2.3.2", "commit": "c0ad18b402eb2827fc1ee71c171b1177b3fc02d1", "commit_tree": "65afb3b625ddcfa549b9fa274be37529731ba880", "session_event_blob": "ee3a2393f757623e53e82a6a3be51d13b547e319", "session_input_blob": "16e900189369130b6ed690b82866fc09f1006c81", "session_delivery_blob": "5e99b7ee54c8e1ee39bfd720fe810c18dacfb592", "session_group_blob": "1ac6b5bb460ac443f6f4c214129c0f212764581a", "server_handler_blob": "6092f5f19e602c21c181409407ea484ce1d57829", "core_session_blob": "e0be028543e783bd3ec0d90cc7c1570de74e905e"},
   "advertised_capabilities": {"session.message.submit": "native", "run.streaming": "native", "action.tools": "native"},
   "identity_map": {"ses_fake00000000000000": "session", "msg_rebind": "admitted input (rebound by runner)", "msg_a1": "assistant message"},
   "admission_rejected": true
