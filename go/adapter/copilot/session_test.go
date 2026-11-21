@@ -60,14 +60,14 @@ func TestSyntheticCopilotChild(t *testing.T) {
 		prompt := "hello"
 		switch message.Method {
 		case "ping":
-			result = map[string]any{"protocolVersion": 3}
+			result = map[string]any{"protocolVersion": 4}
 			if os.Getenv("OAP_COPILOT_SESSION_MODE") == "bad-protocol" {
-				result = map[string]any{"protocolVersion": 4}
+				result = map[string]any{"protocolVersion": 3}
 			}
 		case "status.get":
-			result = map[string]any{"version": PinnedVersion, "protocolVersion": 3}
+			result = map[string]any{"version": PinnedVersion, "protocolVersion": 4}
 			if os.Getenv("OAP_COPILOT_SESSION_MODE") == "bad-version" {
-				result = map[string]any{"version": "synthetic-other", "protocolVersion": 3}
+				result = map[string]any{"version": "synthetic-other", "protocolVersion": 4}
 			}
 		case "session.create":
 			var params map[string]json.RawMessage

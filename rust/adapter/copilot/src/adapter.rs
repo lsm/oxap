@@ -29,7 +29,7 @@ pub(crate) const MAX_QUEUED: usize = 8;
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const HEADLESS: [&str; 3] = ["--headless", "--stdio", "--no-auto-update"];
-const PINNED_PROTOCOL: i64 = 3;
+const PINNED_PROTOCOL: i64 = 4;
 
 #[derive(Clone, Default)]
 pub struct Config {
@@ -215,7 +215,7 @@ impl Adapter {
             decode(process, method, params, config.request_timeout)
         };
         if call("ping", &json!({}))?.protocol_version != PINNED_PROTOCOL {
-            let message = "copilot: server does not speak pinned protocol 3";
+            let message = "copilot: server does not speak pinned protocol 4";
             return Err(Error::Harness(message.into()));
         }
         if call("status.get", &json!({}))?.version != *PINNED_VERSION {

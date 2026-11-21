@@ -138,15 +138,15 @@
     },
     {
       "harness": "copilot-cli",
-      "pin": "v1.0.109",
-      "capability_revision": "copilot-cli-1.0.109-oap-v1",
-      "corpus": "fixtures/adapters/copilot-cli-v1.0.109",
+      "pin": "v1.0.114",
+      "capability_revision": "copilot-cli-1.0.114-oap-v1",
+      "corpus": "fixtures/adapters/copilot-cli-v1.0.114",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "the pinned synthetic server opens, submits and completes, and the reducer completes the captured text",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.109/completed-text" },
+            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/completed-text" },
             { "package": "go/adapter/copilot", "test": "TestPublicAdapterOpensThePinnedSyntheticServerAndRuns", "kind": "positive" }
           ]
         },
@@ -154,7 +154,7 @@
           "column": "text-deltas",
           "claim": "the reducer delivers the captured delta and completion",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.109/completed-text" }
+            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/completed-text" }
           ]
         },
         {
@@ -175,7 +175,7 @@
           "column": "tool-observation",
           "claim": "a tool execution start, progress and completion are observed; Copilot executes its own tools",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestToolCorpus/tool-success", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.109/tool-success" }
+            { "package": "go/adapter/copilot", "test": "TestToolCorpus/tool-success", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/tool-success" }
           ]
         }
       ]
