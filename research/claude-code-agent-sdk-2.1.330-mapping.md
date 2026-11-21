@@ -15,4 +15,4 @@ The npm artifacts and extracted files have SHA-256 values:
 - macOS arm64 package `b8c91d706567b670e4f2b6112199c5db3125ca237ac214e6143e7094bd0cb33b`; binary `f7c5093b9dd6560d08af28bc27b123fb55091deae3180ac39df199522da86815`.
 - TypeScript SDK package `6ecbc493eda07c20536c97b7529a6873034ad50faafd8eb2bddba4201825950f`; declarations `ad7946cc7112e3178f5290de97f77716ddcf7b671655e9ff00d30c7c2a5a1184`.
 
-The old SDK package's recorded digest was reproduced before comparing declarations. The new SDK adds optional initialization, result and system fields and an `external-event` origin subtype. A process check and model execution remain unverified.
+The old SDK package's recorded digest was reproduced before comparing declarations. The new SDK adds optional initialization, result and system fields and an `external-event` origin subtype. An isolated Linux process check using the 2.1.330 release binary and the candidate Go endpoint initialized OAP and opened a session without credentials. It did not execute a prompt; model execution and the new wire variants remain unverified.
