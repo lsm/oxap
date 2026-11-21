@@ -2918,6 +2918,21 @@ pub fn build(b: *std.Build) void {
         .name = "oxap",
         .root_module = makai_cli_module,
     });
+    const service_config_probe = b.addExecutable(.{
+        .name = "service-config-probe",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("../.claude/skills/verify/scripts/service-config-probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "compat", .module = compat_mod },
+                .{ .name = "makai", .module = makai_cli_module },
+            },
+        }),
+    });
+    const install_service_config_probe = b.addInstallArtifact(service_config_probe, .{});
+    b.step("build-service-config-probe", "Build the service configuration journey probe").dependOn(&install_service_config_probe.step);
+
     const makai_cli_test = b.addTest(.{ .root_module = makai_cli_module });
     const makai_cli_test_run = b.addRunArtifact(makai_cli_test);
     const bounded_output_test_run = b.addRunArtifact(b.addTest(.{ .root_module = bounded_output_mod }));
