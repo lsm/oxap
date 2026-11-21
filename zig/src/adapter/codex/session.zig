@@ -320,9 +320,34 @@ pub const Reducer = struct {
     envelopes: std.ArrayList(std.json.Value) = .empty,
     writes: std.ArrayList([]const u8) = .empty,
     settled: std.ArrayList(Settled) = .empty,
+    commands: std.StringArrayHashMapUnmanaged(void) = .empty,
+    saved: bool = false,
+    spawned: bool = false,
 
     pub fn init(arena: *std.heap.ArenaAllocator, options: Options) Reducer {
-        return .{ .arena = arena, .options = options, .next_request = options.first_request_id };
+        return .{ .arena = arena, .options = options, .next_request = options.first_request_id, .saved = options.resume_thread_id.len > 0 };
+    }
+
+    pub fn holdsWork(self: *const Reducer) bool {
+        return !self.saved or self.spawned or self.active != null or self.commands.count() > 0;
+    }
+
+    fn followItem(self: *Reducer, started: bool, params: std.json.Value) !void {
+        if (!std.mem.eql(u8, native.text(params, &.{"threadId"}), self.thread_id)) return;
+        const kind = native.text(params, &.{ "item", "type" });
+        if (std.mem.eql(u8, kind, "collabAgentToolCall") and std.mem.eql(u8, native.text(params, &.{ "item", "tool" }), "spawnAgent")) {
+            self.spawned = true;
+            return;
+        }
+        if (!std.mem.eql(u8, kind, "commandExecution")) return;
+        const id = native.text(params, &.{ "item", "id" });
+        if (id.len == 0) return;
+        if (!started) {
+            _ = self.commands.swapRemove(id);
+            return;
+        }
+        if (self.commands.contains(id)) return;
+        try self.commands.put(self.allocator(), try self.allocator().dupe(u8, id), {});
     }
 
     fn allocator(self: *Reducer) std.mem.Allocator {
@@ -449,6 +474,10 @@ pub const Reducer = struct {
         kept.closed = self.closed;
         kept.transport_closed = self.transport_closed;
         kept.thread_usage = self.thread_usage;
+        kept.saved = self.saved;
+        kept.spawned = self.spawned;
+        try kept.commands.ensureTotalCapacity(keep, self.commands.count());
+        for (self.commands.keys()) |id| kept.commands.putAssumeCapacity(try keep.dupe(u8, id), {});
         kept.thread_id = try keep.dupe(u8, self.thread_id);
         kept.session_id = try keep.dupe(u8, self.session_id);
         const status = try keep.dupe(u8, self.state.status);
@@ -789,6 +818,7 @@ pub const Reducer = struct {
         }
         if (std.mem.eql(u8, method, native.method_item_started) or std.mem.eql(u8, method, native.method_item_completed)) {
             if (!native.decodesPresent(message.params, native.item_notification)) return self.failActive("invalid_native_event", "invalid item lifecycle payload");
+            try self.followItem(std.mem.eql(u8, method, native.method_item_started), message.params.?);
             return self.onItem(std.mem.eql(u8, method, native.method_item_started), message.params.?);
         }
         if (std.mem.eql(u8, method, native.method_token_usage)) {
@@ -973,6 +1003,7 @@ pub const Reducer = struct {
         const index = self.runFor(native.text(params, &.{"threadId"}), native.text(params, &.{ "turn", "id" })) orelse return;
         if (self.runs.items[index].terminal) return;
         const status = native.text(params, &.{ "turn", "status" });
+        self.saved = true;
         try self.closePendingInteractions(index, status);
         try self.closePendingActions(index, status);
         var payload = try self.runPayload(index);
@@ -2031,6 +2062,56 @@ fn settledWithAction(arena: *std.heap.ArenaAllocator) !Reducer {
     reducer.envelopes.clearRetainingCapacity();
     reducer.writes.clearRetainingCapacity();
     return reducer;
+}
+
+const turn_completed_frame = "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"native-thread\",\"turn\":{\"id\":\"native-turn\",\"status\":\"completed\"}}}";
+
+test "a command still running past its turn holds the session through compaction until its item completes, which emits nothing" {
+    var source = std.heap.ArenaAllocator.init(testing.allocator);
+    var reducer = try running(&source);
+    try feed(&reducer, command_started);
+    try feed(&reducer, turn_completed_frame);
+    try testing.expect(reducer.active == null);
+    try testing.expect(reducer.holdsWork());
+    reducer.envelopes.clearRetainingCapacity();
+    reducer.writes.clearRetainingCapacity();
+    var target = std.heap.ArenaAllocator.init(testing.allocator);
+    defer target.deinit();
+    var kept = try reducer.compactInto(&target);
+    source.deinit();
+    try testing.expect(kept.holdsWork());
+
+    try feed(&kept, "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"commandExecution\",\"id\":\"native-item\",\"status\":\"completed\"}}}");
+    try testing.expect(!kept.holdsWork());
+    try testing.expectEqual(@as(usize, 0), kept.envelopes.items.len);
+}
+
+test "a new thread holds work until its first turn completes, and a resumed one holds none" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var fresh = try opened(&arena);
+    try testing.expect(fresh.holdsWork());
+    const resumed = Reducer.init(&arena, .{ .session_id = "session-1", .model = "glm-test", .resume_thread_id = "native-thread" });
+    try testing.expect(!resumed.holdsWork());
+
+    var reducer = try running(&arena);
+    try feed(&reducer, turn_completed_frame);
+    try testing.expect(!reducer.holdsWork());
+}
+
+test "a spawned subagent holds the session after its turn, and another thread's command does not" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var spawning = try running(&arena);
+    try feed(&spawning, "{\"method\":\"item/started\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-1\",\"tool\":\"spawnAgent\",\"status\":\"inProgress\"}}}");
+    try feed(&spawning, "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-1\",\"tool\":\"spawnAgent\",\"status\":\"completed\"}}}");
+    try feed(&spawning, turn_completed_frame);
+    try testing.expect(spawning.holdsWork());
+
+    var elsewhere = try running(&arena);
+    try feed(&elsewhere, "{\"method\":\"item/started\",\"params\":{\"threadId\":\"other-thread\",\"turnId\":\"other-turn\",\"item\":{\"type\":\"commandExecution\",\"id\":\"other-item\",\"command\":\"sleep 9\"}}}");
+    try feed(&elsewhere, turn_completed_frame);
+    try testing.expect(!elsewhere.holdsWork());
 }
 
 test "a compacted reducer still ignores a reused item id, fails its completion, and answers a settled interaction as resolved" {
