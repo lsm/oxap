@@ -274,7 +274,7 @@ const ServedSessions = struct {
 
     fn attach(self: *ServedSessions, adapter: *oapx_adapter.Adapter) void {
         self.startWriter() catch {};
-        adapter.history = .{ .ctx = self, .load = load, .read = read, .entries = entries };
+        adapter.history = .{ .ctx = self, .load = load, .read = read, .entries = entries, .bytes = bytes };
         adapter.transcripts = .{ .ctx = self, .save = saveTranscript };
         adapter.recorder = .{ .ctx = self, .record = record };
     }
@@ -373,6 +373,14 @@ const ServedSessions = struct {
             .compaction => |summary| .{ .offset = entry.offset, .at_ms = entry.at_ms, .compaction = summary },
         };
         return saved;
+    }
+
+    fn bytes(ctx: *anyopaque, session_id: []const u8) anyerror!u64 {
+        const self: *ServedSessions = @ptrCast(@alignCast(ctx));
+        self.flush();
+        self.recorders_mutex.lockUncancelable(hubIo());
+        defer self.recorders_mutex.unlock(hubIo());
+        return self.store.conversationBytes(session_id);
     }
 
     fn cloneMessages(arena: std.mem.Allocator, loaded: []const ai_types.Message) ![]const ai_types.Message {

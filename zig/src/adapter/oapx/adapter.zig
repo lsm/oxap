@@ -109,6 +109,7 @@ pub const HistoryLoader = struct {
     load: *const fn (ctx: *anyopaque, arena: std.mem.Allocator, session_id: []const u8) anyerror!?[]const ai_types.Message,
     read: ?*const fn (ctx: *anyopaque, arena: std.mem.Allocator, session_id: []const u8) anyerror!?[]const ai_types.Message = null,
     entries: ?*const fn (ctx: *anyopaque, arena: std.mem.Allocator, session_id: []const u8) anyerror![]const transcript.SavedEntry = null,
+    bytes: ?*const fn (ctx: *anyopaque, session_id: []const u8) anyerror!u64 = null,
 };
 
 pub const TranscriptStore = struct {
@@ -480,6 +481,8 @@ pub const Session = struct {
     journal: std.ArrayList(Journaled) = .empty,
     policy_json: ?[]const u8 = null,
     ready: ?contract.Session.Ready = null,
+    cursor_bytes: ?u64 = null,
+    cursor: []u8 = &.{},
 
     fn create(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!*Session {
         try requireAgreeingSettings(request.metadata, refusal);
@@ -833,6 +836,7 @@ pub const Session = struct {
         self.jobs.deinit();
         gpa.destroy(self.jobs);
         self.call_gate.deinit(gpa);
+        gpa.free(self.cursor);
         if (self.engine) |engine| {
             engine.deinit();
             gpa.destroy(engine);
@@ -878,11 +882,23 @@ pub const Session = struct {
         var result = try self.snapshot(arena);
         const loader = self.owner.history orelse return result;
         const reads = loader.entries orelse return result;
+        const bytes: ?u64 = if (loader.bytes) |measure| measure(loader.ctx, self.id) catch null else null;
+        if (bytes != null and bytes == self.cursor_bytes) {
+            result.transcript_cursor = try arena.dupe(u8, self.cursor);
+            return result;
+        }
         const saved: ?[]const transcript.SavedEntry = reads(loader.ctx, arena, self.id) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => null,
         };
-        if (saved) |held| result.transcript_cursor = try transcript.tail(arena, self.id, held);
+        const held = saved orelse return result;
+        const cursor = try transcript.tail(arena, self.id, held);
+        result.transcript_cursor = cursor;
+        const measured = bytes orelse return result;
+        const kept = try self.gpa.dupe(u8, cursor);
+        self.gpa.free(self.cursor);
+        self.cursor = kept;
+        self.cursor_bytes = measured;
         return result;
     }
 
@@ -4979,6 +4995,50 @@ test "transcript.load is advertised only with a saved-entries reader, and the st
     try testing.expectEqual(@as(usize, 0), caught_up.entries.len);
     try testing.expect(caught_up.complete);
     try testing.expect(caught_up.gap == null);
+}
+
+const CountedEntries = struct {
+    size: u64 = 0,
+    reads: usize = 0,
+    saved: usize = 1,
+
+    fn entries(ctx: *anyopaque, arena: std.mem.Allocator, session_id: []const u8) anyerror![]const transcript.SavedEntry {
+        _ = session_id;
+        const self: *CountedEntries = @ptrCast(@alignCast(ctx));
+        self.reads += 1;
+        const saved = try arena.alloc(transcript.SavedEntry, self.saved);
+        for (saved, 0..) |*slot, index| slot.* = .{ .offset = index * 100, .message = .{ .user = .{ .content = .{ .text = "ask" }, .timestamp = 1 } } };
+        return saved;
+    }
+
+    fn bytes(ctx: *anyopaque, session_id: []const u8) anyerror!u64 {
+        _ = session_id;
+        const self: *CountedEntries = @ptrCast(@alignCast(ctx));
+        return self.size;
+    }
+};
+
+test "the state's transcript_cursor rereads saved entries only after the saved bytes change" {
+    var script = Script{};
+    var harness: Harness = undefined;
+    try harness.init(&script);
+    defer harness.deinit();
+    const a = harness.arena.allocator();
+    var refusal = contract.Refusal{};
+    var counted = CountedEntries{ .size = 10 };
+    harness.owner.history = .{ .ctx = &counted, .load = SavedSessions.load, .entries = CountedEntries.entries, .bytes = CountedEntries.bytes };
+    const first = (try harness.session.state(a, &refusal)).transcript_cursor.?;
+    const again = (try harness.session.state(a, &refusal)).transcript_cursor.?;
+    try testing.expectEqual(@as(usize, 1), counted.reads);
+    try testing.expectEqualStrings(first, again);
+
+    counted.size = 20;
+    counted.saved = 2;
+    const grown = (try harness.session.state(a, &refusal)).transcript_cursor.?;
+    try testing.expectEqual(@as(usize, 2), counted.reads);
+    try testing.expect(!std.mem.eql(u8, first, grown));
+    _ = (try harness.session.state(a, &refusal)).transcript_cursor.?;
+    try testing.expectEqual(@as(usize, 2), counted.reads);
 }
 
 test "a transcript load is offered only with a saved-entries reader, and carries reasoning, tool calls and tool results as message parts" {
