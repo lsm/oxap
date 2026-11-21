@@ -18,6 +18,9 @@ macOS and Linux.
 
 `--park-after <seconds>` serves the Zig targets with that flag and settles past it,
 so a `history` run with and without it shows what parking saves per idle agent.
+Without it they are served with a limit of a million seconds, because `oapx
+serve` parks an idle session after five seconds by default. That limit, unlike
+`0`, is also accepted by a binary from before that default.
 Go and Rust ignore it until they can park.
 
 For `empty`, `--idle-settle` allows ten seconds for startup work and thread

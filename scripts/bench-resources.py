@@ -39,6 +39,7 @@ TARGETS = ("zig", "go", "rust", "zig-loop")
 LOOP_ONLY = {"jobs", *FLIGHTS}
 PARK_ONLY = {"parked", "wake"}
 PARK_SECONDS = 2
+NEVER_PARK_SECONDS = 10 ** 6
 WINDOW = 64
 SLOT, SLOT_FIELDS = 64, ("in_model", "served", "calls", "results", "bad")
 
@@ -733,7 +734,7 @@ def run_case(target, binary, scenario, n, scratch, timeout, cap, options):
         config = {"adapters": {"loop": {"type": "oapx"}}}
     (root / "hub.json").write_text(json.dumps(config))
     park_after = options.park_after or (PARK_SECONDS if scenario in PARK_ONLY else 0)
-    park = ["--park-after", str(park_after)] if park_after and target.startswith("zig") else []
+    park = ["--park-after", str(park_after or NEVER_PARK_SECONDS)] if target.startswith("zig") else []
     command = sandboxed([str(binary), "serve", "--stdio", "--config", str(root / "hub.json"),
                          "--session-history", str(data / "sessions.jsonl"), *park], root)
     stderr = (root / "hub-stderr.txt").open("w")
@@ -787,7 +788,7 @@ def run_case(target, binary, scenario, n, scratch, timeout, cap, options):
             timeline.join(timeout=5)
         if result["status"] == "ok":
             settle = options.idle_settle if scenario == "empty" else 1.0
-            settle += park_after + 1 if park and scenario not in PARK_ONLY else 0
+            settle += park_after + 1 if park_after and scenario not in PARK_ONLY else 0
             time.sleep(settle)
         sampler.stop()
         result.update(peak_rss=sampler.peak["rss"], peak_threads=sampler.peak["threads"])

@@ -132,6 +132,10 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - name: Verify default parking
+        run: |
+          zig build --build-file zig/build.zig -Doptimize=ReleaseSafe
+          NODE_ENV=test python3 .claude/skills/verify/scripts/oapx-park-default.py "$RUNNER_TEMP/park-default"
       - name: Verify HTTP and HTTPS tools
         run: |
           zig build --build-file zig/build.zig -Doptimize=ReleaseSafe
