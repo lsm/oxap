@@ -9,8 +9,17 @@ use serde_json::Value;
 const STARTED: &str = r#"{"id":"evt_1","type":"session.execution.started","durable":{"aggregateID":"ses_1","seq":1,"version":1},"data":{"sessionID":"ses_1"}}"#;
 
 fn corpus_frames() -> Vec<String> {
-    let root =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/adapters/opencode-v2.3.2");
+    let catalog: Value =
+        serde_json::from_str(include_str!("../../../../harnesses/opencode.json")).unwrap();
+    let versions = catalog["versions"].as_array().unwrap();
+    let mut current = versions
+        .iter()
+        .filter(|version| version["status"] == "current");
+    let corpus = current.next().unwrap()["corpus"].as_str().unwrap();
+    assert!(current.next().is_none());
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join(corpus);
     let mut frames = Vec::new();
     for case in std::fs::read_dir(root).unwrap() {
         let Ok(native) = std::fs::read_to_string(case.unwrap().path().join("native.jsonl")) else {
