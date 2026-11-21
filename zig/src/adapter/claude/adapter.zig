@@ -361,6 +361,7 @@ pub const Session = struct {
             return refusal.fail(error.BackendFailed, message);
         };
         engine.reducer.native_session_id = native_id;
+        engine.reducer.saved = request.reopen;
         self.* = .{
             .owner = owner,
             .gpa = gpa,
@@ -389,6 +390,7 @@ pub const Session = struct {
         .drain = drain,
         .readable = readable,
         .activity = activity,
+        .live_work = liveWork,
         .close = close,
         .tools = tools,
         .update_settings = updateSettings,
@@ -965,6 +967,10 @@ pub const Session = struct {
         self.engine.reducer.envelopes.clearRetainingCapacity();
     }
 
+    fn liveWork(ptr: *anyopaque) bool {
+        return cast(ptr).engine.reducer.holdsWork();
+    }
+
     fn activity(ptr: *anyopaque) contract.Activity {
         const self = cast(ptr);
         const run = self.engine.reducer.run orelse return .idle;
@@ -1479,6 +1485,23 @@ test "an allowed ask reaches the child with the tool's own input, and the run co
     try testing.expectEqual(contract.Activity.idle, probe.handle.?.activity());
 
     _ = try probe.waitWritten("{\"response\":{\"request_id\":\"ask-1\",\"response\":{\"behavior\":\"allow\",\"updatedInput\":{\"command\":\"touch /tmp/x\"}},\"subtype\":\"success\"},\"type\":\"control_response\"}");
+}
+
+test "a new session holds live work through its gated first turn and none once it settles" {
+    var probe: Probe = undefined;
+    try probe.init(fake_prelude ++ fake_gated_turn ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    _ = try probe.open(&refusal);
+    try testing.expect(!probe.handle.?.holdsNoLiveWork());
+    _ = try probe.submit("fix it", &refusal);
+
+    var seen = std.ArrayList(contract.Event).empty;
+    const asked = try probe.pumpUntil("user.input.requested", &seen);
+    try testing.expect(!probe.handle.?.holdsNoLiveWork());
+    try probe.answer(asked, "allow", &refusal);
+    _ = try probe.pumpUntil("run.completed", &seen);
+    try testing.expect(probe.handle.?.holdsNoLiveWork());
 }
 
 test "a tool input nested past 256 levels reaches the call, the prompt and the child whole" {
@@ -2007,7 +2030,7 @@ fn validSessionUUID(id: []const u8) bool {
     return true;
 }
 
-test "a reopen resumes the bound conversation and reads its loader settings from the native corpus" {
+test "a reopen resumes the bound conversation, reads its loader settings from the native corpus, and holds no live work" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const kept = arena.allocator();
@@ -2048,6 +2071,7 @@ test "a reopen resumes the bound conversation and reads its loader settings from
     try testing.expect(std.mem.indexOf(u8, state.metadata_json.?, id) != null);
     const written = try probe.fake.written(probe.arena.allocator());
     try testing.expect(std.mem.indexOf(u8, written, "get_settings") != null);
+    try testing.expect(opened.holdsNoLiveWork());
     try testing.expect(std.mem.indexOf(u8, written, "\"type\":\"user\"") == null);
 }
 
