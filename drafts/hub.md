@@ -1349,8 +1349,14 @@ tool source, because a stopped MCP server cannot resume where it was. It must be
 idle, with no run, no pending interaction and no held subscription. It must have
 no live background job, and this fails closed: an adapter that cannot report its
 background work never parks, because silently killing a user's background shell
-is worse than holding a process. Today `memory` and `oapx` report it; no
-third-party harness adapter does yet. The hub keeps
+is worse than holding a process. Today `memory`, `oapx` and `claude` report it.
+The `claude` adapter counts a session as busy until its first turn settles, since
+`--resume` finds nothing before that. It also counts each task Claude Code reports
+started and has not reported ended. Once a task ends, the session stays busy until
+the next `result` or an `idle` session state, because Claude Code may start a turn
+of its own to report the task. A session that has called `CronCreate`, in a subagent
+too, stays busy until it closes: its cron fires only while the child runs, and Claude
+Code reports no pending crons on the wire. The hub keeps
 the tools, metadata and allowed degraded features a session opened with in memory
 for the reopen; a park lasts only as long as the process, so they never reach the
 binding store.

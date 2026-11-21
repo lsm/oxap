@@ -159,6 +159,10 @@ pub const Reducer = struct {
     gates: std.ArrayList(Gate) = .empty,
     unusable: bool = false,
     children: std.ArrayList(Child) = .empty,
+    tasks: std.StringArrayHashMapUnmanaged(void) = .empty,
+    saved: bool = false,
+    settling: bool = false,
+    scheduled: bool = false,
     envelopes: std.ArrayList(std.json.Value) = .empty,
     servers: std.ArrayList([]const u8) = .empty,
     started: ?Started = null,
@@ -898,6 +902,7 @@ pub const Reducer = struct {
     fn publishTerminal(self: *Reducer, frame: std.json.ObjectMap) !void {
         const run = &self.run.?;
         run.deferred = null;
+        self.saved = true;
         try self.sweepRun();
 
         var payload = try self.terminalPayload(run);
@@ -1050,6 +1055,7 @@ pub const Reducer = struct {
         }
         if (message.kind != .observation) return;
         try self.associate(message);
+        try self.followTask(message);
         if (self.run) |run| {
             if (self.unusable) return;
             if (!run.started) {
@@ -1068,6 +1074,33 @@ pub const Reducer = struct {
             return;
         }
         try self.observeIdle(message);
+    }
+
+    pub fn holdsWork(self: *const Reducer) bool {
+        return !self.saved or self.scheduled or self.settling or self.run != null or self.gates.items.len > 0 or self.tasks.count() > 0;
+    }
+
+    fn followTask(self: *Reducer, message: rpc.Message) !void {
+        if (message.object != .object) return;
+        const frame = message.object.object;
+        if (std.mem.eql(u8, message.type, "result")) self.settling = false;
+        if (std.mem.eql(u8, message.type, "assistant") and schedules(frame)) self.scheduled = true;
+        if (!std.mem.eql(u8, message.type, "system")) return;
+        if (std.mem.eql(u8, message.subtype, "session_state_changed")) {
+            if (stringMember(frame, "state")) |state| if (std.mem.eql(u8, state, "idle")) {
+                self.settling = false;
+            };
+            return;
+        }
+        const task_id = stringMember(frame, "task_id") orelse return;
+        if (std.mem.eql(u8, message.subtype, "task_started")) {
+            if (self.tasks.contains(task_id)) return;
+            try self.tasks.put(self.allocator(), try self.allocator().dupe(u8, task_id), {});
+            return;
+        }
+        const ended = std.mem.eql(u8, message.subtype, "task_notification") or
+            (std.mem.eql(u8, message.subtype, "task_updated") and terminalTaskPatch(frame));
+        if (ended and self.tasks.swapRemove(task_id)) self.settling = true;
     }
 
     fn associate(self: *Reducer, message: rpc.Message) !void {
@@ -1379,6 +1412,20 @@ fn toolResultText(content: ?std.json.Value) []const u8 {
         if (value == .string and value.string.len > 0) return value.string;
     }
     return "tool call failed";
+}
+
+fn schedules(frame: std.json.ObjectMap) bool {
+    const native_message = rpc.lookup(frame, "message") orelse return false;
+    if (native_message != .object) return false;
+    const content = rpc.lookup(native_message.object, "content") orelse return false;
+    if (content != .array) return false;
+    for (content.array.items) |block| {
+        if (block != .object) continue;
+        const kind = stringMember(block.object, "type") orelse continue;
+        const name = stringMember(block.object, "name") orelse continue;
+        if (std.mem.eql(u8, kind, "tool_use") and std.mem.eql(u8, name, "CronCreate")) return true;
+    }
+    return false;
 }
 
 fn defersTerminal(task_type: []const u8) bool {
@@ -2784,6 +2831,102 @@ test "a settled run leaves neither its gates nor its children behind" {
     );
     try testing.expectEqual(@as(usize, 0), reducer.children.items.len);
     try testing.expectEqual(@as(usize, 0), reducer.gates.items.len);
+}
+
+test "a task holds the session past its run until the turn its end starts settles" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    var reducer = Reducer.init(&arena, .{});
+    reducer.open();
+    try testing.expect(reducer.holdsWork());
+
+    try startedRun(&reducer, scratch, "turn-1");
+    try observeText(&reducer, scratch,
+        \\{"type":"system","subtype":"task_started","task_id":"k1","task_type":"local_bash","description":"d","uuid":"t1","session_id":"s"}
+    );
+    try observeText(&reducer, scratch,
+        \\{"type":"result","session_id":"s","subtype":"success","terminal_reason":"completed","result":"one","user_message_uuid":"turn-1","uuid":"r1"}
+    );
+    try testing.expect(reducer.run == null);
+    try testing.expect(reducer.holdsWork());
+
+    try observeText(&reducer, scratch,
+        \\{"type":"system","session_id":"s","subtype":"task_notification","output_file":"/out","summary":"done","task_id":"k1","status":"completed","uuid":"t2"}
+    );
+    try testing.expect(reducer.holdsWork());
+    try observeText(&reducer, scratch,
+        \\{"type":"result","session_id":"s","subtype":"success","terminal_reason":"completed","result":"told","origin":{"kind":"task-notification"},"uuid":"r2"}
+    );
+    try testing.expect(!reducer.holdsWork());
+}
+
+test "a terminal task update ends a task and an idle report then frees the session" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    var reducer = Reducer.init(&arena, .{});
+    reducer.open();
+
+    try startedRun(&reducer, scratch, "turn-1");
+    try observeText(&reducer, scratch,
+        \\{"type":"system","subtype":"task_started","task_id":"k1","task_type":"local_bash","description":"d","uuid":"t1","session_id":"s"}
+    );
+    try observeText(&reducer, scratch,
+        \\{"type":"result","session_id":"s","subtype":"success","terminal_reason":"completed","result":"one","user_message_uuid":"turn-1","uuid":"r1"}
+    );
+    try observeText(&reducer, scratch,
+        \\{"type":"system","session_id":"s","subtype":"task_updated","task_id":"k1","patch":{"status":"running"},"uuid":"t2"}
+    );
+    try testing.expect(reducer.holdsWork());
+    try observeText(&reducer, scratch,
+        \\{"type":"system","session_id":"s","subtype":"task_updated","task_id":"k1","patch":{"status":"killed"},"uuid":"t3"}
+    );
+    try testing.expect(reducer.holdsWork());
+    try observeText(&reducer, scratch,
+        \\{"type":"system","session_id":"s","subtype":"session_state_changed","state":"idle","uuid":"t4"}
+    );
+    try testing.expect(!reducer.holdsWork());
+}
+
+test "a CronCreate call, a subagent's included, holds the session for its life" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    for ([_][]const u8{ "null", "\"call-1\"" }) |parent| {
+        var reducer = Reducer.init(&arena, .{});
+        reducer.open();
+        try startedRun(&reducer, scratch, "turn-1");
+        const frame = try std.fmt.allocPrint(scratch,
+            \\{{"type":"assistant","session_id":"s","parent_tool_use_id":{s},"message":{{"model":"model-a","content":[{{"type":"tool_use","id":"c1","name":"CronCreate","input":{{"cron":"* * * * *","prompt":"p"}}}}]}},"uuid":"a1"}}
+        , .{parent});
+        try observeText(&reducer, scratch, frame);
+        try observeText(&reducer, scratch,
+            \\{"type":"result","session_id":"s","subtype":"success","terminal_reason":"completed","result":"one","user_message_uuid":"turn-1","uuid":"r1"}
+        );
+        try testing.expect(reducer.run == null);
+        try testing.expect(reducer.holdsWork());
+        try observeText(&reducer, scratch,
+            \\{"type":"system","session_id":"s","subtype":"session_state_changed","state":"idle","uuid":"t4"}
+        );
+        try testing.expect(reducer.holdsWork());
+    }
+}
+
+test "a settled turn that scheduled nothing frees the session" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const scratch = arena.allocator();
+    var reducer = Reducer.init(&arena, .{});
+    reducer.open();
+    try startedRun(&reducer, scratch, "turn-1");
+    try observeText(&reducer, scratch,
+        \\{"type":"assistant","session_id":"s","message":{"model":"model-a","content":[{"type":"tool_use","id":"t1","name":"CronList","input":{}}]},"uuid":"a1"}
+    );
+    try observeText(&reducer, scratch,
+        \\{"type":"result","session_id":"s","subtype":"success","terminal_reason":"completed","result":"one","user_message_uuid":"turn-1","uuid":"r1"}
+    );
+    try testing.expect(!reducer.holdsWork());
 }
 
 test "an init outside a pending run is adopted when it arrives" {
