@@ -1385,10 +1385,11 @@ is a later decision.
 | --- | --- |
 | A parked session keeps its subscriber and wakes on the next input | Zig: `a parked session keeps its subscriber and wakes on the next input`; see D37 |
 | A cursor from before a park is `oap-replay-gap` | Zig: `a cursor from before a park is a replay gap`; see D37 |
-| A session with a run or a hold does not park, and a park stops the harness | Zig: `parking stops the harness, and no run, live job or hold lets it`; see D37 |
+| A session with a run, a live job, a retained task or a hold does not park, and a park stops the harness | Zig: `parking stops the harness, and no run, live job, retained task or hold lets it`; see D37 |
 | A session parks once idle past the limit, activity puts that off and a read does not | Zig: `a session parks once it has been idle past the limit, and activity puts that off`; see D37 |
 | A park the limit reached but a hold refused happens as soon as the hold ends | Zig: `a hold that outlasts the limit parks the session as soon as it ends`; see D37 |
 | A session that cannot report live work never parks | Zig: `a session that cannot report live work never parks`; see D37 |
+| `oapx serve` parks after five idle seconds by default, and never with `--park-after 0` | `.claude/skills/verify/scripts/oapx-park-default.py`, run by `ci-zig.yml`; see D37 |
 | A session with a live tool source does not park | Zig: `a session with a live tool source does not park`; see D37 |
 | A wake reopens with what the session opened with | Zig: `a wake reopens with the tools and metadata the session opened with`; see D37 |
 | `state` answers a parked session without waking it | Zig: `state answers a parked session from what it stored and does not wake it`; see D37 |
@@ -2809,8 +2810,9 @@ says `Allow: GET`, and its route test pins that. Answering `GET, HEAD` for a
 
 ### D37 — Parking is not in every tree yet
 
-[Parking](#parking) lands one tree at a time. Zig parks and wakes a session behind
-`--park-after`; Go and Rust have no park at all.
+[Parking](#parking) lands one tree at a time. Zig parks and wakes a session, by
+default after five idle seconds and never with `--park-after 0`; Go and Rust have no
+park at all.
 
 ### Recorded, and not divergences
 
