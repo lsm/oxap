@@ -52,43 +52,43 @@
     },
     {
       "harness": "claude-code",
-      "pin": "2.1.322",
-      "capability_revision": "claude-code-2.1.322-oap-v1",
-      "corpus": "fixtures/adapters/claude-code-2.1.322",
+      "pin": "2.1.330",
+      "capability_revision": "claude-code-2.1.330-oap-v1",
+      "corpus": "fixtures/adapters/claude-code-2.1.330",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a submitted prompt streams provenance-tagged deltas and completes",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/streaming-provenance" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/streaming-provenance" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "three provenance-tagged content.delta envelopes",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/streaming-provenance" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/streaming-provenance" }
           ]
         },
         {
           "column": "cancel",
           "claim": "the interrupt control flow settles run.cancelled",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/interrupt-cancel", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/interrupt-cancel" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/interrupt-cancel", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/interrupt-cancel" }
           ]
         },
         {
           "column": "reopen",
           "claim": "rebinds the stored native session and reports its current model",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/session-reopen", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/session-reopen" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/session-reopen", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/session-reopen" }
           ]
         },
         {
           "column": "tool-observation",
           "claim": "calls requested, started, completed and failed are observed",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/tool-lifecycle" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/tool-lifecycle" }
           ]
         }
       ]

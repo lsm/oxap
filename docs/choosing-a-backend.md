@@ -19,7 +19,7 @@ oapx serve agent --stdio --backend acp --config oap-serve.json
 | --- | --- | --- | --- | --- |
 | `oapx` | — | — | yes | — |
 | `memory` | — | — | yes | — |
-| `claude` | `claude-code` | `2.1.322` | yes: `claude` from `PATH` | [mapping](../research/claude-code-agent-sdk-2.1.322-mapping.md) |
+| `claude` | `claude-code` | `2.1.330` | yes: `claude` from `PATH` | [mapping](../research/claude-code-agent-sdk-2.1.330-mapping.md) |
 | `codex` | `codex-app-server` | `rust-v0.167.2` | yes: `codex` from `PATH` | [mapping](../research/codex-app-server-0.167.2-mapping.md) |
 | `pi` | `pi` | `v1.5.2` | yes: `pi` from `PATH` | [mapping](../research/pi-v1.5.2-mapping.md) |
 | `opencode` | `opencode` | `v2.2.7` | yes: the installed build, else `opencode` from `PATH` | [mapping](../research/opencode-v2.2.7-mapping.md) |
