@@ -117,15 +117,29 @@ Per kind, `oapx` appends after the entry's own `environment`:
   the entry's `model` member names after the `oapx/` prefix; the variable
   itself (`<credential_env>=<key>`) is appended beside it. The content is a
   config layer that overrides matching settings and leaves every other layer —
-  including the user's own global and project config — untouched.
+  including the user's own global and project config — untouched. Model
+  *selection* is separate from definition: the hub launch today leaves the
+  adapter's session-create model unset, so a routed entry's `model` member
+  (`oapx/<model-id>`, required) is what `oapx` passes at session create —
+  the adapter already sends that field when set — and a missing or malformed
+  value (no `oapx/` prefix, empty id) is refused at startup.
 - `pi`: `PI_CODING_AGENT_DIR=<directory under the oapx state directory>`
   holding one generated `models.json` with `providers.oapx`
   (`baseUrl`, `api` for `wire`, `"apiKey": "${<credential_env>}"`, a `models`
   entry for the model after the `oapx/` prefix), plus the variable appended
-  beside it. The user's own agent directory is never read or written for this
-  entry — which also means settings and extensions it holds do not load for a
-  routed pi entry; that is the trade-off of the only deterministic path Pi
-  offers, recorded as an open question.
+  beside it, plus `--provider oapx --model <model-id>` appended after the
+  entry's own `args` — the flags Pi documents for deterministic selection —
+  with the id taken from the required `oapx/<model-id>` `model` member and
+  malformed values refused as for OpenCode. The directory is one per entry,
+  named by the entry, stable across restarts; two routed pi entries therefore
+  never share a `models.json`. It is written once at adapter build; the
+  document is immutable while the hub runs, so every session of the entry sees
+  the same content, and a changed document builds a new adapter and rewrites
+  the file before any new session, never under running ones. The user's own
+  agent directory is never read or written for this entry — which also means
+  settings and extensions it holds do not load for a routed pi entry; that is
+  the trade-off of the only deterministic path Pi offers, recorded as an open
+  question.
 - `hermes`: `OPENAI_BASE_URL=<base_url>` and `OPENAI_API_KEY=<key>`. The
   entry's `model` member must name the provider explicitly
   (`openai-api/<model-id>`), which is what binds the key to the endpoint's
@@ -151,13 +165,16 @@ Each names the entry, at startup:
 - `auth` on any kind but `claude`; `wire` missing on `opencode`/`pi`, or
   contradicting the kind's fixed wire elsewhere.
 - `base_url` that is not an absolute `http://` or `https://` URL with a host,
-  or that carries userinfo (`user:pass@host`): a URL credential must not be
-  able to ride into codex argv unrecognized. `http://` is admitted only on a
-  loopback host, keeping plaintext off the network. The URL is passed through
-  verbatim otherwise — no trailing-slash or `/v1` adjustment — because each
-  harness appends its own paths (dsh appends `/v1` unless present, Claude Code
-  its messages path, codex `/responses`), so the caller writes the base each
-  harness's convention expects.
+  or that carries userinfo (`user:pass@host`) or any query or fragment
+  component: the URL travels verbatim in the hub document and, for codex, in
+  argv, and query strings are the common gateway key-in-URL form — so the URL
+  contract itself cannot carry a credential, rather than trying to recognize
+  one. `http://` is admitted only on a loopback host, keeping plaintext off
+  the network. The URL is passed through verbatim otherwise — no
+  trailing-slash or `/v1` adjustment — because each harness appends its own
+  paths (dsh appends `/v1` unless present, Claude Code its messages path,
+  codex `/responses`), so the caller writes the base each harness's convention
+  expects.
 - `credential_env` empty, or unset or empty in the hub environment.
 - An entry `environment` that already sets a *destination* variable for its
   kind (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`;
@@ -171,7 +188,13 @@ Each names the entry, at startup:
   the variable (OpenCode's `{env:}` and Pi's `${}` references), the appended
   value provides it; listing it again is refused, not merged.
 - A `codex` entry that also names an `endpoint`: a running app-server chose
-  its provider when it started, the refusal `model_provider` already gets.
+  its provider when it started, the refusal `model_provider` already gets. An
+  `opencode` entry that names `endpoint` gets the same refusal for the same
+  reason: that path attaches to a server already running, which cannot apply
+  the overlay.
+- A `pi` entry whose name is not a safe single path component (it names the
+  per-entry directory), or whose `args` already pass `--model` or
+  `--provider`: the appended selection flags must not be contradicted.
 - A `deepseek` entry whose `args` contain `--patch`: a patch overlay can set
   `baseURL` and `apiKeyEnv`, which take precedence over the environment and
   would silently shadow the route (dsh config precedence, verified in the
@@ -184,9 +207,16 @@ Each names the entry, at startup:
 Scope: `zig/src/adapter/config.zig` (admit the member and its object's fields
 on the six kinds), `zig/src/tools/makai.zig` (the per-kind translation and
 refusals), tests beside the routing tests, a `drafts/hub.md` paragraph, and a
-verify journey whose stub endpoint asserts the selected upstream, the auth
-scheme, and that a sentinel key value appears in none of the child's config,
-argv, or the hub's diagnostics. Go and Rust change nothing.
+verify journey. The journey's stub endpoint asserts the selected upstream and
+auth scheme, and a stub *child* that echoes a sentinel key value in its
+stderr, in an error the adapter surfaces, and in its normal output proves the
+redaction: the routing records each resolved key value, and every surface the
+hub emits — startup refusals, adapter diagnostics quoting child bytes,
+hub-side logs — replaces that value with its variable name before the bytes
+leave. Success and error paths are both exercised; a clean run alone
+establishes nothing. The boundary is deliberate: a log file the child writes
+itself (the OpenCode server's log) is the child's own, outside the hub's
+emission, and the journey's assertions cover the hub-exposed surfaces.
 
 ### What HyperNeo changes (its own repo)
 
