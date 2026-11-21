@@ -225,22 +225,22 @@
     },
     {
       "harness": "hermes",
-      "pin": "v0.23.1",
-      "capability_revision": "hermes-v0.23.1-oap-v1",
-      "corpus": "fixtures/adapters/hermes-v0.23.1",
+      "pin": "v0.23.3",
+      "capability_revision": "hermes-v0.23.3-oap-v1",
+      "corpus": "fixtures/adapters/hermes-v0.23.3",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a submitted prompt streams provenance-tagged deltas and completes",
           "evidence": [
-            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.1/streaming-provenance" }
+            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.3/streaming-provenance" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "three provenance-tagged content.delta envelopes",
           "evidence": [
-            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.1/streaming-provenance" }
+            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.3/streaming-provenance" }
           ]
         },
         {
@@ -261,7 +261,7 @@
           "column": "tool-observation",
           "claim": "two completed tool calls are observed",
           "evidence": [
-            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.1/tool-lifecycle" }
+            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.3/tool-lifecycle" }
           ]
         }
       ]

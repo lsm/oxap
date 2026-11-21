@@ -33,16 +33,16 @@ var (
 const (
 	hmCorpusRepository = "https://github.com/NousResearch/hermes-agent"
 
-	hmBlobEntry          = "ff2f9a899d33fc4466df85c4988e352b7c435228"
+	hmBlobEntry          = "93fbdcdfd0e71dd7a338b4b1cb011748cddfb369"
 	hmBlobTransport      = "691f1d799027b211a073c685fbd7ee5d65fae3a6"
-	hmBlobServer         = "c3cc3d2cd6894f07092b7c51aa1d0ba6f2aabdcb"
+	hmBlobServer         = "3df83a2ef41703a8ae998333e00a70d7cf78db06"
 	hmBlobEventReplay    = "20298bd23f80922c02d7b45a3c920716021f290b"
 	hmBlobStdinRecovery  = "add5e841df4bead308a96bd8b0f0e3c5475bd167"
-	hmBlobWS             = "833751e0df038b0c551814ee3bfea95a27d0dabf"
-	hmBlobMethodsPrompt  = "0b2baf072e82ecfeb8a06eb6dc97322941ad14dc"
-	hmBlobMethodsSession = "5b1ca479044dc3c34e562ede151a25e34b9b229b"
+	hmBlobWS             = "860ffbb6105d629682c274e4c05065aac9c8900f"
+	hmBlobMethodsPrompt  = "fa2aff54e5d8731681726284b52666cb1cadd76d"
+	hmBlobMethodsSession = "4fda92e694dc88ce85a83a6b2dff996fd89db694"
 	hmBlobServerRequests = "7d089f8ad2701f8b220ffc061d2872cf6ecf13ef"
-	hmTreeContracts      = "4bdc4e3f9e5e56923028558497a8c086348858a9"
+	hmTreeContracts      = "3112f6c14fdd632c1308018ccd85fd9870d24544"
 )
 
 var hmLedgerFixtures = map[string]bool{
@@ -186,6 +186,21 @@ func pinnedHMSources() hmCorpusSources {
 	}
 }
 
+func carriedHMSources() hmCorpusSources {
+	return hmCorpusSources{
+		EntryPy:          "ff2f9a899d33fc4466df85c4988e352b7c435228",
+		TransportPy:      "691f1d799027b211a073c685fbd7ee5d65fae3a6",
+		ServerPy:         "c3cc3d2cd6894f07092b7c51aa1d0ba6f2aabdcb",
+		EventReplayPy:    "20298bd23f80922c02d7b45a3c920716021f290b",
+		StdinRecoveryPy:  "add5e841df4bead308a96bd8b0f0e3c5475bd167",
+		WsPy:             "833751e0df038b0c551814ee3bfea95a27d0dabf",
+		MethodsPromptPy:  "0b2baf072e82ecfeb8a06eb6dc97322941ad14dc",
+		MethodsSessionPy: "5b1ca479044dc3c34e562ede151a25e34b9b229b",
+		ServerRequestsPy: "7d089f8ad2701f8b220ffc061d2872cf6ecf13ef",
+		ContractsTree:    "4bdc4e3f9e5e56923028558497a8c086348858a9",
+	}
+}
+
 func TestHermesEvidenceCorpus(t *testing.T) {
 	root := hmCorpusRoot(t)
 	manifest := hmLoadJSON[hmCorpusManifest](t, filepath.Join(root, "manifest.json"))
@@ -221,7 +236,7 @@ func runHermesCorpusCase(t *testing.T, root string, entry hmCorpusManifestCase) 
 	dir := filepath.Join(root, entry.Path)
 	definition := hmLoadJSON[hmCorpusCase](t, filepath.Join(dir, "case.json"))
 	p := definition.Provenance
-	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != hmCorpusRepository || p.Tag != hmCorpusTag || p.Commit != hmCorpusCommit || p.CommitTree != hmCorpusCommitTree || p.Sources != pinnedHMSources() || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
+	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != hmCorpusRepository || p.Tag != "v0.23.1" || p.Commit != "3b421578588243f920886e6fe79a6faa87ea026e" || p.CommitTree != "c69ce0f0fb52a2650efcbb79cc97d35474a9be9a" || p.Sources != carriedHMSources() || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
 		t.Fatalf("invalid case metadata: %+v", definition)
 	}
 	frames, decoded := hmLoadFrames(t, filepath.Join(dir, definition.Native))
