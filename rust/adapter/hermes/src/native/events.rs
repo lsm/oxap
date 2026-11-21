@@ -37,6 +37,7 @@ pub const OBSERVED_EVENTS: &[&str] = &[
     "display.lease",
     "display.status",
     "free_tier.challenge",
+    "groups.changed",
     "layout.apply",
     "message.reaction",
     "moa.aggregating",
