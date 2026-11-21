@@ -25,19 +25,25 @@ local binding on the public internet.
 
 The first local binding is a Unix-domain stream socket in an owner-only
 directory. The Hub and clients verify that the directory and socket belong to
-the expected operating-system account and that other users have no access. Each
-side also checks the connected peer account using operating-system peer
-credentials, failing closed if those credentials are unavailable or differ
-from the expected account. The Hub must not follow symlinks, replace an active server's socket, or start if it
-cannot enforce these protections. Clients must fail closed if verification
-fails. A binding on a platform unable to enforce these properties, including a
-Windows binding, requires a separate specification. A co-hosted Agent or Provider
-service does not register clients automatically. Remote deployment and its
+their effective operating-system user and that other users have no access. The
+directory must be owned by that user with mode `0700`; neither side follows a
+symlink, and a wrong owner or mode is an error, not something to repair. Each
+side also checks the connected peer credentials and requires the peer user ID
+to equal its own effective user ID. It fails closed if credentials are
+unavailable or differ. These checks are required on macOS and Linux; another
+platform, including Windows, needs a separately specified secure binding.
+
+The Hub holds an exclusive lock in the protected directory for its entire
+lifetime. Only the lock holder may remove a stale socket, bind or remove the
+socket on shutdown. A second server fails without disturbing the first. A socket
+path too long for the platform fails with a diagnostic; no silent fallback to a
+less protected directory is allowed. A co-hosted Agent or Provider service does not register clients automatically. Remote deployment and its
 transport authentication require a separate binding.
 
 Each connection registers exactly once before any other operation. The Hub
 allocates an opaque `instance_id` containing at least 128 random bits from a
-cryptographically secure source, unique among active instances. The client supplies a display name and a kind such as `codex`, `claude-code`,
+cryptographically secure source, unique among active instances. The client
+supplies a display name and a kind such as `codex`, `claude-code`,
 or `integration`; neither is an identity or proof of ownership. A registration
 ends when its connection closes. Reconnecting creates a new instance ID and
 requires registering and subscribing again. The Hub must not accept a
@@ -53,8 +59,10 @@ Hub must not log payloads or metadata.
 
 ## Wire and operations
 
-Each UTF-8 line contains exactly one JSON object followed by a newline.
-Protocol output carries no logs or banners. Every
+Each UTF-8 line contains exactly one JSON object followed by a newline. Blank
+lines, carriage returns before the newline, duplicate JSON members, invalid
+UTF-8 and lines over the limit close the connection. Protocol output carries no
+logs or banners. The binding does not accept ancillary file descriptors. Every
 envelope has `protocol: "oxap"`, `version: "0.2"`, and
 `profile: "oxap.hub-messaging"`. A request has `id`, `type`, and `payload`;
 a response has its own `id`, `type`, `in_reply_to`, and `payload`. An event
@@ -64,12 +72,17 @@ The server checks protocol and version before profile routing; a correlatable
 unsupported version receives `error.response` with `unsupported_version`.
 Unknown members and operations are refused rather than silently ignored.
 
-The server returns exactly one response to each valid request unless the
-connection fails; responses and events can interleave. Responses use a bounded
-queue separate from event deliveries. The Hub stops reading requests on a
-connection while its response queue is full; it never blocks work on other
-connections. Requests on one
-connection are processed in wire order. Clients correlate responses with
+The server reserves a response slot before accepting each request and returns
+exactly one response unless the connection fails. Responses use a bounded queue
+separate from event deliveries. The Hub stops reading requests on a connection
+while no response slot is free, while continuing to watch for hang-up; it never
+blocks work on other connections. Clients must read concurrently with writes to
+avoid a backpressure deadlock. This socket binding deliberately applies
+backpressure, unlike the existing Agent Service pipe binding. No heartbeat is
+required: a closed socket ends the registration, while an unresponsive but open
+peer remains subject to bounded queues. Responses and events can interleave,
+and an event may precede the response to the operation that caused it. Requests
+on one connection are processed in wire order. Clients correlate responses with
 `in_reply_to`, not arrival order. A connection that has not registered by the
 server's advertised registration deadline is closed. The binding declares
 finite frame, payload, connection, subscription and outbound queue limits.
@@ -87,7 +100,8 @@ A topic is a nonempty, case-sensitive UTF-8 string, compared exactly; `*` has
 no special meaning. An instance has at most one subscription to a given topic.
 Subscribing again succeeds without creating a duplicate; unsubscribing an absent
 topic succeeds. A publication includes the sender if it subscribes to the
-topic. A successful subscribe response is a barrier: later admissions see the subscription.
+topic. A successful subscribe response is a barrier: later admissions see the
+subscription.
 A message is a JSON object with required `content_type` and `content` members.
 `content_type` is a nonempty string. `content` may be any JSON value, including
 an object carrying integration-specific fields. Its meaning and any further
@@ -96,7 +110,8 @@ because they arrived through Hub.
 
 A message may include `reply_to_message_id` for application-level correlation;
 it does not acknowledge processing. For every accepted send or publish the Hub
-allocates a `message_id`. A `hub.message` event contains `message_id`, the Hub-assigned `sender_id`, the
+allocates a `message_id`. A `hub.message` event contains `message_id`, the
+Hub-assigned `sender_id`, the
 original `message`, and exactly one of `recipient_id` or `topic`. The Hub never
 rewrites the content. A receiver may use `message_id` to correlate its own logs;
 it is not an idempotency key or a replay cursor.
@@ -107,15 +122,21 @@ A direct send succeeds only if the recipient is registered and the delivery was
 placed in its bounded outbound queue. Admission never waits for queue space. A
 full direct recipient returns `recipient_busy` with no delivery. A publication
 takes a snapshot of active matching subscriptions, then independently attempts
-to enqueue to each. A full subscriber is skipped and counted as dropped; its connection and
-previously queued deliveries remain intact. Other subscribers can still receive
-the message. The response reports both
-`admitted_count` and `dropped_count` for that snapshot; their sum equals the
+to enqueue to each. A full subscriber is skipped and counted as dropped; its
+connection and previously queued deliveries remain intact. Other subscribers can still receive
+the message. The response reports both `admitted_count` and `dropped_count` for that snapshot; their sum equals the
 number of matching subscribers in the snapshot. A publication with no
 subscribers succeeds with both counts zero. These counts report queue admission,
 not receipt or processing. Admission and disconnects are serialized so the
 snapshot excludes registrations already removed; the operation cannot wait on
 network writes. This best-effort fan-out is not atomic across recipients.
+
+The Hub keeps one bounded, coalesced pending-drop notice per subscription. When
+a publication skips that subscription, the notice becomes pending; once the
+subscriber can read again, `hub.deliveries.dropped` reports its topic and that
+one or more deliveries were missed. Multiple drops can share one notice. An
+unsubscribe or disconnect can discard its pending notice; on reconnect the
+client must reconcile the authoritative source after subscribing again.
 
 An accepted delivery is attempted at most once on that connection. Success
 means queued, not written, received, processed or persisted. A disconnect,
@@ -133,17 +154,18 @@ subscription. Events admitted earlier may still arrive after the response.
 Listing instances includes the caller and is a snapshot, not a reservation: a
 listed recipient may unregister before a send. After reconnect, peers can poll
 the list to discover active instances; names and kinds are advisory and may be
-duplicated. Closing a connection removes its subscriptions and
-registration and discards its queued deliveries.
+duplicated. Closing a connection removes its subscriptions and registration and discards its queued deliveries.
 
 A failed operation returns `error.response` with `in_reply_to` and a payload
 containing an `error` object with `code` and human-readable `message`. The
 message must not contain message content.
 The initial codes are `invalid_request`, `not_registered`,
 `already_registered`, `recipient_not_found`, `recipient_busy`,
-`resource_exhausted`, `unsupported_version`, and `internal_error`. An unknown operation is `invalid_request`. A rejected operation has no routing
+`resource_exhausted`, `unsupported_version`, and `internal_error`. An unknown
+operation is `invalid_request`. A rejected operation has no routing
 effects; a successfully admitted publication can still report dropped
-subscribers. The server must not expose internal paths or secrets in errors. A request without a usable ID cannot receive a correlated error and
+subscribers. The server must not expose internal paths or secrets in errors. A
+request without a usable ID cannot receive a correlated error and
 closes the connection.
 
 ## Binding limits
@@ -155,7 +177,8 @@ newline. The message limit applies to the encoded `message` object; the Hub
 must reserve enough frame overhead for the largest delivery it accepts. The
 instance-list response must fit the frame limit or use bounded pagination. The
 Hub advertises actual limits on registration, and registration itself must fit
-a fixed protocol minimum before that response is known. Connection liveness and framing failure behavior are also binding requirements
+a fixed protocol minimum before that response is known. The exact finite limits
+and the notice payload are also binding requirements
 to be fixed in the schema and conformance suite; they are not yet specified by
 this draft.
 
@@ -177,7 +200,7 @@ Before an implementation claims this profile, its wire schema, remaining
 binding limits and conformance cases must be specified and checked against this
 draft. Tests must cover two instances of the same kind, direct routing, exact
 topic matching, self-publication, zero subscribers, queue exhaustion with
-reported partial publication, disconnect and reconnect, subscription barriers,
-malformed frames, peer isolation and socket-path ownership. No Hub config
-is accepted before the service is implemented. Agent and Provider can ship
+reported partial publication and drop notices, backpressure, disconnect and
+reconnect, subscription barriers, malformed frames, peer credentials, socket
+locking and path ownership. No Hub config is accepted before the service is implemented. Agent and Provider can ship
 independently under Decision 0070.
