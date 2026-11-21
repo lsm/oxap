@@ -22,7 +22,7 @@ oapx serve agent --stdio --backend acp --config oap-serve.json
 | `claude` | `claude-code` | `2.1.322` | yes: `claude` from `PATH` | [mapping](../research/claude-code-agent-sdk-2.1.322-mapping.md) |
 | `codex` | `codex-app-server` | `rust-v0.167.2` | yes: `codex` from `PATH` | [mapping](../research/codex-app-server-0.167.2-mapping.md) |
 | `pi` | `pi` | `v1.5.2` | yes: `pi` from `PATH` | [mapping](../research/pi-v1.5.2-mapping.md) |
-| `opencode` | `opencode` | `v2.2.7` | yes: the installed build, else `opencode` from `PATH` | [mapping](../research/opencode-v2.2.7-mapping.md) |
+| `opencode` | `opencode` | `v2.3.2` | yes: the installed build, else `opencode` from `PATH` | [mapping](../research/opencode-v2.3.2-mapping.md) |
 | `acp` | `acp` | `v1.17.0` | no: needs `executable` | [mapping](../research/acp-v1.17.0-mapping.md) |
 | `hermes` | `hermes` | `v0.23.1` | no: needs `executable` | [mapping](../research/hermes-v0.23.1-mapping.md) |
 | `deepseek` | `deepseek-harness` | `dsh-v0.2.2-rc.5` | no: needs `executable`, `provider` and `model` | [mapping](../research/deepseek-harness-dsh-v0.2.2-rc.5-mapping.md) |

@@ -143,8 +143,8 @@ func runOpenCodeCorpusCase(t *testing.T, root string, entry opencodeCorpusCaseEn
 	dir := filepath.Join(root, entry.Path)
 	definition := opencodeLoadJSON[opencodeCorpusCase](t, filepath.Join(dir, "case.json"))
 	p := definition.Provenance
-	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != "https://github.com/anomalyco/opencode" || p.Tag != PinnedTag || p.Commit != PinnedCommit ||
-		p.CommitTree != opencodeCommitTree || p.SessionEvent != opencodeSessionEvent || p.SessionInput != opencodeSessionInput ||
+	if definition.Version != 1 || definition.ID != entry.ID || p.Repository != "https://github.com/anomalyco/opencode" || p.Tag != "v2.2.7" || p.Commit != "fedc6f208aa2bd54c1019227214568083f6380ad" ||
+		p.CommitTree != "ff57370148d7897dd17de9f491e4d2499526ebeb" || p.SessionEvent != opencodeSessionEvent || p.SessionInput != opencodeSessionInput ||
 		p.Delivery != opencodeDeliveryBlob || p.SessionGroup != opencodeSessionGroup || p.ServerHandler != opencodeServerHandler || p.CoreSession != opencodeCoreSession ||
 		len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
 		t.Fatalf("invalid case metadata: %+v", definition)

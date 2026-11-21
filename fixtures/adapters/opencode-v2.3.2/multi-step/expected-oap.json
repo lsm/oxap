@@ -15,7 +15,7 @@
     "timestamp_ms": 4,
     "session_id": "session",
     "run_id": "run-1",
-    "capability_revision": "opencode-v2.2.7-oap-v5"
+    "capability_revision": "opencode-v2.3.2-oap-v5"
   },
   {
     "protocol": "open-agent-protocol",
@@ -39,7 +39,7 @@
     "session_id": "session",
     "run_id": "run-1",
     "tool_call_id": "tool-call-6",
-    "capability_revision": "opencode-v2.2.7-oap-v5"
+    "capability_revision": "opencode-v2.3.2-oap-v5"
   },
   {
     "protocol": "open-agent-protocol",
@@ -61,14 +61,35 @@
     "session_id": "session",
     "run_id": "run-1",
     "tool_call_id": "tool-call-6",
-    "capability_revision": "opencode-v2.2.7-oap-v5"
+    "capability_revision": "opencode-v2.3.2-oap-v5"
+  },
+  {
+    "protocol": "open-agent-protocol",
+    "version": "0.1",
+    "profile": "open-agent-protocol.agent-control-core",
+    "type": "content.delta",
+    "id": "event-9",
+    "payload": {
+      "session_id": "session",
+      "run_id": "run-1",
+      "message_id": "message-2",
+      "part": {
+        "type": "text",
+        "text": "final"
+      }
+    },
+    "sequence": 4,
+    "timestamp_ms": 7,
+    "session_id": "session",
+    "run_id": "run-1",
+    "capability_revision": "opencode-v2.3.2-oap-v5"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
     "type": "action.call.failed",
-    "id": "event-9",
+    "id": "event-10",
     "payload": {
       "session_id": "session",
       "run_id": "run-1",
@@ -77,47 +98,52 @@
       "execution_owner": "opencode-server",
       "name": "read",
       "error": {
-        "code": "opencode_tool_failed",
-        "message": "tool exploded"
+        "code": "incomplete_tool",
+        "message": "OpenCode run settled with an unfinished tool"
       }
     },
-    "sequence": 4,
-    "timestamp_ms": 7,
+    "sequence": 5,
+    "timestamp_ms": 8,
     "in_reply_to": "event-8",
     "session_id": "session",
     "run_id": "run-1",
     "tool_call_id": "tool-call-6",
-    "capability_revision": "opencode-v2.2.7-oap-v5"
+    "capability_revision": "opencode-v2.3.2-oap-v5"
   },
   {
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
     "type": "run.completed",
-    "id": "event-10",
+    "id": "event-11",
     "payload": {
       "session_id": "session",
       "run_id": "run-1",
       "final_response": {
         "id": "message-2",
         "role": "assistant",
-        "content": ""
+        "content": [
+          {
+            "type": "text",
+            "text": "final"
+          }
+        ]
       },
       "stop_reason": "stop",
       "usage": {
-        "input_tokens": 2,
+        "input_tokens": 4,
         "cache_read_input_tokens": 0,
         "cache_write_input_tokens": 0,
-        "output_tokens": 5,
+        "output_tokens": 10,
         "reasoning_tokens": 0,
-        "total_tokens": 7
+        "total_tokens": 14
       }
     },
-    "sequence": 5,
-    "timestamp_ms": 8,
+    "sequence": 6,
+    "timestamp_ms": 9,
     "session_id": "session",
     "run_id": "run-1",
-    "capability_revision": "opencode-v2.2.7-oap-v5",
+    "capability_revision": "opencode-v2.3.2-oap-v5",
     "extensions": {
       "io.github.anomalyco.opencode.cost": {
         "total_cost_usd": 0
