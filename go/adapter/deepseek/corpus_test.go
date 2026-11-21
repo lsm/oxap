@@ -88,6 +88,10 @@ func dshCurrentProvenance() dshCorpusProvenance {
 	return dshCorpusProvenance{Repository: dshCorpusRepository, Tag: dshCurrentSource.Tag, Commit: dshCurrentSource.Commit, CommitTree: dshCurrentSource.Tree, Sources: dshCurrentSources}
 }
 
+func dshRC2Provenance() dshCorpusProvenance {
+	return dshCorpusProvenance{Repository: dshCorpusRepository, Tag: "dsh-v0.2.2-rc.2", Commit: "ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c", CommitTree: "3c4b8825db42206bec763295ce901af11d29ba61", Sources: dshCurrentSources}
+}
+
 func dshPreviousProvenance() dshCorpusProvenance {
 	return dshCorpusProvenance{Repository: dshCorpusRepository, Tag: "dsh-v0.2.1-rc.2", Commit: "687f282e8625c6b8d11ff58211a90524be2e4317", CommitTree: "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d", Sources: dshPreviousSources}
 }
@@ -235,7 +239,7 @@ func runDSHCorpusCase(t *testing.T, root string, entry dshCorpusManifestCase) {
 	dir := filepath.Join(root, entry.Path)
 	definition := dshLoadJSON[dshCorpusCase](t, filepath.Join(dir, "case.json"))
 	p := definition.Provenance
-	if definition.Version != 1 || definition.ID != entry.ID || (p != dshCurrentProvenance() && p != dshPreviousProvenance() && p != dshCarriedProvenance()) || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
+	if definition.Version != 1 || definition.ID != entry.ID || (p != dshCurrentProvenance() && p != dshRC2Provenance() && p != dshPreviousProvenance() && p != dshCarriedProvenance()) || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
 		t.Fatalf("invalid case metadata: %+v", definition)
 	}
 	dshAssertCapabilities(t, definition, descriptorFromProbe(t))

@@ -3,13 +3,25 @@
   "name": "DeepSeek Harness (release candidate)",
   "versions": [
     {
-      "label": "dsh-v0.2.2-rc.2",
+      "label": "dsh-v0.2.2-rc.5",
       "status": "current",
       "endpoint_version": "0.0.1",
-      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.2-oap-v3",
+      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3",
       "admits": ["0.0.1"],
+      "ledgers": ["research/deepseek-harness-dsh-v0.2.2-rc.5-mapping.md", "research/deepseek-harness-dsh-v0.2.2-rc.2-mapping.md", "research/deepseek-harness-dsh-v0.2.2-rc.1-mapping.md", "research/deepseek-harness-dsh-v0.2.1-rc.2-mapping.md", "research/deepseek-harness-dsh-v0.2.1-alpha.2-mapping.md", "research/deepseek-harness-dsh-v0.1.7-rc.2-mapping.md", "research/deepseek-harness-47f9438-mapping.md"],
+      "corpus_from": "dsh-v0.2.2-rc.2",
+      "corpus": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5",
+      "components": [
+        { "name": "deepseek-harness", "version": "dsh-v0.2.2-rc.5", "repository": "https://github.com/deepseek-ai/deepseek-harness" }
+      ],
+      "sources": [
+        { "component": "deepseek-harness", "tag": "dsh-v0.2.2-rc.5", "commit": "9c2670d3bce5275e0d1610272958121af87787bb", "tree": "6ec0fcdcaf38bdf8ffa6675e30b036dc104a1ece" }
+      ]
+    },
+    {
+      "label": "dsh-v0.2.2-rc.2",
+      "status": "retired",
       "ledgers": ["research/deepseek-harness-dsh-v0.2.2-rc.2-mapping.md", "research/deepseek-harness-dsh-v0.2.2-rc.1-mapping.md", "research/deepseek-harness-dsh-v0.2.1-rc.2-mapping.md", "research/deepseek-harness-dsh-v0.2.1-alpha.2-mapping.md", "research/deepseek-harness-dsh-v0.1.7-rc.2-mapping.md", "research/deepseek-harness-47f9438-mapping.md"],
-      "corpus": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.2",
       "components": [
         { "name": "deepseek-harness", "version": "dsh-v0.2.2-rc.2", "repository": "https://github.com/deepseek-ai/deepseek-harness" }
       ],

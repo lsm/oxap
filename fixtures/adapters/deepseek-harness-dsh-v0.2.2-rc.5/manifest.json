@@ -134,8 +134,8 @@
       "path": "background-job"
     }
   ],
-  "commit": "ddac96760b6edf8fa0fe17cbdcf0b512f4c12b2c",
-  "commit_tree": "3c4b8825db42206bec763295ce901af11d29ba61",
+  "commit": "9c2670d3bce5275e0d1610272958121af87787bb",
+  "commit_tree": "6ec0fcdcaf38bdf8ffa6675e30b036dc104a1ece",
   "sources": {
     "core_agent_inbox_blob": "affe0c6b2f653888dc2177fd2987c6082a93f758",
     "core_agent_loop_blob": "7ec43dd1323edc6e2b488d7c9d35fdd2d323abbd",
@@ -151,6 +151,6 @@
     "sdk_protocol_types_blob": "6bcd2de7045e58c0fab0e5bacf956724d1ff6e68",
     "sdk_server_blob": "bccfa6634e071c5bf1fad2f6b2fde80b0c8e503b"
   },
-  "tag": "dsh-v0.2.2-rc.2",
+  "tag": "dsh-v0.2.2-rc.5",
   "version": 1
 }

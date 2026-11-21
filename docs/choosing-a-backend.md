@@ -25,7 +25,7 @@ oapx serve agent --stdio --backend acp --config oap-serve.json
 | `opencode` | `opencode` | `v2.2.7` | yes: the installed build, else `opencode` from `PATH` | [mapping](../research/opencode-v2.2.7-mapping.md) |
 | `acp` | `acp` | `v1.17.0` | no: needs `executable` | [mapping](../research/acp-v1.17.0-mapping.md) |
 | `hermes` | `hermes` | `v0.23.1` | no: needs `executable` | [mapping](../research/hermes-v0.23.1-mapping.md) |
-| `deepseek` | `deepseek-harness` | `dsh-v0.2.2-rc.2` | no: needs `executable`, `provider` and `model` | [mapping](../research/deepseek-harness-dsh-v0.2.2-rc.2-mapping.md) |
+| `deepseek` | `deepseek-harness` | `dsh-v0.2.2-rc.5` | no: needs `executable`, `provider` and `model` | [mapping](../research/deepseek-harness-dsh-v0.2.2-rc.5-mapping.md) |
 
 `--config <path>` takes the entry of that name from a registry shaped like
 [`examples/oap-serve.json`](../examples/oap-serve.json). Unknown members are
