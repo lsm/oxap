@@ -15,3 +15,21 @@ The Go, Rust and Zig reducers now retain the event's `agentId` and omit child-ag
 The release commit's tree is `dada69076c35dc32310c2022e5feff0b18bbf705`. A credential-free macOS arm64 probe of the standalone `copilot-darwin-arm64.tar.gz` archive, verified against its release SHA-256 `35e8165a6ca811fb907b5afb7892e53d1bb85426bb77fe3f83b7f0b4e955249a`, received protocol version 4 from `ping`, version 1.0.114 from `status.get`, and a session ID from `session.create`. The process exited with code 0. The probe used an isolated home and did not submit a prompt; execution, model output and subagent delivery remain unverified.
 
 The catalog now selects v1.0.114 and the adapter expects headless protocol 4. Its corpus carries synthetic v1.0.109 cases forward with their case provenance preserved and updated OXAP capability revisions. No native case was recorded from v1.0.114.
+
+The 1.0.114 event schema also defines `tool.execution_progress` with
+`toolCallId` and `progressMessage`. It existed in 1.0.109 and describes a status
+message, not a streamed tool result; the current reducers do not map it.
+`tool.shell_output` is still defined for live shell output, not as a general
+replacement for `tool.execution_partial_result`. The carried-forward
+`tool-success`, `tool-denied`, and `tool-duplicate-end` synthetic cases still
+contain the removed event, so they do not establish 1.0.114 tool progress.
+Those cases and the feature-matrix claim must be corrected before this pin is
+ready for review.
+
+The published `SessionOpenOptions` changed from flat fields to grouped options:
+`enableStreaming` became `events.streaming`, and `envValueMode` moved out of the
+top-level object. The adapter sends `streaming` and `envValueMode` to the
+headless `session.create` RPC, whose request may be a separate wrapper; the
+isolated session-open probe does not establish that these settings took effect.
+Their exact headless interpretation requires verification, especially the
+streaming and permission settings, before a compatibility claim.
