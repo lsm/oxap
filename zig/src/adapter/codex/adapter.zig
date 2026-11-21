@@ -466,6 +466,7 @@ pub const Session = struct {
         .drain = drain,
         .readable = readable,
         .activity = activity,
+        .live_work = liveWork,
         .close = close,
         .native_id = nativeId,
         .update_settings = updateSettings,
@@ -788,6 +789,10 @@ pub const Session = struct {
         const self = cast(ptr);
         try appendEvents(allocator, self.reducer.envelopes.items, out);
         self.reducer.envelopes.clearRetainingCapacity();
+    }
+
+    fn liveWork(ptr: *anyopaque) bool {
+        return cast(ptr).reducer.holdsWork();
     }
 
     fn activity(ptr: *anyopaque) contract.Activity {
