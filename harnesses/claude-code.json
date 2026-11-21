@@ -34,7 +34,7 @@
         { "component": "cli", "platform": "darwin-arm64", "kind": "npm-tarball", "name": "@anthropic-ai/claude-code-darwin-arm64@2.1.330", "sha256": "b8c91d706567b670e4f2b6112199c5db3125ca237ac214e6143e7094bd0cb33b" },
         { "component": "cli", "platform": "darwin-arm64", "kind": "binary", "name": "claude", "sha256": "f7c5093b9dd6560d08af28bc27b123fb55091deae3180ac39df199522da86815", "bytes": 363855808 },
         { "component": "typescript-sdk", "platform": "any", "kind": "npm-tarball", "name": "@anthropic-ai/claude-agent-sdk@0.3.330", "sha256": "6ecbc493eda07c20536c97b7529a6873034ad50faafd8eb2bddba4201825950f" },
-        { "component": "typescript-sdk", "platform": "any", "kind": "file", "name": "sdk.d.ts", "sha256": "c228b60931a217ea96e222ef41f47a0a83bee0a394d1735e3eb668e3f8838b2f" }
+        { "component": "typescript-sdk", "platform": "any", "kind": "file", "name": "sdk.d.ts", "sha256": "ad7946cc7112e3178f5290de97f77716ddcf7b671655e9ff00d30c7c2a5a1184" }
       ],
       "sources": [
         { "component": "cli", "commit": "e791a1c41eee7504672a109fd6eb66b11566b8a1" },

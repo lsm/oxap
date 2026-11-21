@@ -22,7 +22,7 @@
       "build_date": "2026-11-20T22:32:35Z",
       "ts_sdk_version": "0.3.330",
       "ts_sdk_tarball_sha256": "6ecbc493eda07c20536c97b7529a6873034ad50faafd8eb2bddba4201825950f",
-      "ts_sdk_dts_sha256": "c228b60931a217ea96e222ef41f47a0a83bee0a394d1735e3eb668e3f8838b2f",
+      "ts_sdk_dts_sha256": "ad7946cc7112e3178f5290de97f77716ddcf7b671655e9ff00d30c7c2a5a1184",
       "ts_sdk_repository": "https://github.com/anthropics/claude-agent-sdk-typescript",
       "py_sdk_version": "0.2.187",
       "py_sdk_commit": "3184360393a92ca8a6ec7bbbdee571afd1ce1c56",
