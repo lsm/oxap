@@ -131,11 +131,12 @@ Per kind, `oapx` appends after the entry's own `environment`:
   entry's own `args` — the flags Pi documents for deterministic selection —
   with the id taken from the required `oapx/<model-id>` `model` member and
   malformed values refused as for OpenCode. The directory is content-addressed
-  — `<state>/pi/<hash of base_url, credential_env, and the model id>` — so two
-  routed pi entries with different configs never share a `models.json`, and
-  neither do two hub processes running different documents against the same
-  state directory: a different config lands in a different directory, and the
-  same config writes byte-identical content, making any rewrite idempotent.
+  — `<state>/pi/<hash of the rendered models.json bytes>` — so any difference
+  in what is written, wire included, gets its own directory: two routed pi
+  entries with different configs never share a `models.json`, and neither do
+  two hub processes running different documents against the same state
+  directory, while the same rendered content rewrites byte-identical bytes,
+  making any rewrite idempotent.
   The file is written atomically at adapter build (a temp file beside it, then
   rename), so a concurrently starting session never reads a partial file; a
   changed document builds a new adapter and writes before any new session. The
