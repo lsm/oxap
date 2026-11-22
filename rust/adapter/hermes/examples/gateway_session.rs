@@ -8,13 +8,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         native::EVENT_MESSAGE_COMPLETE, process::ProcessConfig, GatewaySession, Observation,
         PromptObservation, RunObservation,
     };
-    use oxap_protocol::ReasoningLevel;
+    use oxap_protocol::{
+        EnvelopeType, InputAnswer, ReasoningLevel, UserInputRequestedPayload,
+        UserInputResolveRequest,
+    };
 
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (python, source, state, mode, model) = match args.as_slice() {
-        [python, source, state] => (python, source, state, "", ""),
+    let (python, source, state, mode, model, answers_file) = match args.as_slice() {
+        [python, source, state] => (python, source, state, "", "", None),
+        [python, source, state, mode, model, answers] if mode == "--run" => (
+            python,
+            source,
+            state,
+            mode.as_str(),
+            model.as_str(),
+            Some(answers),
+        ),
         [python, source, state, mode, model] if mode == "--run" => {
-            (python, source, state, mode.as_str(), model.as_str())
+            (python, source, state, mode.as_str(), model.as_str(), None)
         }
         [python, source, state, mode]
             if matches!(
@@ -22,14 +33,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "--prompt" | "--observe" | "--start" | "--project" | "--run"
             ) =>
         {
-            (python, source, state, mode.as_str(), "")
+            (python, source, state, mode.as_str(), "", None)
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model]]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]]"
                     .into(),
             );
         }
+    };
+    let mut answers = if let Some(path) = answers_file {
+        let answers: Vec<Vec<InputAnswer>> = serde_json::from_reader(std::fs::File::open(path)?)?;
+        Some(answers.into_iter())
+    } else {
+        None
     };
     let config = ProcessConfig {
         path: python.clone(),
@@ -77,6 +94,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match observation {
                 RunObservation::Event(event) => {
                     println!("envelope: {}", go_marshal(&serde_json::to_string(&event)?));
+                    if let Some(answers) = answers.as_mut() {
+                        if event.envelope_type == EnvelopeType::USER_INPUT_REQUESTED {
+                            let input: UserInputRequestedPayload = event.decode_payload()?;
+                            run.resolve_input(UserInputResolveRequest {
+                                interaction_id: input.interaction_id,
+                                requested_by: input.requested_by,
+                                responded_by: input.responded_by,
+                                session_id: input.session_id,
+                                run_id: input.run_id,
+                                answers: answers.next().ok_or("missing replay answers")?,
+                            })?;
+                        }
+                    }
                 }
                 RunObservation::Other(Observation::Event(_)) => {}
                 RunObservation::Other(Observation::Request(request)) => {
