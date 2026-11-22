@@ -45,6 +45,14 @@ native observations pass through without consuming a sequence number.
 Reading ends after settlement. To interrupt a running turn, use
 `GatewayRun::interrupt` and continue reading its settlement.
 
+Use `GatewaySession::reopen` with the stored Hermes binding and the same OAP
+session ID. It starts a new gateway, reloads the conversation through
+`session.resume`, and returns idle recovered state with the restored model
+when Hermes reports it. The stored ID is retained and later calls use the
+new runtime ID. A missing binding, an active session, or a turn Hermes would
+auto-continue produces an unsatisfiable reopen and closes the new gateway.
+OAP runs and cursors remain process-local.
+
 The wire layer holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's
 `DecodeServerRequest` and `RequestSessionID`, and `rpc::DIALECT`, the

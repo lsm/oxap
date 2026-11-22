@@ -722,3 +722,63 @@ fn run_rejects_invalid_answers_then_submits_a_clarification_batch_once() {
     assert!(run.next_observation(deadline).unwrap().is_none());
     session.close().unwrap();
 }
+
+#[test]
+fn reopen_uses_the_new_runtime_id_for_subsequent_prompts() {
+    let resume =
+        r#"{"id":1,"jsonrpc":"2.0","method":"session.resume","params":{"session_id":"saved"}}"#;
+    let resumed =
+        r#"{"jsonrpc":"2.0","id":1,"result":{"session_id":"running","auto_continue":null}}"#;
+    let config = gateway(
+        resume,
+        &format!("printf '%s\\n' '{resumed}'"),
+        &format!(
+            "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\"}}}}'"
+        ),
+    );
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    let (session, state) =
+        GatewaySession::reopen(&config, "saved", "session".into(), "configured", deadline).unwrap();
+    assert_eq!(state.current_model_id, "configured");
+    assert!(state.recovery.unwrap().recovered);
+    assert_eq!(session.stored_id(), "saved");
+    session.submit_prompt("hello\n<world>", deadline).unwrap();
+    session.close().unwrap();
+}
+
+#[test]
+fn reopen_rejects_missing_and_active_sessions() {
+    let resume =
+        r#"{"id":1,"jsonrpc":"2.0","method":"session.resume","params":{"session_id":"saved"}}"#;
+    for (payload, diagnostic) in [
+        (
+            r#""error":{"code":4007,"message":"not found"}"#,
+            "Hermes has no stored session",
+        ),
+        (
+            r#""result":{"session_id":"running","running":true,"status":"idle"}"#,
+            "while it was running",
+        ),
+        (
+            r#""result":{"session_id":"running","status":"waiting"}"#,
+            "while it was waiting",
+        ),
+        (r#""result":{}"#, "omitted the reloaded session id"),
+    ] {
+        let config = gateway(
+            resume,
+            &format!("printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":1,{payload}}}'"),
+            "",
+        );
+        let deadline = Some(Instant::now() + Duration::from_secs(5));
+        let Err(Error::UnsupportedControl(refusal)) =
+            GatewaySession::reopen(&config, "saved", "session".into(), "", deadline)
+        else {
+            panic!("expected a typed reopen refusal");
+        };
+        assert_eq!(refusal.feature, oxap_protocol::FEATURE_OPEN_REOPEN);
+        assert_eq!(refusal.reason, CONTROL_UNSATISFIABLE);
+        assert!(refusal.detail.contains(diagnostic), "{}", refusal.detail);
+    }
+}

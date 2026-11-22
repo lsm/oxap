@@ -159,3 +159,32 @@ The gateway waits for each reply before it sends the next tool observation.
 Expect four native replies and 31 OAP envelopes matching the pinned fixture
 byte for byte, and one clean shutdown. The sudo and secret answers are fixture
 strings. The gateway replay executes no tools and receives no credentials.
+
+Replay the stored-session reload and the auto-continue refusal:
+
+```sh
+for case in session-reopen session-reopen-auto-continue; do
+  python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+    "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --reopen "$case" || exit $?
+done
+```
+
+Each replay checks the recorded `session.resume` write byte for byte and
+requires EOF without another gateway write. The idle reload preserves the
+stored ID, uses the new runtime ID, and matches the recovered OAP state.
+The auto-continue reply matches the recorded unsatisfiable reopen, includes
+the full Go refusal detail with recovery guidance, and returns no session.
+
+Check the deadline when the gateway withholds either its ready notification
+or the resume reply:
+
+```sh
+for case in reopen-ready-timeout reopen-resume-timeout; do
+  python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+    "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --reopen-deadline "$case" || exit $?
+done
+```
+
+Each example invocation exits 1 with `DeadlineExceeded`. The verifier exits 0
+after observing the timeout and confirming whether the gateway read the
+recorded resume request.

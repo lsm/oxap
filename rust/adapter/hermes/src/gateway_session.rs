@@ -3,18 +3,24 @@ use std::{collections::VecDeque, sync::Arc, time::Instant};
 use crossbeam_channel::{bounded, select_biased, Receiver, RecvTimeoutError, Sender};
 use oxap_adapter::gojson::{go_quote, zero};
 use oxap_adapter::{Error, UnsupportedControl, CONTROL_UNSATISFIABLE};
-use oxap_protocol::{ReasoningLevel, FEATURE_SESSION_REASONING};
+use oxap_protocol::{
+    ReasoningLevel, RecoveryMetadata, SessionId, SessionState, SessionStatus, FEATURE_OPEN_REOPEN,
+    FEATURE_SESSION_REASONING,
+};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::value::RawValue;
 
 use crate::native::{
     decode_strict, Event, InterruptResult, MessageCompletePayload, PromptSubmitResult,
-    EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_START, METHOD_CONFIG_SET, METHOD_PROMPT_SUBMIT,
-    METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, SUBMIT_STREAMING,
+    SessionInfoPayload, EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_START, METHOD_CONFIG_SET,
+    METHOD_PROMPT_SUBMIT, METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, METHOD_SESSION_RESUME,
+    SUBMIT_STREAMING,
 };
 use crate::process::{Process, ProcessConfig};
-use crate::rpc::{decode_event, Inbound, IncomingRequest, RpcClient};
+use crate::rpc::{decode_event, Fault, Inbound, IncomingRequest, RpcClient};
 
 const RELAY_CAPACITY: usize = 256;
+const SESSION_NOT_FOUND: i64 = 4007;
 
 #[derive(Serialize)]
 struct SessionCreateParams<'a> {
@@ -33,6 +39,19 @@ struct SessionCreateResult {
     stored_session_id: String,
     #[serde(rename = "message_count", deserialize_with = "zero")]
     _message_count: i64,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct SessionResumeResult {
+    #[serde(deserialize_with = "zero")]
+    session_id: String,
+    info: Option<Box<RawValue>>,
+    auto_continue: Option<Box<RawValue>>,
+    #[serde(deserialize_with = "zero")]
+    running: bool,
+    #[serde(deserialize_with = "zero")]
+    status: String,
 }
 
 #[derive(Serialize)]
@@ -93,7 +112,8 @@ pub struct GatewaySession {
     process: Process,
     inbound: Receiver<Inbound>,
     buffered_observations: VecDeque<Observation>,
-    created: SessionCreateResult,
+    runtime_id: String,
+    stored_id: String,
     last_seq: i64,
     observation_error: Option<Error>,
 }
@@ -105,66 +125,120 @@ impl GatewaySession {
         reasoning: &ReasoningLevel,
         deadline: Option<Instant>,
     ) -> Result<Self, Error> {
-        let process = Process::start(config, deadline).map_err(Error::harness)?;
-        let (stop_relay, stop) = bounded(0);
-        let inbound = relay_inbound(&process.client, stop)?;
         let effort = if *reasoning == ReasoningLevel::OFF {
             "none"
         } else {
             reasoning.as_str()
         };
-        let created: SessionCreateResult = call(
-            &process.client,
-            METHOD_SESSION_CREATE,
-            &SessionCreateParams {
-                model,
-                reasoning_effort: effort,
-            },
-            deadline,
-        )?;
-        if created.session_id.is_empty() || created.stored_session_id.is_empty() {
-            return Err(Error::harness(
-                "hermes adapter: invalid native protocol observation",
-            ));
-        }
-        if !effort.is_empty() {
-            let _: ConfigSetResult = call(
-                &process.client,
-                METHOD_CONFIG_SET,
-                &ConfigSetParams {
-                    session_id: &created.session_id,
-                    key: "reasoning",
-                    value: effort,
+        let (session, ()) = Self::bind(config, deadline, |client| {
+            let created: SessionCreateResult = call(
+                client,
+                METHOD_SESSION_CREATE,
+                &SessionCreateParams {
+                    model,
+                    reasoning_effort: effort,
                 },
                 deadline,
-            )
-            .map_err(|error| {
-                Error::UnsupportedControl(Box::new(UnsupportedControl {
-                    feature: FEATURE_SESSION_REASONING.into(),
-                    reason: CONTROL_UNSATISFIABLE,
-                    field: "reasoning_level".into(),
-                    detail: format!("Hermes refused the reasoning level: {error}"),
-                    ..UnsupportedControl::default()
-                }))
-            })?;
+            )?;
+            if created.session_id.is_empty() || created.stored_session_id.is_empty() {
+                return Err(Error::harness(
+                    "hermes adapter: invalid native protocol observation",
+                ));
+            }
+            if !effort.is_empty() {
+                let _: ConfigSetResult = call(
+                    client,
+                    METHOD_CONFIG_SET,
+                    &ConfigSetParams {
+                        session_id: &created.session_id,
+                        key: "reasoning",
+                        value: effort,
+                    },
+                    deadline,
+                )
+                .map_err(|error| {
+                    Error::UnsupportedControl(Box::new(UnsupportedControl {
+                        feature: FEATURE_SESSION_REASONING.into(),
+                        reason: CONTROL_UNSATISFIABLE,
+                        field: "reasoning_level".into(),
+                        detail: format!("Hermes refused the reasoning level: {error}"),
+                        ..UnsupportedControl::default()
+                    }))
+                })?;
+            }
+            Ok((created.session_id, created.stored_session_id, ()))
+        })?;
+        Ok(session)
+    }
+
+    pub fn reopen(
+        config: &ProcessConfig,
+        stored_id: &str,
+        session_id: SessionId,
+        configured_model: &str,
+        deadline: Option<Instant>,
+    ) -> Result<(Self, SessionState), Error> {
+        if stored_id.trim().is_empty() {
+            return Err(reopen_refusal("the binding names no stored session"));
         }
-        Ok(Self {
+        let (session, info) = Self::bind(config, deadline, |client| {
+            let resumed = resume_stored(client, stored_id, deadline)?;
+            Ok((resumed.session_id, stored_id.to_owned(), resumed.info))
+        })
+        .map_err(|error| {
+            if deadline.is_some_and(|at| Instant::now() >= at) {
+                Error::DeadlineExceeded
+            } else {
+                reopen_refusal(error)
+            }
+        })?;
+        let current_model_id = info
+            .and_then(|info| decode_strict::<SessionInfoPayload>(info.get().as_bytes()).ok())
+            .map(|info| info.model)
+            .filter(|model| !model.is_empty())
+            .unwrap_or_else(|| configured_model.to_owned());
+        let state = SessionState {
+            session_id,
+            status: SessionStatus::IDLE,
+            current_model_id,
+            recovery: Some(RecoveryMetadata {
+                recovered: true,
+                reason: "Hermes restored the bound conversation and reports the model it last ran under; OAP runs and cursors remain process-local".into(),
+                ..RecoveryMetadata::default()
+            }),
+            ..SessionState::default()
+        };
+        Ok((session, state))
+    }
+
+    fn bind<T>(
+        config: &ProcessConfig,
+        deadline: Option<Instant>,
+        load: impl FnOnce(&RpcClient) -> Result<(String, String, T), Error>,
+    ) -> Result<(Self, T), Error> {
+        let process = Process::start(config, deadline).map_err(Error::harness)?;
+        let (stop_relay, stop) = bounded(0);
+        let inbound = relay_inbound(&process.client, stop)?;
+        let (runtime_id, stored_id, result) = load(&process.client)?;
+        let session = Self {
             _stop_relay: stop_relay,
             process,
             inbound,
             buffered_observations: VecDeque::new(),
-            created,
+            runtime_id,
+            stored_id,
             last_seq: 0,
             observation_error: None,
-        })
+        };
+        Ok((session, result))
     }
 
     pub fn runtime_id(&self) -> &str {
-        &self.created.session_id
+        &self.runtime_id
     }
 
     pub fn stored_id(&self) -> &str {
-        &self.created.stored_session_id
+        &self.stored_id
     }
 
     pub fn client(&self) -> &RpcClient {
@@ -309,6 +383,56 @@ impl GatewaySession {
     pub fn close(&self) -> Result<(), Error> {
         self.process.close().map_err(Error::harness)
     }
+}
+
+fn resume_stored(
+    client: &RpcClient,
+    stored_id: &str,
+    deadline: Option<Instant>,
+) -> Result<SessionResumeResult, Error> {
+    let params = serde_json::value::to_raw_value(&SessionParams {
+        session_id: stored_id,
+    })
+    .map_err(Error::harness)?;
+    let result = client
+        .call(METHOD_SESSION_RESUME, Some(params), deadline)
+        .map_err(|error| match &error.fault {
+            Fault::Remote { object, .. } if object.code == SESSION_NOT_FOUND => Error::harness(
+                format!("Hermes has no stored session {}", go_quote(stored_id)),
+            ),
+            _ => Error::harness(error),
+        })?;
+    let resumed: SessionResumeResult =
+        decode_strict(result.get().as_bytes()).map_err(Error::harness)?;
+    if resumed.session_id.is_empty() {
+        return Err(Error::harness("Hermes omitted the reloaded session id"));
+    }
+    if resumed.auto_continue.is_some() {
+        return Err(Error::harness(
+            "Hermes would restart the turn a crash interrupted, which a reopen must not do; \
+             open it in Hermes to settle the turn, or wait for Hermes to retire the marker",
+        ));
+    }
+    if resumed.running || (!resumed.status.is_empty() && resumed.status != "idle") {
+        let status = if resumed.running {
+            "running"
+        } else {
+            &resumed.status
+        };
+        return Err(Error::harness(format!(
+            "Hermes reattached the stored session while it was {status}"
+        )));
+    }
+    Ok(resumed)
+}
+
+fn reopen_refusal(error: impl std::fmt::Display) -> Error {
+    Error::UnsupportedControl(Box::new(UnsupportedControl {
+        feature: FEATURE_OPEN_REOPEN.into(),
+        reason: CONTROL_UNSATISFIABLE,
+        detail: format!("Hermes could not reload its binding: {error}"),
+        ..UnsupportedControl::default()
+    }))
 }
 
 fn observation_timeout() -> Error {
