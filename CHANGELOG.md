@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.41] - 2026-11-21
+
+### Added
+
+- Claude hub entries can use an Anthropic-compatible gateway configured by URL and credential environment variable name. Hub output and Claude stderr redact the credential. ([#1948](https://github.com/lsm/oxap/pull/1948))
+
+### Fixed
+
+- Long DeepSeek reasoning batches no longer overflow hub subscriptions and drop the assistant reply or turn result. ([#1947](https://github.com/lsm/oxap/pull/1947))
+
 ## [0.1.0-alpha.40] - 2026-11-21
 
 ### Merged pull requests
