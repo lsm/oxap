@@ -8,6 +8,8 @@ On Unix, `GatewaySession::create` starts the gateway, creates a native
 session, and keeps its runtime and stored identities. A requested reasoning
 level is passed to creation and checked by a session-scoped `config.set`.
 The session relays observations in order, including those sent during startup.
+On that same session, `submit_prompt` accepts the gateway's streaming
+admission, and `interrupt` returns its native interruption response.
 
 The wire layer holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's

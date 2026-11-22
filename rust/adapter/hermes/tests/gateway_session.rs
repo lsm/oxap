@@ -13,6 +13,10 @@ const CREATED: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"session_id":"running
 const EMPTY_CREATE: &str = r#"{"id":1,"jsonrpc":"2.0","method":"session.create","params":{}}"#;
 const CREATE_WITH_REASONING: &str = r#"{"id":1,"jsonrpc":"2.0","method":"session.create","params":{"model":"example","reasoning_effort":"none"}}"#;
 const SET_REASONING: &str = r#"{"id":2,"jsonrpc":"2.0","method":"config.set","params":{"session_id":"running","key":"reasoning","value":"none"}}"#;
+const SUBMIT: &str = r#"{"id":2,"jsonrpc":"2.0","method":"prompt.submit","params":{"session_id":"running","text":"hello\n\u003cworld\u003e"}}"#;
+const INTERRUPT: &str =
+    r#"{"id":3,"jsonrpc":"2.0","method":"session.interrupt","params":{"session_id":"running"}}"#;
+const STARTED: &str = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"message.start","session_id":"running","seq":2,"payload":{}}}"#;
 
 fn gateway(create: &str, replies: &str, subsequent: &str) -> ProcessConfig {
     ProcessConfig {
@@ -108,4 +112,81 @@ fn create_reports_reasoning_refusal_as_an_unsatisfiable_control() {
     assert_eq!(control.reason, CONTROL_UNSATISFIABLE);
     assert_eq!(control.field, "reasoning_level");
     assert!(control.detail.contains("invalid effort"));
+}
+
+#[test]
+fn submit_and_interrupt_use_the_runtime_id_and_keep_early_observations() {
+    let config = gateway(
+        EMPTY_CREATE,
+        &format!("printf '%s\\n' '{CREATED}'"),
+        &format!(
+            "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{STARTED}' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\",\"turn_isolation\":true}}}}'\n\
+             IFS= read -r line\ntest \"$line\" = '{INTERRUPT}'\n\
+             printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"status\":\"interrupted\"}}}}'"
+        ),
+    );
+    let session = open(&config, "", "").unwrap();
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    session.submit_prompt("hello\n<world>", deadline).unwrap();
+    let observed = session
+        .inbound()
+        .recv_timeout(Duration::from_secs(1))
+        .unwrap();
+    let Inbound::Notification(event) = observed else {
+        panic!("expected message.start, got {observed:?}");
+    };
+    assert!(event
+        .params
+        .unwrap()
+        .get()
+        .contains(r#""type":"message.start""#));
+    let result = session.interrupt(deadline).unwrap();
+    assert_eq!(result.status, "interrupted");
+    session.close().unwrap();
+}
+
+#[test]
+fn submit_refuses_non_streaming_results_and_gateway_errors() {
+    for (reply, expected) in [
+        (
+            r#""result":{"status":"queued"}"#,
+            "returned status \"queued\"",
+        ),
+        (
+            r#""result":{"status":"steered"}"#,
+            "returned status \"steered\"",
+        ),
+        (
+            r#""result":{"status":"redirected"}"#,
+            "returned status \"redirected\"",
+        ),
+        (r#""result":{}"#, "returned status \"\""),
+        (
+            r#""result":{"status":"streaming","turn_isolation":"bad"}"#,
+            "decode prompt.submit response",
+        ),
+        (
+            r#""error":{"code":5004,"message":"voice session active"}"#,
+            "voice session active",
+        ),
+    ] {
+        let config = gateway(
+            EMPTY_CREATE,
+            &format!("printf '%s\\n' '{CREATED}'"),
+            &format!(
+                "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+                 printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,{reply}}}'"
+            ),
+        );
+        let session = open(&config, "", "").unwrap();
+        let error = session
+            .submit_prompt(
+                "hello\n<world>",
+                Some(Instant::now() + Duration::from_secs(5)),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+        session.close().unwrap();
+    }
 }
