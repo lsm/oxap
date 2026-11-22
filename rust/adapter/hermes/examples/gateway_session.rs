@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [python, source, state, mode, model]
             if matches!(
                 mode.as_str(),
-                "--run" | "--reopen" | "--reopen-deadline" | "--shared-reopen"
+                "--run" | "--reopen" | "--reopen-deadline" | "--shared-reopen" | "--shared-submit"
             ) =>
         {
             (python, source, state, mode.as_str(), model.as_str(), None)
@@ -73,6 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if matches!(mode, "--shared-open" | "--shared-reopen") {
         return shared_session(config, (mode == "--shared-reopen").then_some(model));
+    }
+    if mode == "--shared-submit" {
+        return shared_submit(config, state, model);
     }
     let timeout = if mode == "--reopen-deadline" {
         Duration::from_secs(1)
@@ -265,6 +268,77 @@ fn shared_session(
         block_on(session.state()),
         Err(Error::SessionClosed)
     ));
+    println!("gateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_submit(
+    config: oxap_adapter_hermes::process::ProcessConfig,
+    state_dir: &str,
+    model: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::future::poll_fn;
+    use std::path::Path;
+
+    use futures_executor::block_on;
+    use oxap_adapter::{Adapter, Error, OpenRequest, SubmitRequest};
+    use oxap_protocol::{
+        EnvelopeType, Message, MessageContent, MessageRole, MessageSubmitRequest, Participant,
+        RequestedDeliveryMode, SessionStatus,
+    };
+
+    let adapter = oxap_adapter_hermes::Adapter::new(config, model.to_owned());
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        participant: Participant {
+            id: "user".into(),
+            ..Participant::default()
+        },
+        ..OpenRequest::default()
+    }))?;
+    let request = SubmitRequest {
+        envelope_id: "caller-submit".into(),
+        request: MessageSubmitRequest {
+            session_id: "session".into(),
+            messages: vec![Message {
+                role: MessageRole::USER,
+                content: MessageContent::from_text("hello"),
+                ..Message::default()
+            }],
+            delivery: RequestedDeliveryMode::AUTO,
+            ..MessageSubmitRequest::default()
+        },
+    };
+    let (admission, mut stream) = block_on(session.submit(request.clone()))?;
+    let run_id = admission.run_id.clone().ok_or("missing admitted run")?;
+    println!("admission: {}", serde_json::to_string(&admission)?);
+    let state = block_on(session.state())?;
+    assert_eq!(state.status, SessionStatus::RUNNING);
+    assert_eq!(state.active_run_id, Some(run_id));
+    assert_eq!(state.active_runs.len(), 1);
+    assert_eq!(
+        state.active_runs[0].admitted_submit_requests[0].as_str(),
+        "caller-submit"
+    );
+    assert!(matches!(
+        block_on(session.submit(request)),
+        Err(Error::RunActive)
+    ));
+    let mut first = true;
+    while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
+        let event = event?;
+        if first {
+            assert_eq!(event.envelope_type, EnvelopeType::RUN_STARTED);
+            std::fs::write(Path::new(state_dir).join("release-run"), "")?;
+            first = false;
+        }
+        println!("envelope: {}", serde_json::to_string(&event)?);
+    }
+    let state = block_on(session.state())?;
+    assert_eq!(state.status, SessionStatus::IDLE);
+    assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
+    block_on(session.close())?;
     println!("gateway exited cleanly");
     Ok(())
 }

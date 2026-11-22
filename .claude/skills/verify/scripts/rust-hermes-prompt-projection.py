@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def frames(path):
@@ -85,9 +86,11 @@ def gateway(corpus, case):
         Path("resume-received").touch()
         assert sys.stdin.read() == ""
         return
+    shared_submit = case == "shared-submit"
     if case != "malformed-frame" and case not in REOPEN_CASES:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
-        assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {}}
+        assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create",
+                          "params": {"model": "hermes-test"} if shared_submit else {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
@@ -96,7 +99,9 @@ def gateway(corpus, case):
     elif case in GATE_CHECKS:
         replay = gate_frames(corpus, case)
     else:
-        replay = frames(corpus / case / "native.jsonl")
+        fixture = "streaming-provenance" if shared_submit else case
+        replay = frames(corpus / fixture / "native.jsonl")
+    wait_for_release = shared_submit
     for frame in replay:
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
@@ -111,10 +116,14 @@ def gateway(corpus, case):
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
             send(frame["raw"])
+        elif frame["action"] == "wait-submit" and wait_for_release:
+            wait_for_release = False
+            while not Path("release-run").exists():
+                time.sleep(0.01)
         elif frame["action"] == "process-exit":
             return
     assert sys.stdin.read() == ""
-    if case in REOPEN_CASES:
+    if case in REOPEN_CASES or shared_submit:
         Path("replay-complete").touch()
 
 
@@ -178,6 +187,8 @@ GATE_CHECKS = {
 
 def verify(binary, corpus, mode, case):
     fixture = "interaction-gates" if case == "answered-gates" else case
+    if case == "shared-submit":
+        fixture = "streaming-provenance"
     if case in REOPEN_TIMEOUT_CASES:
         fixture = "session-reopen"
     expected_path = corpus / fixture / "expected-oap.json"
@@ -195,7 +206,7 @@ def verify(binary, corpus, mode, case):
             f"from pathlib import Path\n"
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
-        model = ["hermes-test"] if case == "malformed-frame" else []
+        model = ["hermes-test"] if case in {"malformed-frame", "shared-submit"} else []
         if case == "answered-gates":
             answers_file = root / "answers.json"
             expected = json.loads(expected_path.read_text())
@@ -260,6 +271,35 @@ def verify(binary, corpus, mode, case):
         assert "stored session ID: stored" in lines
         assert shutdowns == 1 and replay_complete
         print("MATCHED SHARED CREATED STATE: 1\nGATEWAY EOF: 1")
+        return
+    if mode == "--shared-submit":
+        (admission,) = [json.loads(line[11:]) for line in lines if line.startswith("admission: ")]
+        assert admission == {
+            "session_id": "session", "accepted": True, "submission_id": admission["message_ids"][0],
+            "requested_delivery": "auto", "effective_delivery": "start",
+            "delivery_resolution": "session_idle", "admission": "started",
+            "run_id": admission["run_id"], "status": "running", "model_id": "hermes-test",
+            "message_ids": admission["message_ids"],
+        }
+        assert len(admission["message_ids"]) == 1 and all(admission["message_ids"])
+        events = [json.loads(line[10:]) for line in lines if line.startswith("envelope: ")]
+        expected = json.loads(expected_path.read_text())
+        assert len(events) == len(expected)
+        assert len({event["id"] for event in events}) == len(events)
+        for event, fixture in zip(events, expected):
+            assert event["run_id"] == event["payload"]["run_id"] == admission["run_id"]
+            assert event["type"] == fixture["type"]
+            assert event["sequence"] == fixture["sequence"]
+            assert event["session_id"] == event["payload"]["session_id"] == "session"
+            for key in ("part", "usage", "stop_reason"):
+                assert event["payload"].get(key) == fixture["payload"].get(key)
+            if event["type"] == "content.delta":
+                assert event["payload"]["message_id"] == admission["message_ids"][0]
+        response = events[-1]["payload"]["final_response"]
+        assert response["content"] == expected[-1]["payload"]["final_response"]["content"]
+        assert response["id"] == admission["message_ids"][0]
+        assert shutdowns == 1 and replay_complete
+        print(f"SHARED ADMISSIONS: 1\nSEQUENCED ENVELOPES: {len(events)}\nGATEWAY EOF: 1")
         return
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
