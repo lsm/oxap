@@ -463,6 +463,9 @@ jobs:
       - name: Verify Claude custom endpoint routing and key redaction
         run: python3 .claude/skills/verify/scripts/claude-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
 
+      - name: Verify Codex and DeepSeek custom endpoints
+        run: python3 .claude/skills/verify/scripts/codex-deepseek-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
+
       - name: Require the oapx alias to match oxap on stdout and exit code
         run: |
           set -euo pipefail
