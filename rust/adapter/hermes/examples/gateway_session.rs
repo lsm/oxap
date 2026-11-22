@@ -3,7 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
     use std::time::{Duration, Instant};
 
-    use oxap_adapter::{gojson::go_marshal, runtime::Runtime};
+    use oxap_adapter::{gojson::go_marshal, runtime::Runtime, Error};
     use oxap_adapter_hermes::{
         native::EVENT_MESSAGE_COMPLETE, process::ProcessConfig, GatewaySession, Observation,
         PromptObservation, RunObservation,
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>]"
                     .into(),
             );
         }
@@ -66,12 +66,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]),
         ..ProcessConfig::default()
     };
-    let mut session = GatewaySession::create(
-        &config,
-        if mode == "--reopen" { "" } else { model },
-        &ReasoningLevel::default(),
-        Some(Instant::now() + Duration::from_secs(30)),
-    )?;
+    let deadline = Some(Instant::now() + Duration::from_secs(30));
+    if mode == "--reopen" {
+        match GatewaySession::reopen(&config, model, "session".into(), "", deadline) {
+            Ok((session, state)) => {
+                println!("runtime session ID: {}", session.runtime_id());
+                println!("stored session ID: {}", session.stored_id());
+                println!("state: {}", go_marshal(&serde_json::to_string(&state)?));
+                session.close()?;
+                println!("gateway exited cleanly");
+            }
+            Err(Error::UnsupportedControl(refusal)) => {
+                println!(
+                    "refusal: {}",
+                    serde_json::json!({
+                        "feature": refusal.feature, "reason": refusal.reason,
+                    })
+                );
+            }
+            Err(error) => return Err(error.into()),
+        }
+        return Ok(());
+    }
+    let mut session = GatewaySession::create(&config, model, &ReasoningLevel::default(), deadline)?;
     println!("runtime session ID: {}", session.runtime_id());
     println!("stored session ID: {}", session.stored_id());
     let mut start_error = None;
@@ -145,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(event) => println!("prompt started at native sequence {}", event.seq),
             Err(error) => start_error = Some(error),
         }
-    } else if !mode.is_empty() && mode != "--reopen" {
+    } else if !mode.is_empty() {
         let deadline = Some(Instant::now() + Duration::from_secs(30));
         session.submit_prompt("Hello from the Rust Hermes adapter.", deadline)?;
         println!("prompt status: streaming");
