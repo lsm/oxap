@@ -14,4 +14,6 @@ authentication schemes. Both hubs must report a completed turn and a failed
 turn. The fixture echoes a generated sentinel in normal output, its error, and
 split writes to stderr. Each observed surface must replace it with the
 name of its source variable. Invalid entries must exit nonzero and name the
-entry and the rejected setting. The probe prints only counts and exit codes.
+entry and the rejected setting. The probe uses a 16-byte sentinel for the
+successful routes and checks a 15-byte value is refused without echoing it.
+Zig CI runs the same probe in the hub parity job.

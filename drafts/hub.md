@@ -164,8 +164,9 @@ or either translated variable already set in `environment`. The dsh
 A Claude hub entry can use `model_endpoint` to route directly to an
 Anthropic Messages endpoint. Set `base_url` to an absolute HTTPS URL or
 a loopback HTTP URL without userinfo, a query, or a fragment. The hub
-passes it through verbatim. Set `credential_env` to the name of a
-nonempty variable in the hub environment. The optional `auth` selects
+passes it through verbatim. Set `credential_env` to the name of a hub
+environment variable whose value is at least 16 bytes. Short credentials
+can collide with protocol field names during redaction. The optional `auth` selects
 `api-key` by default or `bearer`. An explicit `wire` must be
 `anthropic-messages`. Startup refuses an entry that combines this setting
 with `model_provider` or lists the source variable or any of Claude's

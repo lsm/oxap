@@ -266,6 +266,9 @@ fn readModelEndpoint(
     const key: []const u8 = environ.get(variable) orelse "";
     if (key.len == 0)
         return reader.refuse("{s}: model_endpoint credential variable {s} is unset or empty", .{ where, variable });
+    const minimum_key_bytes = 16;
+    if (key.len < minimum_key_bytes)
+        return reader.refuse("{s}: model_endpoint credential variable {s} must contain at least {d} bytes for redaction", .{ where, variable, minimum_key_bytes });
     return .{ .base_url = base_url, .credential_env = variable, .bearer = bearer };
 }
 
