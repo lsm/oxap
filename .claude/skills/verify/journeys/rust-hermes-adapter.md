@@ -7,6 +7,7 @@ repository root.
 (cd rust && cargo test -p oxap-adapter-hermes --test rpc)
 (cd rust && cargo test -p oxap-adapter-hermes --test notifications)
 (cd rust && cargo test -p oxap-adapter-hermes --test process)
+(cd rust && cargo test -p oxap-adapter-hermes --test gateway_session)
 (cd rust && cargo test -p oxap-adapter-hermes --all-features)
 ```
 
@@ -36,3 +37,25 @@ interrupt, the kill, the stdin release, the cached close, the exit status,
 the barrier, request or event-type refusal, the deadline or cancel arm, the
 stderr in the refusal, abort's stderr grace, the notification check or
 strict response ids: one test must fail for each.
+
+`tests/gateway_session.rs` drives a gateway through session creation. It
+checks the create and reasoning writes byte for byte, observes a notification
+sent before the create response, and checks missing identities and a reasoning
+refusal. Run it on the test host or in CI.
+
+For the native session smoke, use the selected catalog release's source and a
+Python interpreter with its dependencies already installed. The example runs
+the adapter against the actual stdio gateway with an isolated home and no
+provider keys. It prints two identities followed by a clean exit.
+
+```sh
+cargo build --locked --manifest-path rust/Cargo.toml -p oxap-adapter-hermes --example gateway_session
+(
+  state=$(mktemp -d)
+  trap 'rm -rf -- "$state"' EXIT
+  rust/target/debug/examples/gateway_session "$OAP_HERMES_BIN" "$OAP_HERMES_ROOT" "$state"
+  status=$?
+  printf 'EXIT: %s\n' "$status"
+  exit "$status"
+)
+```
