@@ -37,8 +37,7 @@ CASES = {
     "claude": Case(tool="Read", stop="completed", result=TOOL_RESULT["text"]),
     "codex": Case(tool="codex.command", arguments={"command": "printf fixture", "cwd": "/"},
                   result={"command": "printf fixture", "cwd": "/", "exitCode": 0,
-                          "output": TOOL_RESULT["text"]}, registries=("zig", "go", "rust"),
-                  reasoning_gap="item/reasoning/summaryTextDelta"),
+                          "output": TOOL_RESULT["text"]}, registries=("zig", "go", "rust")),
     "copilot": Case(registries=("go", "rust"), reasoning_gap="assistant.reasoning_delta"),
     "deepseek": Case(stop="completed", result=[{"type": "text", **TOOL_RESULT}],
                      registries=("zig", "go", "rust")),
@@ -297,9 +296,8 @@ def check(kind, case, events, strict):
             deltas.append(event["sequence"])
             part = payload["part"]
             part_kind = part["type"]
-            text = part.get("text", part.get("reasoning", part.get("thinking")))
+            text = part[part_kind]
             assert text, part
-            part_kind = "reasoning" if part_kind == "thinking" else part_kind
             if streamed and streamed[-1][0] == part_kind:
                 streamed[-1] = (part_kind, streamed[-1][1] + text)
             else:

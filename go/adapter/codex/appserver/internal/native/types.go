@@ -12,6 +12,7 @@ const (
 	MethodItemStarted     = "item/started"
 	MethodItemCompleted   = "item/completed"
 	MethodAgentDelta      = "item/agentMessage/delta"
+	MethodReasoningDelta  = "item/reasoning/summaryTextDelta"
 	MethodCommandApproval = "item/commandExecution/requestApproval"
 	MethodFileApproval    = "item/fileChange/requestApproval"
 	MethodUserInput       = "item/tool/requestUserInput"
