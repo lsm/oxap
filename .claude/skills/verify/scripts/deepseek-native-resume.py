@@ -82,7 +82,7 @@ def fake_runtime(store):
 def envelope(kind, payload):
     return {"protocol": "open-agent-protocol", "version": "0.1",
             "profile": "open-agent-protocol.agent-control-core", "type": kind,
-            "id": str(uuid.uuid4()), "payload": payload}
+            "id": str(uuid.uuid4()), "session_id": payload["session_id"], "payload": payload}
 
 
 class Hub:

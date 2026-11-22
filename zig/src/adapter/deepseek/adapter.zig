@@ -13,6 +13,8 @@ pub const endpoint_id = session.endpoint_id;
 pub const capability_revision = harness_pins.deepseek_harness_capability_revision;
 pub const server_name = "deepseek-harness-sdk-runtime";
 pub const server_version = harness_pins.deepseek_harness_admits[0];
+const reopen_support_reason = "session/resume reloads the bound stored session after initialize, under the initialized model route";
+const reopen_recovery_reason = "the harness restored the bound conversation; OAP runs and cursors remain process-local";
 
 const features = [_]contract.Feature{
     .{ .key = "action.permissions", .level = .unavailable, .reason = "selected SDK wire has no interaction channel" },
@@ -33,7 +35,7 @@ const features = [_]contract.Feature{
     .{ .key = "session.message.submit", .level = .degraded, .reason = "receipt plus entered direct-user message proves start" },
     .{ .key = contract.feature_model_switch, .level = .emulated, .reason = "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused" },
     .{ .key = "session.open", .level = .emulated, .reason = "one process and native session per OAP session" },
-    .{ .key = contract.feature_open_reopen, .level = .unavailable, .reason = "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness" },
+    .{ .key = contract.feature_open_reopen, .level = .native, .reason = reopen_support_reason },
     .{ .key = contract.feature_session_reasoning, .level = .native, .reason = "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max", .modes = &.{contract.mode_session_open} },
     .{ .key = "session.state", .level = .degraded, .reason = "reducer-owned live projection; no native query" },
 };
@@ -85,7 +87,15 @@ pub const Config = struct {
     admission_timeout_ns: u64 = 10 * 60 * std.time.ns_per_s,
     shutdown_timeout_ns: u64 = 5 * std.time.ns_per_s,
     poll_ns: u64 = 5 * std.time.ns_per_ms,
+    native_ids: *const fn (std.mem.Allocator, []const u8) std.mem.Allocator.Error![]u8 = freshNativeId,
 };
+
+pub fn freshNativeId(allocator: std.mem.Allocator, session_id: []const u8) std.mem.Allocator.Error![]u8 {
+    _ = session_id;
+    var random: [16]u8 = undefined;
+    compat.random.fillSecureBytes(&random);
+    return allocator.dupe(u8, &std.fmt.bytesToHex(random, .lower));
+}
 
 fn wallClock() i64 {
     return compat.time.nowMillis();
@@ -137,6 +147,8 @@ pub const Session = struct {
     reported_level: ?[]const u8 = null,
     reported_policy: ?[]const u8 = null,
     id: []u8,
+    native_id: []u8,
+    recovered: bool = false,
     reducer_arena: *std.heap.ArenaAllocator,
     transport: *process.Transport,
     reducer: session.Reducer,
@@ -149,7 +161,7 @@ pub const Session = struct {
     ran: bool = false,
 
     fn open(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!*Session {
-        if (request.reopen) return refusal.unsupported(contract.feature_open_reopen, contract.reason_unadvertised);
+        if (request.reopen and std.mem.trim(u8, request.native_session_id, " \t\r\n").len == 0) return refusal.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
         const config = owner.config;
         if (config.provider.len == 0 or config.model.len == 0 or !std.fs.path.isAbsolute(config.working_directory)) {
             return refusal.fail(error.BackendFailed, "the deepseek harness needs an absolute working directory, a provider and a model");
@@ -184,7 +196,19 @@ pub const Session = struct {
             rejected.* = self.rejected;
             return err;
         };
+        if (request.reopen) try self.resumeNative(arena, refusal);
         return self;
+    }
+
+    fn resumeNative(self: *Session, arena: std.mem.Allocator, refusal: *contract.Refusal) contract.Failure!void {
+        var params: std.json.ObjectMap = .empty;
+        try params.put(self.owned(), "sessionId", .{ .string = self.native_id });
+        if (!try self.send("session/resume", .{ .object = params })) return refusal.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
+        _ = self.awaitReply(arena, "session/resume", refusal) catch |err| {
+            if (err == error.OutOfMemory) return error.OutOfMemory;
+            return refusal.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
+        };
+        self.recovered = true;
     }
 
     fn construct(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, args: []const []const u8, refusal: *contract.Refusal) contract.Failure!*Session {
@@ -194,6 +218,8 @@ pub const Session = struct {
         errdefer gpa.destroy(self);
         const id = if (request.session_id.len > 0) try gpa.dupe(u8, request.session_id) else try mint(owner, gpa);
         errdefer gpa.free(id);
+        const native_id = if (request.reopen) try gpa.dupe(u8, request.native_session_id) else try config.native_ids(gpa, id);
+        errdefer gpa.free(native_id);
         const reducer_arena = try gpa.create(std.heap.ArenaAllocator);
         errdefer gpa.destroy(reducer_arena);
         reducer_arena.* = std.heap.ArenaAllocator.init(gpa);
@@ -213,6 +239,7 @@ pub const Session = struct {
         };
         var reducer = session.Reducer.init(reducer_arena.allocator());
         reducer.session_id = id;
+        reducer.native_id = native_id;
         reducer.revision = capability_revision;
         reducer.counters.shared = &owner.ids;
         reducer.counters.now_ms = wallClock;
@@ -221,6 +248,7 @@ pub const Session = struct {
             .owner = owner,
             .gpa = gpa,
             .id = id,
+            .native_id = native_id,
             .reducer_arena = reducer_arena,
             .transport = transport,
             .reducer = reducer,
@@ -239,7 +267,7 @@ pub const Session = struct {
 
     const vtable = contract.Session.VTable{
         .id = idOf,
-        .native_id = idOf,
+        .native_id = nativeIdOf,
         .state = state,
         .submit = submit,
         .resolve = resolve,
@@ -267,6 +295,7 @@ pub const Session = struct {
         self.reducer_arena.deinit();
         gpa.destroy(self.reducer_arena);
         gpa.free(self.id);
+        gpa.free(self.native_id);
         gpa.destroy(self);
     }
 
@@ -426,6 +455,10 @@ pub const Session = struct {
         return cast(ptr).id;
     }
 
+    fn nativeIdOf(ptr: *anyopaque) []const u8 {
+        return cast(ptr).native_id;
+    }
+
     fn live(self: *Session) bool {
         return self.reducer.reserved and self.reducer.started and !self.reducer.terminal;
     }
@@ -449,6 +482,8 @@ pub const Session = struct {
             .updated_at_ms = wallClock(),
             .reasoning_level = reasoning_level,
             .compaction_policy_json = compaction_policy_json,
+            .recovered = self.recovered,
+            .recovery_reason = if (self.recovered) reopen_recovery_reason else null,
         };
     }
 
@@ -479,7 +514,7 @@ pub const Session = struct {
         };
         self.ran = true;
         var params: std.json.ObjectMap = .empty;
-        try params.put(self.owned(), "sessionId", .{ .string = self.id });
+        try params.put(self.owned(), "sessionId", .{ .string = self.native_id });
         try params.put(self.owned(), "contentBlocks", .{ .array = blocks });
         if (!try self.send("session/prompt", .{ .object = params })) {
             session.abortSubmission(&self.reducer);
@@ -528,7 +563,7 @@ pub const Session = struct {
                 return error.UnsupportedFeature;
             }
             var rejected = false;
-            const restarted = start(self.owner, arena, .{ .session_id = self.id, .participant = "", .compaction_policy_json = self.reported_policy }, request.model_id, self.effort, &rejected, refusal) catch |err| {
+            const restarted = start(self.owner, arena, .{ .session_id = self.id, .participant = "", .compaction_policy_json = self.reported_policy, .reopen = self.recovered, .native_session_id = self.native_id }, request.model_id, self.effort, &rejected, refusal) catch |err| {
                 if (rejected) return refusal.missingModel(request.model_id);
                 return err;
             };
@@ -704,9 +739,14 @@ pub const FakeHarness = struct {
             .admission_timeout_ns = 10 * std.time.ns_per_s,
             .shutdown_timeout_ns = 2 * std.time.ns_per_s,
             .poll_ns = 2 * std.time.ns_per_ms,
+            .native_ids = sameNativeId,
         };
     }
 };
+
+fn sameNativeId(allocator: std.mem.Allocator, session_id: []const u8) std.mem.Allocator.Error![]u8 {
+    return allocator.dupe(u8, session_id);
+}
 
 pub const fake_prelude =
     \\#!/bin/sh
@@ -798,6 +838,7 @@ test "the descriptor serves resume and replay from the endpoint journal under th
     try testing.expectEqualStrings(session.capability_revision, capability_revision);
     try testing.expectEqual(oap_types.SupportLevel.degraded, descriptor.level("run.replay"));
     try testing.expectEqual(oap_types.SupportLevel.degraded, descriptor.level("run.resume"));
+    try testing.expectEqual(oap_types.SupportLevel.native, descriptor.level(contract.feature_open_reopen));
     for (features[1..], features[0 .. features.len - 1]) |later, earlier| try testing.expect(std.mem.lessThan(u8, earlier.key, later.key));
 }
 
@@ -833,15 +874,77 @@ test "a level or compaction form the DeepSeek route lacks is refused before the 
     try testing.expectError(error.FileNotFound, probe.fake.written(probe.arena.allocator()));
 }
 
-test "a reopen is declined before the runtime starts, since the SDK wire cannot load a stored session" {
+test "a reopen resumes the bound native session after initialize and reports it recovered" {
     var probe: Probe = undefined;
-    try probe.init(fake_prelude ++ fake_idle);
+    try probe.init(fake_prelude ++
+        \\take; printf '{"id":2,"jsonrpc":"2.0","result":{}}\n'
+        \\
+    ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    const opened = try probe.adapter.adapter().open(probe.arena.allocator(), .{ .session_id = "s1", .participant = "user", .reopen = true, .native_session_id = "stored" }, &refusal);
+    probe.handle = opened;
+    try testing.expectEqualStrings("s1", opened.id());
+    try testing.expectEqualStrings("stored", opened.nativeId());
+    const reported = try opened.state(probe.arena.allocator(), &refusal);
+    try testing.expect(reported.recovered);
+    try testing.expectEqualStrings(reopen_recovery_reason, reported.recovery_reason.?);
+    const written = try probe.fake.written(probe.arena.allocator());
+    try testing.expect(std.mem.startsWith(u8, written, "{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"initialize\""));
+    const second = written[std.mem.indexOfScalar(u8, written, '\n').? + 1 ..];
+    try testing.expect(std.mem.startsWith(u8, second, "{\"id\":2,\"jsonrpc\":\"2.0\",\"method\":\"session/resume\",\"params\":{\"sessionId\":\"stored\"}}\n"));
+}
+
+test "a reopen the harness cannot resume is refused as unsatisfiable" {
+    var probe: Probe = undefined;
+    try probe.init(fake_prelude ++
+        \\take; printf '{"id":2,"jsonrpc":"2.0","error":{"code":-32000,"message":"no stored session"}}\n'
+        \\
+    ++ fake_idle);
     defer probe.deinit();
     var refusal = contract.Refusal{};
     try testing.expectError(error.UnsupportedFeature, probe.adapter.adapter().open(probe.arena.allocator(), .{ .session_id = "s1", .participant = "user", .reopen = true, .native_session_id = "stored" }, &refusal));
     try testing.expectEqualStrings(contract.feature_open_reopen, refusal.feature);
-    try testing.expectEqualStrings(contract.reason_unadvertised, refusal.reason);
+    try testing.expectEqualStrings(contract.reason_unsatisfiable, refusal.reason);
+}
+
+test "a reopen naming no native session is refused before the runtime starts" {
+    var probe: Probe = undefined;
+    try probe.init(fake_prelude ++ fake_idle);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    try testing.expectError(error.UnsupportedFeature, probe.adapter.adapter().open(probe.arena.allocator(), .{ .session_id = "s1", .participant = "user", .reopen = true, .native_session_id = " " }, &refusal));
+    try testing.expectEqualStrings(contract.feature_open_reopen, refusal.feature);
+    try testing.expectEqualStrings(contract.reason_unsatisfiable, refusal.reason);
     try testing.expectError(error.FileNotFound, probe.fake.written(probe.arena.allocator()));
+}
+
+test "a fresh open runs under a native id of its own, which the prompt and the link carry" {
+    var fake = try FakeHarness.init(testing.allocator, fake_prelude ++
+        \\take; printf '{"id":2,"jsonrpc":"2.0","error":{"code":-32000,"message":"refused"}}\n'
+        \\
+    ++ fake_idle);
+    defer fake.deinit(testing.allocator);
+    var config = fake.config();
+    config.native_ids = freshNativeId;
+    var adapter = Adapter.init(testing.allocator, config);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var refusal = contract.Refusal{};
+    const opened = try adapter.adapter().open(arena.allocator(), .{ .session_id = "s1", .participant = "user" }, &refusal);
+    defer opened.teardown();
+    const native_id = try arena.allocator().dupe(u8, opened.nativeId());
+    try testing.expectEqualStrings("s1", opened.id());
+    try testing.expectEqual(@as(usize, 32), native_id.len);
+    try testing.expect(!std.mem.eql(u8, native_id, try freshNativeId(arena.allocator(), "s1")));
+    const link = try adapter.adapter().nativeLink(arena.allocator(), native_id);
+    try testing.expectEqualStrings(try std.fmt.allocPrint(arena.allocator(), "deepseek://sessions/{s}", .{native_id}), link);
+    const messages = try arena.allocator().dupe(oap_types.Message, &.{.{ .role = .user, .content = .{ .text = "hello" } }});
+    const request = oap_types.MessageSubmitRequest{ .session_id = "s1", .messages = messages, .delivery = .auto };
+    try testing.expectError(error.BackendFailed, opened.submit(arena.allocator(), &request, "", &refusal));
+    const written = try fake.written(arena.allocator());
+    const prompted = try std.fmt.allocPrint(arena.allocator(), "\"method\":\"session/prompt\",\"params\":{{\"sessionId\":\"{s}\"", .{native_id});
+    try testing.expect(std.mem.indexOf(u8, written, prompted) != null);
 }
 
 test "an open writes the pinned initialize, and a prompt is admitted once the harness enters it and settles on turn end" {

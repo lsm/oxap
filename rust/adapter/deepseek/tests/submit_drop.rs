@@ -111,6 +111,7 @@ fn dropping_submit_while_admission_is_pending_leaves_no_waiter_and_the_run_still
         provider: "deepseek".into(),
         model: "m".into(),
         runtime: Runtime::new(|| 42, |kind| format!("{kind}-minted")),
+        native_session_id: Some(|id: &str| id.to_owned()),
         ..Config::default()
     })
     .unwrap()

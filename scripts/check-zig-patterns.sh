@@ -264,6 +264,7 @@ expected_secure_entropy_sites="$(cat <<'SECURE'
 zig/src/adapter/claude/adapter.zig|            compat.random.fillSecureBytes(&bytes);
 zig/src/adapter/claude/adapter.zig|        compat.random.fillSecureBytes(&entropy);
 zig/src/adapter/claude/adapter.zig|    compat.random.fillSecureBytes(&bytes);
+zig/src/adapter/deepseek/adapter.zig|    compat.random.fillSecureBytes(&random);
 zig/src/adapter/deepseek/adapter.zig|            compat.random.fillSecureBytes(&entropy);
 zig/src/adapter/codex/bridge.zig|    compat.random.fillSecureBytes(&key_bytes);
 zig/src/adapter/codex/bridge.zig|    compat.random.fillSecureBytes(&mask);

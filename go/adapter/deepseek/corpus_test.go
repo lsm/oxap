@@ -275,7 +275,7 @@ func runDSHFakeCase(t *testing.T, definition dshCorpusCase, frames []dshFrame, d
 	t.Helper()
 	execution := dshExecution{}
 	client := newCorpusClient()
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return client, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return client, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +461,7 @@ func runDSHProcessCase(t *testing.T, dir string, definition dshCorpusCase, frame
 	if receipts := dshResponseReceipts(decoded); len(receipts) > 0 {
 		environment = append(environment, "OAP_DSH_FIXTURE_RECEIPT="+receipts[0])
 	}
-	implementation, err := New(Config{Executable: self, Args: []string{"--dsh-fixture-server"}, Environment: environment, WorkingDirectory: workspace, Provider: "fixture-provider", Model: "fixture-model", Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Executable: self, Args: []string{"--dsh-fixture-server"}, Environment: environment, WorkingDirectory: workspace, Provider: "fixture-provider", Model: "fixture-model", Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}

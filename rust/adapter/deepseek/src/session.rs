@@ -18,7 +18,7 @@ use oxap_protocol::{
 };
 use serde_json::value::RawValue;
 
-use crate::adapter::{unsatisfiable, Launch, ENDPOINT_ID};
+use crate::adapter::{resume, unsatisfiable, Launch, ENDPOINT_ID};
 use crate::admission::{Admission, Candidate};
 use crate::content::{final_content, stream_parts};
 use crate::native::{
@@ -41,6 +41,7 @@ struct Shared {
     inner: Mutex<Inner>,
     journal: Journal,
     native_id: String,
+    recovered: bool,
     runtime: Runtime,
     launch: Launch,
     start_timeout: Duration,
@@ -117,6 +118,7 @@ fn hold<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Session {
     pub(crate) fn new(
         process: Process,
+        native_id: String,
         state: SessionState,
         journal_capacity: usize,
         runtime: Runtime,
@@ -125,7 +127,11 @@ impl Session {
     ) -> Self {
         let client = process.client.clone();
         let shared = Arc::new(Shared {
-            native_id: state.session_id.as_str().into(),
+            native_id,
+            recovered: state
+                .recovery
+                .as_ref()
+                .is_some_and(|recovery| recovery.recovered),
             inner: Mutex::new(Inner {
                 process: Some(process),
                 state,
@@ -420,6 +426,9 @@ impl Shared {
         let process = self
             .launch
             .start(self.start_timeout, Some(&request.model_id), cancel)?;
+        if self.recovered {
+            resume(&process, &self.native_id, self.start_timeout)?;
+        }
         let client = process.client.clone();
         let (old, state) = {
             let mut inner = self.lock();

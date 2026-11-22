@@ -332,7 +332,7 @@ Levels are the adapter's own feature table. "Model switch" is
 | OpenCode server | `zig/src/adapter/opencode/adapter.zig:146` | reopen native (`:38`); native list and read | native (`:21`) | native (`:20`) | none; models list degraded (`:24`) | model switch | P1 |
 | ACP (Devin) | `zig/src/adapter/acp/adapter.zig:160` | reopen native (`:103`); native list and read | degraded, observed only (`:116`) | native (`:119`) | in review (#1163); models list degraded (`:105`) | model switch (#1163); permissions answered at cancel (#1168) | P1 |
 | Pi | `zig/src/adapter/pi/adapter.zig:131` | reopen native (`:69`); native list and read | degraded (`:52`) | unavailable (`:51`) | none | permissions, model switch, models list | P2 |
-| DeepSeek's own harness | `zig/src/adapter/deepseek/adapter.zig:106` | no reopen (`:35`) | degraded (`:19`) | unavailable (`:18`) | none | reopen, cancel (`:23`), permissions, model switch | P3 (oapx's loop is the default for DeepSeek) |
+| DeepSeek's own harness | `zig/src/adapter/deepseek/adapter.zig:106` | native reopen through `session/resume` | degraded (`:19`) | unavailable (`:18`) | none | cancel (`:23`), permissions, model switch | P3 (oapx's loop is the default for DeepSeek) |
 | Claude Code / Agent SDK | `zig/src/adapter/claude/adapter.zig:162` | reopen native (`:27`); native list and read | degraded (`:43`) | native (`:46`) | none | model switch | P3 (HyperNeo keeps Claude on the Agent SDK, outside OAP) |
 
 ## HyperNeo's plan against this inventory

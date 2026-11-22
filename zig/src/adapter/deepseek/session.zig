@@ -66,6 +66,7 @@ pub const Reducer = struct {
     arena: std.mem.Allocator,
     counters: Counters = .{},
     session_id: []const u8 = "session",
+    native_id: []const u8 = "",
     model: []const u8 = "deepseek-chat",
     endpoint: []const u8 = endpoint_id,
     revision: []const u8 = capability_revision,
@@ -112,6 +113,10 @@ pub const Reducer = struct {
 
     fn str(value: []const u8) std.json.Value {
         return .{ .string = value };
+    }
+
+    fn nativeId(self: *const Reducer) []const u8 {
+        return if (self.native_id.len > 0) self.native_id else self.session_id;
     }
 
     fn emit(self: *Reducer, kind: []const u8, payload: std.json.Value, terminal: bool) !void {
@@ -1112,12 +1117,12 @@ pub fn observeNotification(reducer: *Reducer, method: []const u8, maybe_params: 
     }
     if (!reducer.reserved or reducer.terminal) {
         const own_status = std.mem.eql(u8, method, "session.status") and
-            std.mem.eql(u8, textOf(params, "sessionId"), reducer.session_id);
+            std.mem.eql(u8, textOf(params, "sessionId"), reducer.nativeId());
         if (!own_status) try externalActivity(reducer, "notification without reserved run");
         return;
     }
     if (std.mem.eql(u8, method, "session.event")) {
-        if (!std.mem.eql(u8, textOf(params, "sessionId"), reducer.session_id)) {
+        if (!std.mem.eql(u8, textOf(params, "sessionId"), reducer.nativeId())) {
             try failRun(reducer, "deepseek_session_mismatch", "session.event for foreign session");
             return;
         }
@@ -1136,7 +1141,7 @@ pub fn observeNotification(reducer: *Reducer, method: []const u8, maybe_params: 
     if (!reducer.started) try reducer.buffered.append(reducer.arena, .{ .method = method, .params = params, .after_seq = reducer.last_seq });
 
     if (std.mem.eql(u8, method, "session.status")) {
-        if (!std.mem.eql(u8, textOf(params, "sessionId"), reducer.session_id)) {
+        if (!std.mem.eql(u8, textOf(params, "sessionId"), reducer.nativeId())) {
             try failRun(reducer, "deepseek_session_mismatch", "session.status for foreign session");
             return;
         }
@@ -1145,7 +1150,7 @@ pub fn observeNotification(reducer: *Reducer, method: []const u8, maybe_params: 
     }
     if (std.mem.eql(u8, method, "subagent.started")) {
         const child_id = textOf(params, "childSessionId");
-        if (!std.mem.eql(u8, textOf(params, "parentSessionId"), reducer.session_id) or std.mem.eql(u8, child_id, reducer.session_id)) {
+        if (!std.mem.eql(u8, textOf(params, "parentSessionId"), reducer.nativeId()) or std.mem.eql(u8, child_id, reducer.nativeId())) {
             try failRun(reducer, "deepseek_external_activity", "foreign or recursive subagent");
             return;
         }
@@ -1158,7 +1163,7 @@ pub fn observeNotification(reducer: *Reducer, method: []const u8, maybe_params: 
         return;
     }
     if (std.mem.eql(u8, method, "subagent.finished")) {
-        if (!std.mem.eql(u8, textOf(params, "parentSessionId"), reducer.session_id)) {
+        if (!std.mem.eql(u8, textOf(params, "parentSessionId"), reducer.nativeId())) {
             try failRun(reducer, "deepseek_external_activity", "foreign child finish");
             return;
         }
@@ -1182,9 +1187,9 @@ fn drainBuffered(reducer: *Reducer, turn_end_seq: i64) !void {
     for (replayed) |notification| {
         if (reducer.terminal) break;
         const params = notification.params;
-        const parent_matches = std.mem.eql(u8, textOf(params, "parentSessionId"), reducer.session_id);
+        const parent_matches = std.mem.eql(u8, textOf(params, "parentSessionId"), reducer.nativeId());
         if (std.mem.eql(u8, notification.method, "session.status")) {
-            if (!std.mem.eql(u8, textOf(params, "sessionId"), reducer.session_id)) {
+            if (!std.mem.eql(u8, textOf(params, "sessionId"), reducer.nativeId())) {
                 try failRun(reducer, "deepseek_session_mismatch", "session.status for foreign session");
             } else if (reducer.turn_ended and notification.after_seq >= turn_end_seq) {
                 reducer.idle_after_end = std.mem.eql(u8, textOf(params, "status"), "idle");
@@ -1193,7 +1198,7 @@ fn drainBuffered(reducer: *Reducer, turn_end_seq: i64) !void {
         }
         const child_id = textOf(params, "childSessionId");
         if (std.mem.eql(u8, notification.method, "subagent.started")) {
-            if (!parent_matches or std.mem.eql(u8, child_id, reducer.session_id) or findChild(reducer, child_id) != null) {
+            if (!parent_matches or std.mem.eql(u8, child_id, reducer.nativeId()) or findChild(reducer, child_id) != null) {
                 try failRun(reducer, "deepseek_child_lifecycle", "invalid buffered child start");
             } else {
                 try openChild(reducer, child_id);

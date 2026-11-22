@@ -49,6 +49,10 @@ impl Fixture {
     }
 
     fn adapter_then(&self, answers: bool, start_timeout: Duration, after: &str) -> Adapter {
+        Adapter::new(self.config_then(answers, start_timeout, after)).unwrap()
+    }
+
+    fn config_then(&self, answers: bool, start_timeout: Duration, after: &str) -> Config {
         let dir = self.dir.to_string_lossy().into_owned();
         let info = format!(
             r#"{{"serverInfo":{{"name":"{SERVER_NAME}","version":"{}"}}}}"#,
@@ -63,7 +67,7 @@ if [ "$1" = --patch ]; then cp "$2" "{dir}/patch"; ls -l "$2" | cut -c1-10 > "{d
 cat >/dev/null"#,
             silence = if answers { "" } else { "cat >/dev/null; " }
         );
-        Adapter::new(Config {
+        Config {
             process: ProcessConfig {
                 path: "/bin/sh".into(),
                 args: vec!["-c".into(), script, "sh".into()],
@@ -76,9 +80,9 @@ cat >/dev/null"#,
             model: "m".into(),
             runtime: Runtime::new(|| 42, |kind| format!("{kind}-minted")),
             start_timeout,
+            native_session_id: Some(|id: &str| id.to_owned()),
             ..Config::default()
-        })
-        .unwrap()
+        }
     }
 
     fn wire(&self) -> Vec<Value> {
@@ -115,14 +119,83 @@ fn refused_feature(error: Error) -> (String, &'static str) {
 }
 
 #[test]
-fn a_reopen_or_attached_tools_are_refused_before_any_spawn() {
+fn a_reopen_resumes_the_bound_native_session_after_initialize_and_reports_it_recovered() {
+    let fixture = Fixture::new();
+    let mut reopen = request("s");
+    reopen.reopen = true;
+    reopen.native_session_id = "stored".into();
+    let session = fixture.adapter().open(reopen).unwrap();
+    let wire = fixture.wire();
+    assert_eq!(wire[0]["method"], "initialize");
+    assert_eq!(wire[1]["method"], "session/resume");
+    assert_eq!(
+        wire[1]["params"],
+        serde_json::json!({"sessionId": "stored"})
+    );
+    let state = session.state().unwrap();
+    assert_eq!(state.session_id.as_str(), "s");
+    let recovery = state.recovery.unwrap();
+    assert!(recovery.recovered);
+    assert_eq!(
+        recovery.reason,
+        "the harness restored the bound conversation; OAP runs and cursors remain process-local"
+    );
+    assert_eq!(session.native_session_id(), "stored");
+    session.close().unwrap();
+}
+
+#[test]
+fn a_reopen_the_harness_cannot_resume_is_refused_as_unsatisfiable() {
+    let fixture = Fixture::new();
+    let wire = fixture.dir.join("wire");
+    let refuse = format!(
+        r#"read line; printf '%s\n' "$line" >> "{}"; printf '%s\n' '{{"jsonrpc":"2.0","id":2,"error":{{"code":-32602,"message":"no stored session"}}}}'; cat >/dev/null; "#,
+        wire.display()
+    );
+    let mut reopen = request("s");
+    reopen.reopen = true;
+    reopen.native_session_id = "stored".into();
+    let refused = fixture
+        .adapter_then(true, Duration::ZERO, &refuse)
+        .open(reopen)
+        .err()
+        .unwrap();
+    assert_eq!(
+        refused_feature(refused),
+        (FEATURE_OPEN_REOPEN.into(), "unsatisfiable")
+    );
+    assert_eq!(fixture.wire()[1]["method"], "session/resume");
+}
+
+#[test]
+fn a_fresh_open_runs_under_a_native_id_of_its_own() {
+    let fixture = Fixture::new();
+    let adapter = Adapter::new(Config {
+        native_session_id: None,
+        ..fixture.config_then(true, Duration::ZERO, "")
+    })
+    .unwrap();
+    let first = adapter.open(request("s")).unwrap();
+    let native = first.native_session_id();
+    assert_eq!(first.state().unwrap().session_id.as_str(), "s");
+    assert_eq!(native.len(), 32);
+    assert!(native.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    first.close().unwrap();
+    let second = adapter.open(request("s")).unwrap();
+    assert_ne!(second.native_session_id(), native);
+    second.close().unwrap();
+}
+
+#[test]
+fn a_reopen_naming_no_native_session_or_attached_tools_are_refused_before_any_spawn() {
     let fixture = Fixture::new();
     let adapter = fixture.adapter();
     let mut reopen = request("s");
     reopen.reopen = true;
+    reopen.native_session_id = " ".into();
     assert_eq!(
         refused_feature(adapter.open(reopen).err().unwrap()),
-        (FEATURE_OPEN_REOPEN.into(), "unadvertised")
+        (FEATURE_OPEN_REOPEN.into(), "unsatisfiable")
     );
     let mut tools = request("s");
     tools.tools = vec![ToolDefinition {

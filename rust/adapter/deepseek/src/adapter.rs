@@ -10,23 +10,29 @@ use futures_channel::oneshot;
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
     Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, OpenRequest,
-    Session as SessionContract, UnsupportedControl, CONTROL_UNADVERTISED, CONTROL_UNSATISFIABLE,
+    Session as SessionContract, UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
     CapabilityDescriptor, CompactionKind, CompactionPolicy, EndpointDescriptor, FeatureSupport,
-    ReasoningLevel, SessionState, SessionStatus, SupportLevel, FEATURE_COMPACTION_POLICY,
-    FEATURE_OPEN_REOPEN, FEATURE_SESSION_MODEL_SWITCH, FEATURE_SESSION_REASONING,
-    MODE_SESSION_OPEN, PROFILE, VERSION,
+    ReasoningLevel, RecoveryMetadata, SessionState, SessionStatus, SupportLevel,
+    FEATURE_COMPACTION_POLICY, FEATURE_OPEN_REOPEN, FEATURE_SESSION_MODEL_SWITCH,
+    FEATURE_SESSION_REASONING, MODE_SESSION_OPEN, PROFILE, VERSION,
 };
 
-use crate::native::{validate_initialize_params, InitializeParams};
+use crate::native::{
+    validate_initialize_params, InitializeParams, SessionResumeParams, METHOD_SESSION_RESUME,
+};
 use crate::process::{Process, ProcessConfig};
+use crate::rpc::Inbound;
 use crate::runtime::Runtime;
 use crate::session::Session;
 
 pub(crate) const ENDPOINT_ID: &str = "deepseek.harness";
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 const DEFAULT_START_TIMEOUT: Duration = Duration::from_secs(30);
+const REOPEN_SUPPORT_REASON: &str = "session/resume reloads the bound stored session after initialize, under the initialized model route";
+const REOPEN_RECOVERY_REASON: &str =
+    "the harness restored the bound conversation; OAP runs and cursors remain process-local";
 
 static PATCHES: AtomicU64 = AtomicU64::new(0);
 
@@ -39,6 +45,7 @@ pub struct Config {
     pub journal_capacity: usize,
     pub runtime: Runtime,
     pub start_timeout: Duration,
+    pub native_session_id: Option<fn(&str) -> String>,
 }
 
 #[derive(Clone, Debug)]
@@ -113,7 +120,7 @@ impl Adapter {
             ("protocol.initialize", feature(SupportLevel::EMULATED, "adapter-owned one-shot initialization freeze")),
             ("capabilities", feature(SupportLevel::EMULATED, "conservative descriptor for pinned SDK wire")),
             ("session.open", feature(SupportLevel::EMULATED, "one process and native session per OAP session")),
-            (FEATURE_OPEN_REOPEN, feature(SupportLevel::UNAVAILABLE, "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness")),
+            (FEATURE_OPEN_REOPEN, feature(SupportLevel::NATIVE, REOPEN_SUPPORT_REASON)),
             ("session.state", feature(SupportLevel::DEGRADED, "reducer-owned live projection; no native query")),
             (FEATURE_SESSION_MODEL_SWITCH, feature(SupportLevel::EMULATED, "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused")),
             (FEATURE_SESSION_REASONING, opening(SupportLevel::NATIVE, "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max")),
@@ -190,23 +197,40 @@ impl Adapter {
     }
 
     fn open_with(&self, request: OpenRequest, cancel: &Receiver<()>) -> Result<Session, Error> {
-        if request.reopen {
-            return Err(Error::UnsupportedControl(Box::new(UnsupportedControl {
-                feature: FEATURE_OPEN_REOPEN.into(),
-                reason: CONTROL_UNADVERTISED,
-                detail: "the pinned SDK wire has no request to load a stored session".into(),
-                ..UnsupportedControl::default()
-            })));
+        if request.reopen && request.native_session_id.trim().is_empty() {
+            return Err(unsatisfiable(
+                FEATURE_OPEN_REOPEN,
+                "",
+                "a reopen names no stored native session",
+            ));
         }
         refuse_unadvertised_tool_sources(&request, &[])?;
         refuse_unadvertised_tools(&request, &[])?;
         refuse_unadvertised_settings(&request, &self.describe().capabilities)?;
         let launch = self.launch(&request)?;
         let process = launch.start(self.config.start_timeout, None, cancel)?;
-        let session_id = if request.session_id.as_str().is_empty() {
+        let session_id: oxap_protocol::SessionId = if request.session_id.as_str().is_empty() {
             self.config.runtime.new_id("session").into()
         } else {
             request.session_id
+        };
+        let (native_id, recovery) = if request.reopen {
+            resume(
+                &process,
+                &request.native_session_id,
+                self.config.start_timeout,
+            )?;
+            (
+                request.native_session_id,
+                Some(RecoveryMetadata {
+                    recovered: true,
+                    reason: REOPEN_RECOVERY_REASON.into(),
+                    ..RecoveryMetadata::default()
+                }),
+            )
+        } else {
+            let mint = self.config.native_session_id.unwrap_or(fresh_native_id);
+            (mint(session_id.as_str()), None)
         };
         let state = SessionState {
             session_id,
@@ -215,10 +239,12 @@ impl Adapter {
             updated_at_ms: self.config.runtime.now_ms(),
             reasoning_level: request.reasoning_level,
             compaction_policy: request.compaction_policy,
+            recovery,
             ..SessionState::default()
         };
         Ok(Session::new(
             process,
+            native_id,
             state,
             self.config.journal_capacity,
             self.config.runtime.clone(),
@@ -282,6 +308,51 @@ impl Launch {
             _ => Error::harness(failure.rpc),
         })
     }
+}
+
+pub fn fresh_native_id(_: &str) -> String {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random).expect("the operating system provides secure entropy");
+    random.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub(crate) fn resume(process: &Process, native_id: &str, timeout: Duration) -> Result<(), Error> {
+    let params = serde_json::value::to_raw_value(&SessionResumeParams {
+        session_id: native_id.into(),
+    })
+    .map_err(Error::harness)?;
+    let deadline = Instant::now().checked_add(timeout);
+    let caller = process.client.clone();
+    let (reply, answered) = crossbeam_channel::bounded(1);
+    std::thread::spawn(move || {
+        let _ = reply.send(caller.call(METHOD_SESSION_RESUME, Some(params), deadline));
+    });
+    let mut inbound = process.client.inbound();
+    let mut done = process.client.done();
+    let outcome: Result<(), String> = loop {
+        crossbeam_channel::select! {
+            recv(answered) -> outcome => break match outcome {
+                Ok(answer) => answer.map(drop).map_err(|failure| failure.to_string()),
+                Err(_) => Err("the resume call ended without an answer".into()),
+            },
+            recv(inbound) -> message => match message {
+                Ok(Inbound::Barrier(ack)) => {
+                    drop(ack);
+                    inbound = crossbeam_channel::never();
+                    done = crossbeam_channel::never();
+                }
+                _ => break Err("a native observation preceded the resume response".into()),
+            },
+            recv(done) -> _ => break Err(process.client.err().unwrap_or_else(|| "EOF".into())),
+        }
+    };
+    outcome.map_err(|detail| {
+        unsatisfiable(
+            FEATURE_OPEN_REOPEN,
+            "",
+            &format!("the harness could not resume the stored session: {detail}"),
+        )
+    })
 }
 
 fn write_patch(

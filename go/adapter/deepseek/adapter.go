@@ -2,12 +2,15 @@ package deepseek
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"github.com/lsm/oxap/harnesses"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -75,6 +78,7 @@ type Config struct {
 	MaxTokens          *int64
 	Clock              base.Clock
 	IDs                base.IDGenerator
+	NativeSessionID    func(protocol.SessionID) string
 	JournalCapacity    int
 	FrameLimit         int
 	QueueCapacity      int
@@ -173,7 +177,7 @@ func (a *Adapter) Probe(ctx context.Context) (base.Descriptor, error) {
 		"protocol.initialize":              {Level: protocol.SupportEmulated, Reason: "adapter-owned one-shot initialization freeze"},
 		"capabilities":                     {Level: protocol.SupportEmulated, Reason: "conservative descriptor for pinned SDK wire"},
 		"session.open":                     {Level: protocol.SupportEmulated, Reason: "one process and native session per OAP session"},
-		protocol.FeatureOpenReopen:         {Level: protocol.SupportUnavailable, Reason: "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness"},
+		protocol.FeatureOpenReopen:         {Level: protocol.SupportNative, Reason: reopenSupportReason},
 		"session.state":                    {Level: protocol.SupportDegraded, Reason: "reducer-owned live projection; no native query"},
 		protocol.FeatureSessionModelSwitch: {Level: protocol.SupportEmulated, Reason: "the runtime freezes its model at initialize, so a session that has not run restarts its own runtime on the new model; once it has run, a switch is refused"},
 		protocol.FeatureSessionReasoning:   {Level: protocol.SupportNative, Modes: []string{protocol.ModeSessionOpen}, Reason: "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max"},
@@ -198,8 +202,8 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if req.Reopen {
-		return nil, &base.UnsupportedControlError{Feature: protocol.FeatureOpenReopen, Reason: base.ControlUnadvertised, Detail: "the pinned SDK wire has no request to load a stored session"}
+	if req.Reopen && strings.TrimSpace(req.NativeSessionID) == "" {
+		return nil, &base.UnsupportedControlError{Feature: protocol.FeatureOpenReopen, Reason: base.ControlUnsatisfiable, Detail: "a reopen names no stored native session"}
 	}
 
 	if err := base.RefuseUnadvertisedToolSources(req); err != nil {
@@ -216,7 +220,7 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 	if err := base.RefuseUnadvertisedSettings(req, descriptor.Capabilities); err != nil {
 		return nil, err
 	}
-	client, model, err := a.start(ctx, req, "")
+	client, model, err := a.resumed(ctx, req, "")
 	if err != nil {
 		return nil, err
 	}
@@ -224,10 +228,70 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 	if id == "" {
 		id = protocol.SessionID(a.ids.NewID("session"))
 	}
+	nativeID := req.NativeSessionID
+	var recovery *protocol.RecoveryMetadata
+	if req.Reopen {
+		recovery = &protocol.RecoveryMetadata{Recovered: true, Reason: reopenRecoveryReason}
+	} else {
+		nativeID = a.nativeSessionID(id)
+	}
 	now := a.clock.Now().UnixMilli()
-	s := &Session{client: client, inbound: client.Inbound(), clock: a.clock, ids: a.ids, journal: journal.New(a.config.JournalCapacity), nativeID: string(id), model: model, state: protocol.SessionState{SessionID: id, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, ReasoningLevel: req.ReasoningLevel, CompactionPolicy: req.CompactionPolicy}, runs: map[protocol.RunID]*runState{}, tools: map[string]*toolState{}, children: map[string]*childState{}, stop: make(chan struct{}), exited: make(chan struct{}), restart: func(ctx context.Context, model string) (Client, string, error) { return a.start(ctx, req, model) }}
+	s := &Session{client: client, inbound: client.Inbound(), clock: a.clock, ids: a.ids, journal: journal.New(a.config.JournalCapacity), nativeID: nativeID, model: model, state: protocol.SessionState{SessionID: id, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, ReasoningLevel: req.ReasoningLevel, CompactionPolicy: req.CompactionPolicy, Recovery: recovery}, runs: map[protocol.RunID]*runState{}, tools: map[string]*toolState{}, children: map[string]*childState{}, stop: make(chan struct{}), exited: make(chan struct{}), restart: func(ctx context.Context, model string) (Client, string, error) { return a.resumed(ctx, req, model) }}
 	go s.dispatch(s.client, s.inbound, s.stop, s.exited)
 	return s, nil
+}
+
+const (
+	reopenSupportReason  = "session/resume reloads the bound stored session after initialize, under the initialized model route"
+	reopenRecoveryReason = "the harness restored the bound conversation; OAP runs and cursors remain process-local"
+)
+
+func (a *Adapter) nativeSessionID(id protocol.SessionID) string {
+	if a.config.NativeSessionID != nil {
+		return a.config.NativeSessionID(id)
+	}
+	var random [16]byte
+	_, _ = rand.Read(random[:])
+	return hex.EncodeToString(random[:])
+}
+
+func (a *Adapter) resumed(ctx context.Context, req base.OpenRequest, model string) (Client, string, error) {
+	client, model, err := a.start(ctx, req, model)
+	if err != nil || !req.Reopen {
+		return client, model, err
+	}
+	if err := resume(ctx, client, req.NativeSessionID); err != nil {
+		_ = client.Close()
+		return nil, "", &base.UnsupportedControlError{Feature: protocol.FeatureOpenReopen, Reason: base.ControlUnsatisfiable, Detail: "the harness could not resume the stored session: " + err.Error()}
+	}
+	return client, model, nil
+}
+
+func resume(ctx context.Context, client Client, nativeID string) error {
+	answered := make(chan error, 1)
+	go func() {
+		var result native.SessionResumeResult
+		answered <- client.Call(ctx, native.MethodSessionResume, native.SessionResumeParams{SessionID: nativeID}, &result)
+	}()
+	for {
+		select {
+		case err := <-answered:
+			return err
+		case message := <-client.Inbound():
+			if message.Barrier != nil {
+				close(message.Barrier)
+				continue
+			}
+			return errors.New("a native observation preceded the resume response")
+		case <-client.Done():
+			if err := client.Err(); err != nil {
+				return err
+			}
+			return errors.New("the runtime closed before answering the resume")
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 var deepseekEfforts = map[protocol.ReasoningLevel]bool{protocol.ReasoningOff: true, protocol.ReasoningLow: true, protocol.ReasoningHigh: true, protocol.ReasoningMax: true}

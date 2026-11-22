@@ -18,6 +18,7 @@ const (
 
 	MethodInitialize       = "initialize"
 	MethodSessionPrompt    = "session/prompt"
+	MethodSessionResume    = "session/resume"
 	MethodShutdown         = "shutdown"
 	NotifySessionEvent     = "session.event"
 	NotifySessionStatus    = "session.status"
@@ -100,6 +101,11 @@ type SessionPromptParams struct {
 	SessionID     string         `json:"sessionId"`
 	ContentBlocks []ContentBlock `json:"contentBlocks"`
 }
+type SessionResumeParams struct {
+	SessionID string `json:"sessionId"`
+}
+type SessionResumeResult struct{}
+
 type SessionPromptResult struct {
 	MessageID string `json:"messageId"`
 }
