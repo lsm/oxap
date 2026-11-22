@@ -29,8 +29,10 @@ requests.
 `GatewaySession::start_run` takes an OAP session ID, the effective model ID
 and the runtime clock and ID source. The returned `GatewayRun` emits
 `run.started`, content deltas and a completion or failure with contiguous
-OAP sequence numbers. It passes other native observations through without
-consuming a sequence number. Reading ends after settlement. To interrupt a
+OAP sequence numbers. Native tool starts produce linked action requests and
+starts. Native tool completions produce results on the same action call,
+and unfinished tools fail before run settlement. It passes other native
+observations through without consuming a sequence number. Reading ends after settlement. To interrupt a
 running turn, use `GatewayRun::interrupt` and continue reading its settlement.
 
 The wire layer holds the gateway's event envelope, the payloads of its run events,

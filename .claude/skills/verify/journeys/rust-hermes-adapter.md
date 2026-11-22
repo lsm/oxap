@@ -98,3 +98,16 @@ python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
 Expect five envelopes matching `streaming-provenance/expected-oap.json` byte
 for byte after compacting the fixture, and one clean gateway shutdown.
 The pinned replay also sends native observations that consume no OAP sequence.
+
+Replay tool observations through the same consumer:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run tool-lifecycle
+```
+
+Expect eight byte-matched envelopes and one clean shutdown. The six action
+envelopes link requests, starts and completions across two tools. The
+targeted gateway session suite also checks that duplicate starts and
+unmatched completions fail the run and that unfinished tools fail before
+run settlement.

@@ -421,7 +421,10 @@ fn started_prompt_projects_deltas_and_settlement() {
 
 #[test]
 fn run_replays_streaming_provenance_byte_for_byte() {
-    replay_run("streaming-provenance", &["thinking.delta", "message.interim"]);
+    replay_run(
+        "streaming-provenance",
+        &["thinking.delta", "message.interim"],
+    );
 }
 
 #[test]
@@ -429,10 +432,79 @@ fn run_replays_tool_lifecycle_byte_for_byte() {
     replay_run("tool-lifecycle", &[]);
 }
 
+const HERMES_CORPUS: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../../fixtures/adapters/hermes-v0.23.3/"
+);
+
 fn replay_run(case: &str, expected_observations: &[&str]) {
+    use oxap_adapter::gojson::go_marshal;
+
+    let native = std::fs::read_to_string(format!("{HERMES_CORPUS}{case}/native.jsonl")).unwrap();
+    let (trace, observed) = replay_frames(native.lines());
+    let trace: Vec<_> = trace
+        .iter()
+        .map(|envelope| go_marshal(&serde_json::to_string(envelope).unwrap()))
+        .collect();
+    let expected =
+        std::fs::read_to_string(format!("{HERMES_CORPUS}{case}/expected-oap.json")).unwrap();
+    assert_eq!(format!("[{}]", trace.join(",")), go_marshal(&expected));
+    assert_eq!(observed, expected_observations);
+}
+
+#[test]
+fn run_settles_open_tools_before_run_settlement() {
+    use oxap_protocol::{ActionCallPayload, EnvelopeType};
+
+    let native =
+        std::fs::read_to_string(format!("{HERMES_CORPUS}tool-lifecycle/native.jsonl")).unwrap();
+    let frames: Vec<_> = native.lines().collect();
+    let turn_end = frames[8].replace(r#""seq":6"#, r#""seq":3"#);
+    let (trace, _) = replay_frames(frames[..5].iter().copied().chain([turn_end.as_str()]));
+    assert_eq!(trace.len(), 5);
+    let [_, requested, started, failed, completed] = trace.as_slice() else {
+        unreachable!()
+    };
+    assert_eq!(failed.envelope_type, EnvelopeType::ACTION_CALL_FAILED);
+    assert_eq!(failed.in_reply_to.as_ref(), Some(&started.id));
+    assert_eq!(failed.tool_call_id, requested.tool_call_id);
+    let payload: ActionCallPayload = failed.decode_payload().unwrap();
+    assert_eq!(payload.error.unwrap().code, "incomplete_tool");
+    assert_eq!(completed.envelope_type, EnvelopeType::RUN_COMPLETED);
+}
+
+#[test]
+fn run_refuses_duplicate_starts_and_unmatched_completions() {
+    use oxap_protocol::{EnvelopeType, RunFailedPayload};
+
+    let native =
+        std::fs::read_to_string(format!("{HERMES_CORPUS}tool-lifecycle/native.jsonl")).unwrap();
+    let frames: Vec<_> = native.lines().collect();
+    let duplicate = frames[4].replace(r#""seq":2"#, r#""seq":3"#);
+    let unmatched = frames[5].replace(r#""seq":3"#, r#""seq":2"#);
+    for (first, last, message, count) in [
+        (5, duplicate.as_str(), "duplicate tool call", 5),
+        (4, unmatched.as_str(), "unmatched tool completion", 2),
+    ] {
+        let (trace, _) = replay_frames(frames[..first].iter().copied().chain([last]));
+        assert_eq!(trace.len(), count);
+        let failed = trace.last().unwrap();
+        assert_eq!(failed.envelope_type, EnvelopeType::RUN_FAILED);
+        let payload: RunFailedPayload = failed.decode_payload().unwrap();
+        assert_eq!(payload.error.code, "hermes_tool_lifecycle");
+        assert_eq!(payload.error.message, message);
+        if count == 5 {
+            assert_eq!(trace[3].envelope_type, EnvelopeType::ACTION_CALL_FAILED);
+        }
+    }
+}
+
+fn replay_frames<'a>(
+    frames: impl IntoIterator<Item = &'a str>,
+) -> (Vec<oxap_protocol::Envelope>, Vec<String>) {
     use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 
-    use oxap_adapter::{gojson::go_marshal, runtime::Runtime};
+    use oxap_adapter::runtime::Runtime;
     use oxap_adapter_hermes::RunObservation;
     use serde::Deserialize;
     use serde_json::value::RawValue;
@@ -443,13 +515,8 @@ fn replay_run(case: &str, expected_observations: &[&str]) {
         raw: Box<RawValue>,
     }
 
-    let corpus = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../fixtures/adapters/hermes-v0.23.3/"
-    );
-    let native = std::fs::read_to_string(format!("{corpus}{case}/native.jsonl")).unwrap();
     let mut script = String::new();
-    for frame in native.lines() {
+    for frame in frames {
         let frame: Frame = serde_json::from_str(frame).unwrap();
         let wire = frame.raw.get();
         match frame.direction.as_str() {
@@ -487,7 +554,7 @@ fn replay_run(case: &str, expected_observations: &[&str]) {
     while let Some(item) = run.next_observation(deadline).unwrap() {
         match item {
             RunObservation::Event(envelope) => {
-                trace.push(go_marshal(&serde_json::to_string(&envelope).unwrap()));
+                trace.push(*envelope);
             }
             RunObservation::Other(oxap_adapter_hermes::Observation::Event(event)) => {
                 observed.push(event.kind);
@@ -500,8 +567,6 @@ fn replay_run(case: &str, expected_observations: &[&str]) {
         run.interrupt(deadline),
         Err(Error::RunAlreadyTerminal { .. })
     ));
-    let expected = std::fs::read_to_string(format!("{corpus}{case}/expected-oap.json")).unwrap();
-    assert_eq!(format!("[{}]", trace.join(",")), go_marshal(&expected));
-    assert_eq!(observed, expected_observations);
     session.close().unwrap();
+    (trace, observed)
 }
