@@ -4,7 +4,7 @@
 mod gateway_session;
 
 #[cfg(unix)]
-pub use gateway_session::GatewaySession;
+pub use gateway_session::{GatewaySession, Observation};
 
 pub mod native;
 #[cfg(unix)]

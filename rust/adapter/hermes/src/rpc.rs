@@ -1,7 +1,9 @@
 pub use oxap_adapter::jsonrpc::{
-    ClientOptions, Dialect, Error, Fault, Inbound, NotificationMessage, RpcClient,
+    ClientOptions, Dialect, Error, Fault, Inbound, IncomingRequest, NotificationMessage, RpcClient,
 };
 use serde_json::value::RawValue;
+
+use crate::native::{decode_notification, Event};
 
 pub const DIALECT: Dialect = Dialect {
     params_object_or_null: true,
@@ -14,6 +16,10 @@ pub fn error(fault: Fault) -> Error {
 }
 
 pub fn check_notification(method: &str, params: Option<&RawValue>) -> Result<(), String> {
+    decode_event(method, params).map(drop)
+}
+
+pub(crate) fn decode_event(method: &str, params: Option<&RawValue>) -> Result<Event, String> {
     let params = params.map_or("", |raw| raw.get());
-    crate::native::decode_notification(method, params.as_bytes()).map(drop)
+    decode_notification(method, params.as_bytes())
 }
