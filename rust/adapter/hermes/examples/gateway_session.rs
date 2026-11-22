@@ -4,6 +4,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use oxap_adapter_hermes::{
         native::EVENT_MESSAGE_COMPLETE, process::ProcessConfig, GatewaySession, Observation,
+        PromptObservation,
     };
     use oxap_protocol::ReasoningLevel;
 
@@ -11,13 +12,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (python, source, state, mode) = match args.as_slice() {
         [python, source, state] => (python, source, state, ""),
         [python, source, state, mode]
-            if matches!(mode.as_str(), "--prompt" | "--observe" | "--start") =>
+            if matches!(
+                mode.as_str(),
+                "--prompt" | "--observe" | "--start" | "--project"
+            ) =>
         {
             (python, source, state, mode.as_str())
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project]"
                     .into(),
             );
         }
@@ -49,7 +53,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("runtime session ID: {}", session.runtime_id());
     println!("stored session ID: {}", session.stored_id());
     let mut start_error = None;
-    if mode == "--start" {
+    if mode == "--project" {
+        let deadline = Some(Instant::now() + Duration::from_secs(30));
+        let start = session.start_prompt("hello", deadline)?;
+        println!("prompt started at native sequence {}", start.seq);
+        loop {
+            match session.next_prompt_observation(deadline)? {
+                PromptObservation::Delta(part) => {
+                    println!("delta: {}", serde_json::to_string(&part)?);
+                }
+                PromptObservation::Completed { text, usage } => {
+                    println!(
+                        "completed: {}",
+                        serde_json::json!({"text": text, "usage": usage})
+                    );
+                    break;
+                }
+                PromptObservation::Failed(error) => {
+                    return Err(serde_json::to_string(&error)?.into());
+                }
+                PromptObservation::Other(Observation::Event(_)) => {}
+                PromptObservation::Other(Observation::Request(request)) => {
+                    return Err(format!("unexpected gateway request: {}", request.method).into());
+                }
+            }
+        }
+    } else if mode == "--start" {
         let deadline = Some(Instant::now() + Duration::from_secs(30));
         match session.start_prompt("Hello from the Rust Hermes adapter.", deadline) {
             Ok(event) => println!("prompt started at native sequence {}", event.seq),
