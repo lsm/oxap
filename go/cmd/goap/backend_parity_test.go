@@ -27,6 +27,10 @@ func TestBackendsMatchOapx(t *testing.T) {
 	if !filepath.IsAbs(oapx) {
 		t.Fatalf("OAP_OAPX_BIN must be absolute, got %q", oapx)
 	}
+	rust := os.Getenv("OAP_RUST_HUB_BIN")
+	if rust != "" && !filepath.IsAbs(rust) {
+		t.Fatalf("OAP_RUST_HUB_BIN must be absolute, got %q", rust)
+	}
 	goap := oapBinary(t)
 	cases, err := filepath.Glob(filepath.Join("testdata", "parity", "*"))
 	if err != nil {
@@ -41,24 +45,38 @@ func TestBackendsMatchOapx(t *testing.T) {
 		backend := fixtureBackend(t, dir)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			scenario := readLines(t, filepath.Join(dir, "scenario.jsonl"))
-			wantOut, wantChild := exchangeWithChild(t, dir, backend, scenario, goap, "serve", "agent")
-			gotOut, gotChild := exchangeWithChild(t, dir, backend, scenario, oapx, "serve", "agent")
-			if len(wantOut) < len(scenario) {
-				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(wantOut), len(scenario))
+			goExchange := exchangeWithChild(t, dir, backend, scenario, goap)
+			if len(goExchange.envelopes) < len(scenario) {
+				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(goExchange.envelopes), len(scenario))
 			}
-			if missing, extra := lineDifference(wantOut, gotOut); len(missing)+len(extra) > 0 {
-				t.Errorf("oapx answers differently\n--- only goap\n%s\n--- only oapx\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
-			}
-			if where := runOrderDifference(t, wantOut, gotOut); where != "" {
-				t.Errorf("oapx orders a run differently: %s", where)
-			}
-			if missing, extra := childLineDifference(t, wantChild, gotChild); len(missing)+len(extra) > 0 {
-				t.Errorf("oapx writes different data to its child\n--- only goap\n%s\n--- only oapx\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
+			compareBackendExchanges(t, "oapx", goExchange, exchangeWithChild(t, dir, backend, scenario, oapx))
+			if rust != "" && rustHubServes(t, dir) {
+				t.Run("rust", func(t *testing.T) {
+					compareBackendExchanges(t, "oap-rust-hub", goExchange, exchangeWithChild(t, dir, backend, scenario, rust))
+				})
 			}
 		})
 	}
 	if compared == 0 {
 		t.Fatal("no parity fixture serves only types oapx serves, so nothing was compared")
+	}
+}
+
+type backendExchange struct {
+	envelopes []string
+	child     string
+}
+
+func compareBackendExchanges(t *testing.T, peer string, goExchange, peerExchange backendExchange) {
+	t.Helper()
+	if missing, extra := lineDifference(goExchange.envelopes, peerExchange.envelopes); len(missing)+len(extra) > 0 {
+		t.Errorf("%s answers differently\n--- only goap\n%s\n--- only %s\n%s", peer, strings.Join(missing, "\n"), peer, strings.Join(extra, "\n"))
+	}
+	if where := runOrderDifference(t, goExchange.envelopes, peerExchange.envelopes); where != "" {
+		t.Errorf("%s orders a run differently: %s", peer, where)
+	}
+	if missing, extra := childLineDifference(t, goExchange.child, peerExchange.child); len(missing)+len(extra) > 0 {
+		t.Errorf("%s writes different data to its child\n--- only goap\n%s\n--- only %s\n%s", peer, strings.Join(missing, "\n"), peer, strings.Join(extra, "\n"))
 	}
 }
 
@@ -98,7 +116,7 @@ func readLines(t *testing.T, path string) []string {
 	return lines
 }
 
-func exchangeWithChild(t *testing.T, fixture, backend string, scenario []string, binary string, args ...string) ([]string, string) {
+func exchangeWithChild(t *testing.T, fixture, backend string, scenario []string, binary string) backendExchange {
 	t.Helper()
 	work := t.TempDir()
 	var server *fakeOpenCode
@@ -122,17 +140,25 @@ func exchangeWithChild(t *testing.T, fixture, backend string, scenario []string,
 	if err := os.WriteFile(filepath.Join(work, "registry.json"), []byte(resolved), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(binary, append(args, "--backend", backend, "--config", filepath.Join(work, "registry.json"))...)
+	cmd := exec.Command(binary, "serve", "agent", "--backend", backend, "--config", filepath.Join(work, "registry.json"))
 	cmd.Dir = work
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + work,
+		"TMPDIR=" + work,
+		"NODE_ENV=test",
+		"OXAP_KEYCHAIN_SERVICE=" + work,
+	}
 	out := settledExchange(t, cmd, scenario)
 	if server != nil {
-		return out, messageEntropy.ReplaceAllString(server.transcript(), "msg_oap@ENTROPY@${1}")
+		return backendExchange{out, messageEntropy.ReplaceAllString(server.transcript(), "msg_oap@ENTROPY@${1}")}
 	}
 	written, err := os.ReadFile(filepath.Join(work, "stdin.log"))
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	return out, nativeSessionEntropy.ReplaceAllString(turnEntropy.ReplaceAllString(requestEntropy.ReplaceAllString(strings.ReplaceAll(string(written), work, "@DIR@"), "${1}_@ENTROPY@"), "turn-@ENTROPY@-${1}"), `"sessionId":"@ENTROPY@"`)
+	childLog := nativeSessionEntropy.ReplaceAllString(turnEntropy.ReplaceAllString(requestEntropy.ReplaceAllString(strings.ReplaceAll(string(written), work, "@DIR@"), "${1}_@ENTROPY@"), "turn-@ENTROPY@-${1}"), `"sessionId":"@ENTROPY@"`)
+	return backendExchange{out, childLog}
 }
 
 var nativeSessionEntropy = regexp.MustCompile(`"sessionId":"[0-9a-f]{32}"`)
@@ -528,9 +554,9 @@ func runOrderDifference(t *testing.T, want, got []string) string {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		where, onlyGoap, onlyOapx := orderedDifference(wantRuns[id], gotRuns[id])
+		where, onlyGoap, onlyPeer := orderedDifference(wantRuns[id], gotRuns[id])
 		if where != "" {
-			return fmt.Sprintf("run %s at line %s: goap %s, oapx %s", id, where, onlyGoap, onlyOapx)
+			return fmt.Sprintf("run %s at line %s: goap %s, peer %s", id, where, onlyGoap, onlyPeer)
 		}
 	}
 	return ""

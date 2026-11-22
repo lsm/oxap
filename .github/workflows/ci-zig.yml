@@ -347,13 +347,17 @@ jobs:
       - name: Build oapx
         run: zig build --build-file zig/build.zig install --prefix /tmp/oapx-parity
 
-      - name: Require each backend to answer and write its child exactly as goap does
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the Rust endpoint
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
+
+      - name: Compare the served Zig, Go, and Rust backends
         env:
           OAP_OAPX_BIN: /tmp/oapx-parity/bin/oxap
-        run: go test ./go/cmd/goap/ -run TestBackendsMatchOapx -v
-
-      - name: Setup Rust for trace validation
-        uses: dtolnay/rust-toolchain@stable
+          OAP_RUST_HUB_BIN: ${{ github.workspace }}/rust/target/debug/oap-rust-hub
+        run: bash .claude/skills/verify/scripts/backend-parity.sh
 
       - name: Setup Node for SDK command parity
         uses: actions/setup-node@v4
