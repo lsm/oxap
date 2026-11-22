@@ -474,6 +474,9 @@ jobs:
           go build -o /tmp/oapx-hub/bin/goap ./go/cmd/goap
           python3 .claude/skills/verify/scripts/opencode-pi-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
 
+      - name: Verify DeepSeek sessions resume across a hub restart
+        run: python3 .claude/skills/verify/scripts/deepseek-native-resume.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
+
       - name: Require the oapx alias to match oxap on stdout and exit code
         run: |
           set -euo pipefail
