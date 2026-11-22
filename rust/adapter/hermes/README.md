@@ -31,7 +31,10 @@ and the runtime clock and ID source. The returned `GatewayRun` emits
 `run.started`, content deltas and a completion or failure with contiguous
 OAP sequence numbers. Native tool starts produce linked action requests and
 starts. Native tool completions produce results on the same action call,
-and unfinished tools fail before run settlement. An observation stream that
+and unfinished tools fail before run settlement. Approval, clarification,
+sudo and secret requests produce OAP input requests and a waiting status.
+Gateway withdrawals cancel the linked input and update the run status.
+Run settlement cancels any remaining input requests. An observation stream that
 disconnects after the run starts produces an inferred `run.failed` with the
 transport diagnostic. A read deadline allows the caller to retry. Other
 native observations pass through without consuming a sequence number.

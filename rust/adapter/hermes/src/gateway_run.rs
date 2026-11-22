@@ -1,19 +1,24 @@
 use std::{collections::VecDeque, time::Instant};
 
-use oxap_adapter::{runtime::Runtime, Error};
+use oxap_adapter::{jsonrpc::RequestId, runtime::Runtime, Error};
 use oxap_protocol::{
-    ActionCallPayload, ContentDeltaPayload, Envelope, EnvelopeId, EnvelopeType, Message,
-    MessageContent, MessageId, MessageRole, ProtocolError, RunCompletedPayload, RunFailedPayload,
-    RunId, RunStartedPayload, RunStatus, SessionId,
+    ActionCallPayload, ContentDeltaPayload, Envelope, EnvelopeId, EnvelopeType, InputOption,
+    InputQuestion, InputQuestionKind, InteractionId, Message, MessageContent, MessageId,
+    MessageRole, ProtocolError, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload,
+    RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
+    UserInputResolutionStatus, UserInputResolvedPayload,
 };
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 
 use crate::gateway_session::ObservationError;
 use crate::native::{
-    decode_strict, InterruptResult, ToolCompletePayload, ToolStartPayload, EVENT_TOOL_COMPLETE,
-    EVENT_TOOL_START,
+    decode_server_request, decode_strict, request_session_id, InterruptResult,
+    RequestCancelPayload, ServerRequest, ToolCompletePayload, ToolStartPayload,
+    EVENT_REQUEST_CANCEL, EVENT_TOOL_COMPLETE, EVENT_TOOL_START, REQUEST_APPROVAL, REQUEST_CLARIFY,
+    REQUEST_SECRET, REQUEST_SUDO,
 };
+use crate::rpc::IncomingRequest;
 use crate::{GatewaySession, Observation, PromptObservation};
 
 #[derive(Debug)]
@@ -32,6 +37,7 @@ pub struct GatewayRun<'a> {
     sequence: u64,
     pending: VecDeque<Envelope>,
     tools: Vec<ToolCall>,
+    gates: Vec<Gate>,
     terminal: Option<RunStatus>,
 }
 
@@ -39,6 +45,12 @@ struct ToolCall {
     native_id: String,
     payload: ActionCallPayload,
     started: Option<EnvelopeId>,
+}
+
+struct Gate {
+    native_id: String,
+    id: InteractionId,
+    requested: EnvelopeId,
 }
 
 impl GatewaySession {
@@ -65,6 +77,7 @@ impl GatewaySession {
             sequence: 0,
             pending: VecDeque::new(),
             tools: Vec::new(),
+            gates: Vec::new(),
             terminal: None,
         };
         let start = run.emit(
@@ -108,9 +121,7 @@ impl GatewayRun<'_> {
             let observation = match self.session.next_prompt_observation_result(deadline) {
                 Ok(observation) => observation,
                 Err(ObservationError::Transport(reason)) => {
-                    let event =
-                        self.fail(protocol_error("hermes_process_exit", &reason), "inferred")?;
-                    self.pending.push_back(event);
+                    self.queue_failure("hermes_process_exit", &reason, "inferred")?;
                     continue;
                 }
                 Err(ObservationError::Other(error)) => return Err(error),
@@ -126,7 +137,7 @@ impl GatewayRun<'_> {
                     },
                 )?,
                 PromptObservation::Completed { text, usage } => {
-                    self.settle_tools()?;
+                    self.settle_children()?;
                     let event = self.emit(
                         EnvelopeType::RUN_COMPLETED,
                         &RunCompletedPayload {
@@ -155,19 +166,131 @@ impl GatewayRun<'_> {
                         EVENT_TOOL_COMPLETE => self.complete_tool(
                             decode_strict(event.payload_bytes()).map_err(Error::harness)?,
                         )?,
+                        EVENT_REQUEST_CANCEL => {
+                            let cancel: RequestCancelPayload =
+                                decode_strict(event.payload_bytes()).map_err(Error::harness)?;
+                            self.withdraw_gate(&cancel.id)?;
+                            continue;
+                        }
                         _ => return Ok(Some(RunObservation::Other(Observation::Event(event)))),
                     };
                     if let Some(message) = failure {
-                        let event =
-                            self.fail(protocol_error("hermes_tool_lifecycle", message), "")?;
-                        self.pending.push_back(event);
+                        self.queue_failure("hermes_tool_lifecycle", message, "")?;
                     }
                     continue;
                 }
-                PromptObservation::Other(other) => return Ok(Some(RunObservation::Other(other))),
+                PromptObservation::Other(Observation::Request(request)) => {
+                    if !matches!(
+                        request.method.as_str(),
+                        REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
+                    ) {
+                        return Ok(Some(RunObservation::Other(Observation::Request(request))));
+                    }
+                    self.open_gate(&request)?;
+                    continue;
+                }
             };
             self.pending.push_back(event);
         }
+    }
+
+    fn open_gate(&mut self, request: &IncomingRequest) -> Result<(), Error> {
+        let method = request.method.as_str();
+        let RequestId::String(native_id) = &request.id else {
+            return self.queue_failure(
+                "hermes_external_activity",
+                &format!("{method} request with a non-string id"),
+                "",
+            );
+        };
+        let params = request
+            .params
+            .as_ref()
+            .map_or(b"".as_slice(), |raw| raw.get().as_bytes());
+        let owner = request_session_id(params);
+        if owner != self.session.runtime_id() {
+            let message = format!(
+                "{method} request for foreign session {}",
+                oxap_adapter::gojson::go_quote(&owner)
+            );
+            return self.queue_failure("hermes_external_activity", &message, "");
+        }
+        let Ok(Some(request)) = decode_server_request(method, params) else {
+            return self.queue_failure(
+                "hermes_invalid_event",
+                &format!("invalid {method} gate"),
+                "",
+            );
+        };
+        let (title, description, questions) = gate_questions(request);
+        if questions
+            .iter()
+            .any(|question| question.options.iter().any(|option| option.id.is_empty()))
+        {
+            return self.queue_failure(
+                "hermes_invalid_event",
+                "gate with a question nobody can answer",
+                "",
+            );
+        }
+        let id: InteractionId = self.runtime.new_id("interaction").into();
+        let mut requested = self.emit(
+            EnvelopeType::USER_INPUT_REQUESTED,
+            &UserInputRequestedPayload {
+                interaction_id: id.clone(),
+                requested_by: "hermes.gateway".into(),
+                responded_by: "user".into(),
+                session_id: self.session_id.clone(),
+                run_id: self.run_id.clone(),
+                title: title.into(),
+                description,
+                questions,
+                allow_cancel: true,
+                ..UserInputRequestedPayload::default()
+            },
+        )?;
+        requested.turn_id = Some(id.clone());
+        self.gates.push(Gate {
+            native_id: native_id.clone(),
+            id,
+            requested: requested.id.clone(),
+        });
+        self.pending.push_back(requested);
+        self.queue_gate_status()
+    }
+
+    fn withdraw_gate(&mut self, native_id: &str) -> Result<(), Error> {
+        if let Some(index) = self
+            .gates
+            .iter()
+            .position(|gate| gate.native_id == native_id)
+        {
+            let gate = self.gates.remove(index);
+            self.cancel_gate(gate)?;
+            self.queue_gate_status()?;
+        }
+        Ok(())
+    }
+
+    fn queue_gate_status(&mut self) -> Result<(), Error> {
+        let pending_user_input_id = self.gates.last().map(|gate| gate.id.clone());
+        let status = if pending_user_input_id.is_some() {
+            RunStatus::WAITING_FOR_INPUT
+        } else {
+            RunStatus::RUNNING
+        };
+        let event = self.emit(
+            EnvelopeType::RUN_STATUS_UPDATED,
+            &RunStatusUpdatedPayload {
+                session_id: self.session_id.clone(),
+                run_id: self.run_id.clone(),
+                status,
+                pending_user_input_id,
+                updated_at_ms: self.runtime.now_ms(),
+            },
+        )?;
+        self.pending.push_back(event);
+        Ok(())
     }
 
     fn start_tool(&mut self, native: ToolStartPayload) -> Result<Option<&'static str>, Error> {
@@ -227,7 +350,29 @@ impl GatewayRun<'_> {
         Ok(None)
     }
 
-    fn settle_tools(&mut self) -> Result<(), Error> {
+    fn cancel_gate(&mut self, gate: Gate) -> Result<(), Error> {
+        let mut resolved = self.emit(
+            EnvelopeType::USER_INPUT_RESOLVED,
+            &UserInputResolvedPayload {
+                interaction_id: gate.id.clone(),
+                requested_by: "hermes.gateway".into(),
+                responded_by: "user".into(),
+                session_id: self.session_id.clone(),
+                run_id: self.run_id.clone(),
+                status: UserInputResolutionStatus::CANCELLED,
+                ..UserInputResolvedPayload::default()
+            },
+        )?;
+        resolved.turn_id = Some(gate.id);
+        resolved.in_reply_to = Some(gate.requested);
+        self.pending.push_back(resolved);
+        Ok(())
+    }
+
+    fn settle_children(&mut self) -> Result<(), Error> {
+        for gate in std::mem::take(&mut self.gates) {
+            self.cancel_gate(gate)?;
+        }
         for ToolCall {
             mut payload,
             started,
@@ -246,7 +391,7 @@ impl GatewayRun<'_> {
     }
 
     fn fail(&mut self, error: ProtocolError, settled_by: &str) -> Result<Envelope, Error> {
-        self.settle_tools()?;
+        self.settle_children()?;
         let event = self.emit(
             EnvelopeType::RUN_FAILED,
             &RunFailedPayload {
@@ -259,6 +404,12 @@ impl GatewayRun<'_> {
         )?;
         self.terminal = Some(RunStatus::FAILED);
         Ok(event)
+    }
+
+    fn queue_failure(&mut self, code: &str, message: &str, settled_by: &str) -> Result<(), Error> {
+        let event = self.fail(protocol_error(code, message), settled_by)?;
+        self.pending.push_back(event);
+        Ok(())
     }
 
     fn queue_action(
@@ -285,6 +436,84 @@ impl GatewayRun<'_> {
         event.run_id = Some(self.run_id.clone());
         event.capability_revision = Some(self.revision.to_owned());
         Ok(event)
+    }
+}
+
+fn gate_questions(request: ServerRequest) -> (&'static str, String, Vec<InputQuestion>) {
+    match request {
+        ServerRequest::Approval(request) => {
+            let description = if request.command.is_empty() {
+                request.description
+            } else {
+                request.command
+            };
+            let question =
+                input_question("choice".into(), description.clone(), request.choices, false);
+            ("Command approval", description, vec![question])
+        }
+        ServerRequest::Clarify(request) => (
+            "Clarification",
+            String::new(),
+            request
+                .questions
+                .into_iter()
+                .map(|question| {
+                    input_question(
+                        question.qid,
+                        question.question,
+                        question.choices,
+                        question.multi_select,
+                    )
+                })
+                .collect(),
+        ),
+        ServerRequest::Sudo(request) => (
+            "Password required",
+            request.command,
+            vec![input_question(
+                "password".into(),
+                "Enter the sudo password".into(),
+                Vec::new(),
+                false,
+            )],
+        ),
+        ServerRequest::Secret(request) => (
+            "Secret required",
+            request.env_var,
+            vec![input_question(
+                "value".into(),
+                request.prompt,
+                Vec::new(),
+                false,
+            )],
+        ),
+    }
+}
+
+fn input_question(
+    id: String,
+    prompt: String,
+    choices: Vec<String>,
+    multi_select: bool,
+) -> InputQuestion {
+    let kind = match (choices.is_empty(), multi_select) {
+        (true, _) => InputQuestionKind::TEXT,
+        (false, true) => InputQuestionKind::MULTI_CHOICE,
+        (false, false) => InputQuestionKind::SINGLE_CHOICE,
+    };
+    InputQuestion {
+        id,
+        prompt,
+        kind,
+        required: true,
+        options: choices
+            .into_iter()
+            .map(|choice| InputOption {
+                id: choice.clone(),
+                label: choice,
+                ..InputOption::default()
+            })
+            .collect(),
     }
 }
 
