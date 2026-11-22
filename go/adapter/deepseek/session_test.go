@@ -1338,8 +1338,12 @@ func streamTexts(f *fakeClient, turn, seq int64, texts []string) {
 }
 
 func streamTextsAs(f *fakeClient, turn, seq int64, id string, texts []string) {
-	record, _ := json.Marshal(map[string]any{"type": "text-chunks", "time0": seq, "index": 0, "dt": make([]int64, len(texts)-1), "texts": texts})
-	f.ev(seq, "assistant/message", assistantMessage(turn, 1, id, []native.ContentBlock{{Type: "text", Text: strings.Join(texts, "")}}, native.MessageSource{Kind: "model", Provider: "deepseek", Model: "chat"}, "["+string(record)+"]", nil))
+	records := make([]map[string]any, 0, len(texts))
+	for _, text := range texts {
+		records = append(records, map[string]any{"type": "chunk", "time": seq, "chunk": map[string]any{"type": "text-delta", "index": 0, "text": text}})
+	}
+	stream, _ := json.Marshal(records)
+	f.ev(seq, "assistant/message", assistantMessage(turn, 1, id, []native.ContentBlock{{Type: "text", Text: strings.Join(texts, "")}}, native.MessageSource{Kind: "model", Provider: "deepseek", Model: "chat"}, string(stream), nil))
 }
 
 func finishTurn(f *fakeClient, turn, seq int64) {
