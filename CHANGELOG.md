@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.42] - 2026-11-22
+
+### Added
+
+- Hermes hub entries support custom Responses endpoints. ([#1958](https://github.com/lsm/oxap/pull/1958))
+- OpenCode and Pi hub entries can select a gateway and model with `model_endpoint`. ([#1957](https://github.com/lsm/oxap/pull/1957))
+- Codex and DeepSeek hub entries can select a gateway outside the provider catalog with `model_endpoint`. ([#1951](https://github.com/lsm/oxap/pull/1951))
+
+### Fixed
+
+- DeepSeek Flash accepts prompts with inline images. ([#1961](https://github.com/lsm/oxap/pull/1961))
+- DeepSeek threads resume after a hub restart using their own native session IDs. ([#1960](https://github.com/lsm/oxap/pull/1960))
+- Stdio hubs forward DeepSeek model switches. ([#1959](https://github.com/lsm/oxap/pull/1959))
+- Hub clients receive Codex reasoning summaries, Docker Agent reasoning, and Copilot reasoning deltas. ([#1956](https://github.com/lsm/oxap/pull/1956), [#1955](https://github.com/lsm/oxap/pull/1955), [#1954](https://github.com/lsm/oxap/pull/1954))
+
+### Merged pull requests
+
+- Clarify custom endpoint configuration for Hermes v0.23.3. ([#1953](https://github.com/lsm/oxap/pull/1953))
+- Check stdio turn delivery across all registered harnesses. ([#1952](https://github.com/lsm/oxap/pull/1952))
+- Align package versions for the alpha.41 release. ([#1950](https://github.com/lsm/oxap/pull/1950))
+
 ## [0.1.0-alpha.41] - 2026-11-21
 
 ### Added

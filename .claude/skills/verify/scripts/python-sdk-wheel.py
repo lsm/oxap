@@ -9,7 +9,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[4]
-VERSION = "0.1.0a41"
+VERSION = "0.1.0a42"
 PROBE = r'''import importlib.metadata, importlib.util, json
 import oxap_sdk
 print(json.dumps({
