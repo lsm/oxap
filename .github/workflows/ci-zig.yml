@@ -460,6 +460,9 @@ jobs:
       - name: Build oapx
         run: zig build --build-file zig/build.zig install --prefix /tmp/oapx-hub -Doptimize=ReleaseSafe
 
+      - name: Verify Claude custom endpoint routing and key redaction
+        run: python3 .claude/skills/verify/scripts/claude-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
+
       - name: Require the oapx alias to match oxap on stdout and exit code
         run: |
           set -euo pipefail

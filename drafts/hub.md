@@ -95,7 +95,7 @@ An adapter entry takes exactly these members: `type`, `executable`, `args`,
 `environment`, `working_directory`, `model`, `journal_capacity`,
 `allowed_tools`, `unrestricted_tools`, `approval_policy`, `sandbox`,
 `provider`, `max_tokens`, `agent_config`, `system_prompt`, `endpoint`, `agent`,
-`any_directory`, and in `oapx` also `model_provider`.
+`any_directory`, and in `oapx` also `model_provider` and `model_endpoint`.
 `type` defaults to the entry's own name, so a registry of one memory adapter
 needs nothing but its name. Without `--config` the hub serves the built-in
 memory reference adapter alone.
@@ -160,6 +160,19 @@ process environment and falls back to its credential store. Startup refuses
 the named entry for an unknown row, a missing endpoint or key, an OAuth login,
 or either translated variable already set in `environment`. The dsh
 `provider` and the adapter's capabilities stay the same.
+
+A Claude hub entry can use `model_endpoint` to route directly to an
+Anthropic Messages endpoint. Set `base_url` to an absolute HTTPS URL or
+a loopback HTTP URL without userinfo, a query, or a fragment. The hub
+passes it through verbatim. Set `credential_env` to the name of a hub
+environment variable whose value is at least 16 bytes. Short credentials
+can collide with protocol field names during redaction. The optional `auth` selects
+`api-key` by default or `bearer`. An explicit `wire` must be
+`anthropic-messages`. Startup refuses an entry that combines this setting
+with `model_provider` or lists the source variable or any of Claude's
+three routing variables in `environment`. The hub replaces the resolved
+key with its variable name in child stderr and hub output. Go and Rust
+refuse the member as unknown.
 
 `any_directory: true` makes the entry a template: a `work.start` naming another
 absolute directory gets a session from an adapter built from this entry with
