@@ -172,8 +172,8 @@ done
 Each replay checks the recorded `session.resume` write byte for byte and
 requires EOF without another gateway write. The idle reload preserves the
 stored ID, uses the new runtime ID, and matches the recovered OAP state.
-The auto-continue reply matches the recorded unsatisfiable reopen and
-returns no session.
+The auto-continue reply matches the recorded unsatisfiable reopen, includes
+the full Go refusal detail with recovery guidance, and returns no session.
 
 Check the deadline when the gateway withholds either its ready notification
 or the resume reply:

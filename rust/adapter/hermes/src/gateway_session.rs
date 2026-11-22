@@ -409,7 +409,8 @@ fn resume_stored(
     }
     if resumed.auto_continue.is_some() {
         return Err(Error::harness(
-            "Hermes would restart the turn a crash interrupted",
+            "Hermes would restart the turn a crash interrupted, which a reopen must not do; \
+             open it in Hermes to settle the turn, or wait for Hermes to retire the marker",
         ));
     }
     if resumed.running || (!resumed.status.is_empty() && resumed.status != "idle") {
