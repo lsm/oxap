@@ -169,8 +169,8 @@ Per kind, `oapx` appends after the entry's own `environment`:
   `HERMES_HOME=<fresh directory under the oapx state directory, created for
   the entry>`, and the adapter passes `provider: "openai-api"` beside the
   entry's `model` at `session.create` — the adapter sends the model there
-  today, and the provider rides the same params object — with the `model`
-  member a bare model id, no prefix. The create parameter is what selects
+  today, and the provider rides the same params object — with the required
+  `model` member a bare model id, no prefix. The create parameter is what selects
   the provider: present, it wins over profile config and
   `HERMES_INFERENCE_PROVIDER` for that session, and the origin-binding rule
   ties the key to the endpoint. The hub-owned home is what makes the route
@@ -271,8 +271,10 @@ Each names the entry, at startup:
   (`api.anthropic.com` speaks Messages, `api.actual.inc` Chat Completions)
   or a path ending `/anthropic` or `/anthropic/v1`, or `api.kimi.com` with
   `/coding` in the path (pinned v0.23.3 `runtime_provider.py`
-  `_HOST_MANDATED_API_MODES` and `_detect_api_mode_for_url`). Detection is a
-  pure function of the URL and runs even in the hub-owned home, so a
+  `_HOST_MANDATED_API_MODES` and `_detect_api_mode_for_url`). The fallback
+  also refuses a hostname starting with `bedrock-runtime.` under
+  `amazonaws.com`, which `providers.py` selects as Bedrock Converse. Detection
+  is a pure function of the URL and runs even in the hub-owned home, so a
   re-classifying URL would silently speak a wire the entry does not declare;
   refused rather than re-declared. The journey's refusal case asserts the
   message names the entry.

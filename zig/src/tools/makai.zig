@@ -5785,6 +5785,30 @@ fn hermesBackendConfig(
         try surface.refuse("{s} \"{s}\" needs an absolute \"working_directory\"", .{ surface.noun, entry.name });
         return error.BackendRefused;
     }
+    if (entry.model_endpoint) |endpoint| {
+        const home = environ.get("HOME") orelse "";
+        if (!std.fs.path.isAbsolute(home)) {
+            try surface.refuse("{s} \"{s}\" needs an absolute HOME for Hermes model_endpoint state", .{ surface.noun, entry.name });
+            return error.BackendRefused;
+        }
+        const directory = hermesRouteHome(arena, home) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            try surface.refuse("{s} \"{s}\" could not create HERMES_HOME for model_endpoint: {s}", .{ surface.noun, entry.name, @errorName(err) });
+            return error.BackendRefused;
+        };
+        const key = environ.get(endpoint.credential_env).?;
+        const routed = try providerRouteEnvironment(arena, entry.environment, "OPENAI_BASE_URL", endpoint.base_url, "OPENAI_API_KEY", key);
+        const home_env = try std.fmt.allocPrint(arena, "HERMES_HOME={s}", .{directory});
+        return .{
+            .executable = executable,
+            .args = entry.args,
+            .environment = try std.mem.concat(arena, []const u8, &.{ routed, &.{home_env} }),
+            .stderr_redaction = .{ .value = key, .variable = endpoint.credential_env },
+            .working_directory = working_directory,
+            .model = entry.model,
+            .provider = "openai-api",
+        };
+    }
     return .{
         .executable = executable,
         .args = entry.args,
@@ -5792,6 +5816,17 @@ fn hermesBackendConfig(
         .working_directory = working_directory,
         .model = entry.model,
     };
+}
+
+fn hermesRouteHome(arena: std.mem.Allocator, home: []const u8) ![]const u8 {
+    const base = try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "hermes" });
+    try compat.fs.createDir(compat.fs.getCwd(), base);
+    var random: [16]u8 = undefined;
+    compat.random.fillSecureBytes(&random);
+    const name = std.fmt.bytesToHex(random, .lower);
+    const directory = try std.fs.path.join(arena, &.{ base, &name });
+    try compat.fs.createPrivateDir(directory);
+    return directory;
 }
 
 const WindowsProfile = if (builtin.os.tag == .windows) struct {
