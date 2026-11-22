@@ -12,4 +12,7 @@ The hub opens a session and uses a local dsh fixture to inspect the
 forward a mixed text and inline PNG prompt with its base64 and MIME type
 intact. Pro and unknown model ids must omit image support and refuse an image
 before forwarding a subsequent text prompt. A URL-only image must be refused.
-Require one completed turn per case, clean hub exits and a final `PASS`.
+Adapter capabilities describe the configured route, with distinct revisions for
+the two descriptors. Switch the session in both directions before its first
+turn and check that the selected model governs admission. Require one completed
+turn per case, clean hub exits and a final `PASS`. Zig CI runs this journey.

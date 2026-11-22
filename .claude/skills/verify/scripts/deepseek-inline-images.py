@@ -18,18 +18,20 @@ IMAGE = {"type": "image", "image": {"data": PNG, "media_type": "image/png"}}
 ENCODED = {"type": "image", "data": PNG, "mimeType": "image/png"}
 
 
-def verify(binary, verb, root, model, supports_images):
+def verify(binary, verb, root, configured, model, advertises_images, supports_images):
     root.mkdir()
     (root / "home").mkdir()
     child = root / "child.sh"
-    child.write_text(FIXTURE.read_text().replace(
-        'case "$line" in *\'"model":"deepseek-chat"\'*) idle ;; esac\n', ""
-    ).replace("deepseek-chat", model))
+    idle = 'case "$line" in *\'"model":"deepseek-chat"\'*) idle ;; esac\n'
+    fixture = FIXTURE.read_text().replace(idle, "").replace("deepseek-chat", model)
+    if configured != model:
+        fixture = fixture.replace("\ntake\n", "\n" + idle.replace("deepseek-chat", configured) + "take\n", 1)
+    child.write_text(fixture)
     child.chmod(0o700)
     config = root / "hub.json"
     config.write_text(json.dumps({"adapters": {"deepseek": {
         "type": "deepseek", "executable": str(child), "working_directory": str(root),
-        "provider": "fixture-provider", "model": model, "environment": ["PATH"],
+        "provider": "fixture-provider", "model": configured, "environment": ["PATH"],
     }}}))
     hub = RESUME["Hub"]([binary, verb, "--stdio", "--config", str(config)], root, "hub")
 
@@ -44,19 +46,25 @@ def verify(binary, verb, root, model, supports_images):
         capabilities = hub.call("capabilities", adapter="deepseek")["result"]
         feature = capabilities["payload"]["features"].get("content.image")
         RESUME["opened"](hub, "s1")
+        if model != configured:
+            request = RESUME["envelope"]("session.model.switch.request", {"session_id": "s1", "model_id": model})
+            switched = hub.call("session.model.switch", session_id="s1", request=request)
+            assert switched["ok"] and switched["result"]["payload"]["model_id"] == model, switched
         assert hub.call("events", session_id="s1")["ok"]
         url = {"type": "image", "image": {"url": "https://example.invalid/pixel.png"}}
         assert not submit([url])["ok"], "URL-only image was accepted"
         reply = submit([TEXT, IMAGE])
         if supports_images:
             assert reply["ok"], f"{model} refused inline PNG: {reply}"
-            assert feature and feature["level"] == "native", feature
             expected = [TEXT, ENCODED]
         else:
-            assert not reply["ok"], f"{model} accepted an image: {reply}"
-            assert not feature or feature["level"] == "unavailable", feature
+            assert not reply["ok"] and reply["error"]["code"] == "unsupported_feature", reply
             assert submit("hello")["ok"], f"{model} refused text after rejecting an image"
             expected = [TEXT]
+        if advertises_images:
+            assert feature and feature["level"] == "native", feature
+        else:
+            assert not feature or feature["level"] == "unavailable", feature
         hub.completed("s1")
         hub.stop()
     finally:
@@ -66,10 +74,13 @@ def verify(binary, verb, root, model, supports_images):
             hub.errors.close()
 
     calls = [json.loads(line) for line in (root / "stdin.log").read_text().splitlines() if line.startswith("{")]
+    models = [call["params"]["model"] for call in calls if call["method"] == "initialize"]
+    assert models == ([configured, model] if model != configured else [model]), models
     prompts = [call["params"]["contentBlocks"] for call in calls if call["method"] == "session/prompt"]
     assert prompts == [expected], prompts
-    print(f"{model}: hub exit={hub.process.returncode}, 1 completed turn, 1 native prompt, "
-          f"image advertised and forwarded={supports_images}")
+    print(f"{configured} → {model}: hub exit={hub.process.returncode}, 1 completed turn, 1 native prompt, "
+          f"image advertised={advertises_images}, image forwarded={supports_images}")
+    return capabilities["capability_revision"]
 
 
 if __name__ == "__main__":
@@ -78,8 +89,14 @@ if __name__ == "__main__":
     parser.add_argument("--verb", choices=("hub", "serve"), default="serve")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="oxap-deepseek-images-") as temp:
-        cases = [(FLASH, True), ("deepseek-flash", True), ("deepseek-v4-flash-vision-exp", True),
-                 (PRO, False), ("deepseek-chat", False)]
-        for model, supports_images in cases:
-            verify(str(args.binary.resolve()), args.verb, Path(temp).resolve() / model, model, supports_images)
+        cases = [(FLASH, FLASH, True, True), ("deepseek-flash", "deepseek-flash", True, True),
+                 ("deepseek-v4-flash-vision-exp", "deepseek-v4-flash-vision-exp", True, True),
+                 (PRO, PRO, False, False), ("deepseek-chat", "deepseek-chat", False, False),
+                 (PRO, FLASH, False, True), (FLASH, PRO, True, False)]
+        revisions = {}
+        for i, (configured, model, advertised, supported) in enumerate(cases):
+            revision = verify(str(args.binary.resolve()), args.verb, Path(temp).resolve() / str(i),
+                              configured, model, advertised, supported)
+            assert revisions.setdefault(advertised, revision) == revision, revisions
+        assert revisions[True] != revisions[False], revisions
     print(f"PASS: {len(cases)} DeepSeek model routes")
