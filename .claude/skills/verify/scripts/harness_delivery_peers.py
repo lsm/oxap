@@ -196,8 +196,11 @@ def peer(kind):
                        "dt": [0] * (len(texts) - 1), "texts": texts}
                       for index, (part, texts) in enumerate(parts)]}, surfaceOp="append")
         event("tool/call", {**step, "callId": "call", "name": "read", "arguments": json.dumps(TOOL_ARGS)})
-        event("tool/result", {**step, "message": {"source": {"kind": "tool", "callId": "call"},
-              "content": [{"type": "text", "text": TOOL_RESULT["text"]}]}})
+        event("tool/result", {**step, "message": {
+            "id": "tool-result", "role": "tool", "toolCallId": "call", "isError": False,
+            "source": {"kind": "tool", "callId": "call"},
+            "content": [{"type": "text", "text": TOOL_RESULT["text"]}],
+        }}, surfaceOp="append")
         event("step/end", step)
         event("turn/end", {"reason": {"kind": "completed"}, "turn": 1})
         notify("session.status", sessionId=SESSION, status="idle")

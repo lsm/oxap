@@ -33,15 +33,18 @@ class Case:
 
 
 CASES = {
-    "acp": Case(tool="Read file", reasoning_gap="agent_thought_chunk"),
+    "acp": Case(tool="Read file", registries=("zig", "go", "rust"), reasoning_gap="agent_thought_chunk"),
     "claude": Case(tool="Read", stop="completed", result=TOOL_RESULT["text"]),
     "codex": Case(tool="codex.command", arguments={"command": "printf fixture", "cwd": "/"},
                   result={"command": "printf fixture", "cwd": "/", "exitCode": 0,
-                          "output": TOOL_RESULT["text"]}, reasoning_gap="item/reasoning/summaryTextDelta"),
-    "copilot": Case(registries=("go",), reasoning_gap="assistant.reasoning_delta"),
-    "deepseek": Case(stop="completed", result=[{"type": "text", **TOOL_RESULT}]),
+                          "output": TOOL_RESULT["text"]}, registries=("zig", "go", "rust"),
+                  reasoning_gap="item/reasoning/summaryTextDelta"),
+    "copilot": Case(registries=("go", "rust"), reasoning_gap="assistant.reasoning_delta"),
+    "deepseek": Case(stop="completed", result=[{"type": "text", **TOOL_RESULT}],
+                     registries=("zig", "go", "rust")),
     "hermes": Case(stop="completed"),
-    "memory": Case(tool="scripted_tool", arguments={"operation": "golden"}, result={"ok": True}),
+    "memory": Case(tool="scripted_tool", arguments={"operation": "golden"}, result={"ok": True},
+                   registries=("zig", "go", "rust")),
     "oapx": Case(tool="", registries=("zig",)),
     "opencode": Case(stop="stop", result=[{"type": "text", **TOOL_RESULT}]),
     "pi": Case(stop="stop"),
@@ -53,9 +56,12 @@ def check_registries():
     zig = zig.split("fn reported(", 1)[0]
     go = (ROOT / "go/serve/registry.go").read_text().split("func buildAdapter(", 1)[1]
     go = go.split("func claudeToolPosture(", 1)[0]
+    rust = (ROOT / "rust/serve/src/config.rs").read_text().split("match kind.as_str() {", 1)[1]
+    rust = rust.split("registry.register(&name, built)?;", 1)[0]
     for name, kinds in {
         "zig": re.findall(r'entry\.kind, "([a-z][a-z0-9_-]*)"\)', zig),
         "go": re.findall(r'^\s*case "([a-z][a-z0-9_-]*)":', go, re.M),
+        "rust": re.findall(r'^\s*"([a-z][a-z0-9_-]*)"\s*=>', rust, re.M),
     }.items():
         covered = {kind for kind, case in CASES.items() if name in case.registries}
         assert set(kinds) == covered, f"{name} registry: missing cases={set(kinds) - covered}, stale cases={covered - set(kinds)}"
@@ -350,7 +356,7 @@ def verify(kind, case, binary, slow, output, runtime, strict):
         env = {"HOME": str(root), "TMPDIR": str(root), "PATH": os.defpath, "NODE_ENV": "test",
                "OXAP_STATE_DIR": str(root / ".oxap"),
                "OXAP_KEYCHAIN_SERVICE": root.name}
-        command = [str(binary), "serve", "--stdio", "--config", str(config)]
+        command = [str(binary), "serve", "--stdio", f"--config={config}"]
         if runtime == "zig":
             command.append("--no-save-oapx-sessions")
         with (output / f"{label}.jsonl").open("wb") as evidence, (output / f"{label}.stderr").open("wb") as stderr:
@@ -374,26 +380,32 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--oxap", required=True, type=Path)
     parser.add_argument("--goap", required=True, type=Path)
+    parser.add_argument("--rust-hub", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--case", choices=CASES, action="append")
+    parser.add_argument("--runtime", choices=("zig", "go", "rust"), action="append")
     parser.add_argument("--strict-reasoning", action="store_true")
     args = parser.parse_args()
     check_registries()
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    failures = []
+    binaries = {"zig": args.oxap.resolve(), "go": args.goap.resolve(), "rust": args.rust_hub.resolve()}
+    failures = 0
     count = 0
     for kind in args.case or CASES:
         case = CASES[kind]
-        runtime = case.registries[0]
-        binary = (args.oxap if runtime == "zig" else args.goap).resolve()
-        for slow in (False, True) if kind == "deepseek" else (False,):
-            count += 1
-            try:
-                verify(kind, case, binary, slow, args.output_dir, runtime, args.strict_reasoning)
-            except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
-                failures.append(kind)
-                print(f"{kind} (slow={slow}): {error}", file=sys.stderr, flush=True)
-    print(f"journeys={count}, failures={len(failures)}")
+        for runtime in case.registries:
+            if args.runtime and runtime not in args.runtime:
+                continue
+            for slow in (False, True) if kind == "deepseek" else (False,):
+                count += 1
+                try:
+                    verify(kind, case, binaries[runtime], slow, args.output_dir, runtime, args.strict_reasoning)
+                except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
+                    failures += 1
+                    print(f"{runtime}-{kind} (slow={slow}): {error}", file=sys.stderr, flush=True)
+    if not count:
+        parser.error("no registered cases match the selected runtimes")
+    print(f"journeys={count}, failures={failures}")
     return bool(failures)
 
 
