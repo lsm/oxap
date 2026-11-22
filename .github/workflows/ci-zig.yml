@@ -466,6 +466,9 @@ jobs:
       - name: Verify Codex and DeepSeek custom endpoints
         run: python3 .claude/skills/verify/scripts/codex-deepseek-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
 
+      - name: Verify Hermes custom endpoint routing and key redaction
+        run: python3 .claude/skills/verify/scripts/hermes-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
+
       - name: Verify OpenCode, Pi, Copilot and Docker Agent custom endpoints
         run: |
           go build -o /tmp/oapx-hub/bin/goap ./go/cmd/goap
