@@ -16,7 +16,8 @@ SWITCH = "session.model.switch"
 
 def verify(binary, root):
     child = root / "child.sh"
-    child.write_text((FIXTURE / "child.sh").read_text().replace("deepseek-chat", PRO))
+    script = (FIXTURE / "child.sh").read_text().replace('"model":"deepseek-chat","provider"', f'"model":"{FLASH}","provider"')
+    child.write_text(script.replace("deepseek-chat", PRO))
     child.chmod(0o700)
     config = root / "hub.json"
     registry = json.loads((FIXTURE / "registry.json").read_text().replace("@DIR@", str(root)))

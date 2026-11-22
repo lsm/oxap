@@ -26,3 +26,16 @@ frames carrying `reasoningEffort: high`, one per model, and a `shutdown` to
 the first runtime only after the second has answered. A `--- PASS` line for
 the subtest is the result; a skip means `OAP_OAPX_BIN` was not set and proves
 nothing.
+
+The Zig stdio hub has a separate transport operation for a held session.
+Run this against the same built binary:
+
+```sh
+python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py "$EVIDENCE/oapx/bin/oxap"
+```
+
+The fixture opens a Pro session, switches it to Flash, and completes its
+first turn. The switch response, session state, and latest history binding
+must name Flash. The runtime must initialize first with Pro and then with
+Flash. A different model is refused after the turn. The fixture uses an
+isolated home and history file and no provider credentials.
