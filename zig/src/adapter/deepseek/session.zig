@@ -471,10 +471,14 @@ fn emitStreamRecords(reducer: *Reducer, records: std.json.Value) !void {
             const part: []const u8 = if (std.mem.eql(u8, kind, "text-chunks")) "text" else "reasoning";
             const texts = memberOf(record, "texts") orelse continue;
             if (texts != .array) continue;
+            var batch: std.ArrayList(u8) = .empty;
+            var has_text = false;
             for (texts.array.items) |text| {
                 if (text != .string) continue;
-                try emitDelta(reducer, part, text.string);
+                has_text = true;
+                try batch.appendSlice(reducer.arena, text.string);
             }
+            if (has_text) try emitDelta(reducer, part, batch.items);
             continue;
         }
         if (!std.mem.eql(u8, kind, "chunk")) continue;

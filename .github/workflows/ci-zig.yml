@@ -482,6 +482,11 @@ jobs:
           OAP_OAPX_BIN: /tmp/oapx-hub/bin/oxap
         run: go test ./go/cmd/goap/ -run 'TestHub(Stdio|Refuses|Addr)' -v
 
+      - name: Verify a batched DeepSeek reply reaches the stdio subscriber
+        run: |
+          python3 .claude/skills/verify/scripts/deepseek-batched-stream.py \
+            --binary /tmp/oapx-hub/bin/oxap --wire "$RUNNER_TEMP/deepseek-batched-stream.jsonl"
+
       - name: Require oapx serve to refuse what it does not carry
         run: |
           set -euo pipefail

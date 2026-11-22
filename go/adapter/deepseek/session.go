@@ -673,12 +673,12 @@ func (s *Session) emitStreamRecords(run *runState, records []native.AssistantStr
 	for _, record := range records {
 		switch record.Type {
 		case "text-chunks":
-			for _, text := range record.Texts {
-				s.emitDelta(run, protocol.ContentPart{Type: protocol.ContentText, Text: text})
+			if len(record.Texts) > 0 {
+				s.emitDelta(run, protocol.ContentPart{Type: protocol.ContentText, Text: strings.Join(record.Texts, "")})
 			}
 		case "reasoning-chunks":
-			for _, text := range record.Texts {
-				s.emitDelta(run, protocol.ContentPart{Type: protocol.ContentReasoning, Reasoning: text})
+			if len(record.Texts) > 0 {
+				s.emitDelta(run, protocol.ContentPart{Type: protocol.ContentReasoning, Reasoning: strings.Join(record.Texts, "")})
 			}
 		case "chunk":
 			if part, ok := chunkPart(record.Chunk); ok {

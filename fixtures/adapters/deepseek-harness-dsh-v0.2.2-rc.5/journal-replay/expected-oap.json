@@ -30,7 +30,7 @@
       "message_id": "message-b",
       "part": {
         "type": "text",
-        "text": "Hel"
+        "text": "Hello"
       }
     },
     "sequence": 2,
@@ -50,8 +50,8 @@
       "run_id": "run-c",
       "message_id": "message-b",
       "part": {
-        "type": "text",
-        "text": "lo"
+        "type": "reasoning",
+        "reasoning": "thinking"
       }
     },
     "sequence": 3,
@@ -64,29 +64,8 @@
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
-    "type": "content.delta",
-    "id": "event-g",
-    "payload": {
-      "session_id": "session",
-      "run_id": "run-c",
-      "message_id": "message-b",
-      "part": {
-        "type": "reasoning",
-        "reasoning": "thinking"
-      }
-    },
-    "sequence": 4,
-    "timestamp_ms": 6,
-    "session_id": "session",
-    "run_id": "run-c",
-    "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
-  },
-  {
-    "protocol": "open-agent-protocol",
-    "version": "0.1",
-    "profile": "open-agent-protocol.agent-control-core",
     "type": "run.completed",
-    "id": "event-h",
+    "id": "event-g",
     "payload": {
       "session_id": "session",
       "run_id": "run-c",
@@ -102,8 +81,8 @@
         "total_tokens": 3
       }
     },
-    "sequence": 5,
-    "timestamp_ms": 7,
+    "sequence": 4,
+    "timestamp_ms": 6,
     "session_id": "session",
     "run_id": "run-c",
     "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3"
