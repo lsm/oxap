@@ -11,6 +11,7 @@ pub const ModelEndpoint = struct {
     base_url: []const u8,
     credential_env: []const u8,
     bearer: bool,
+    wire: []const u8 = "",
 };
 
 pub const AdapterEntry = struct {
@@ -195,11 +196,23 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
         return reader.refuse("{s}: \"model_provider\" routes only claude, codex, and deepseek adapters; a {s} adapter has no provider setting oxap translates it into", .{ where, kind });
     }
     const args = try reader.strings(object, where, "args") orelse &.{};
+    const model = try reader.string(object, where, "model");
     const listed_environment = try reader.strings(object, where, "environment") orelse &.{};
     const model_endpoint = if (object.get("model_endpoint")) |raw|
         try readModelEndpoint(reader, where, kind, raw, model_provider, listed_environment, environ)
     else
         null;
+    if (model_endpoint != null) {
+        const pi = std.mem.eql(u8, kind, "pi");
+        if ((pi or std.mem.eql(u8, kind, "opencode")) and
+            (!std.mem.startsWith(u8, model, "oapx/") or model.len == "oapx/".len))
+            return reader.refuse("{s}: model_endpoint requires model oapx/<model-id>", .{where});
+        if (pi) for (args) |arg| {
+            const flag = arg[0 .. std.mem.indexOfScalar(u8, arg, '=') orelse arg.len];
+            if (std.mem.eql(u8, flag, "--model") or std.mem.eql(u8, flag, "--provider") or std.mem.eql(u8, flag, "--api-key"))
+                return reader.refuse("{s}: args pass {s}, which model_endpoint controls", .{ where, flag });
+        };
+    }
     const environment = try resolveEnvironment(reader, where, listed_environment, environ, false);
     const allowed_tools = try reader.strings(object, where, "allowed_tools");
     var agent_config_json: ?[]const u8 = null;
@@ -214,7 +227,7 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
         .environment = environment,
         .working_directory = nonEmpty(try reader.string(object, where, "working_directory")),
         .any_directory = try reader.flag(object, where, "any_directory"),
-        .model = try reader.string(object, where, "model"),
+        .model = model,
         .journal_capacity = try reader.integer(object, where, "journal_capacity"),
         .allowed_tools = allowed_tools,
         .unrestricted_tools = try reader.flag(object, where, "unrestricted_tools"),
@@ -242,10 +255,13 @@ fn readModelEndpoint(
 ) Error!ModelEndpoint {
     const claude = std.mem.eql(u8, kind, "claude");
     const codex = std.mem.eql(u8, kind, "codex");
-    if (!claude and !codex and !std.mem.eql(u8, kind, "deepseek"))
-        return reader.refuse("{s}: \"model_endpoint\" routes only claude, codex, and deepseek adapters; a {s} adapter has no custom endpoint translation", .{ where, kind });
-    const wire = if (codex) "openai-responses" else "anthropic-messages";
-    const destinations: []const []const u8 = if (claude) &claude_endpoint_variables else if (codex) &.{codex_endpoint_variable} else &deepseek_endpoint_variables;
+    const pi = std.mem.eql(u8, kind, "pi");
+    const opencode = std.mem.eql(u8, kind, "opencode");
+    if (!claude and !codex and !pi and !opencode and !std.mem.eql(u8, kind, "deepseek"))
+        return reader.refuse("{s}: \"model_endpoint\" routes only claude, codex, deepseek, opencode, and pi adapters; a {s} adapter has no custom endpoint translation", .{ where, kind });
+    const fixed_wire = if (codex) "openai-responses" else "anthropic-messages";
+    const destinations: []const []const u8 =
+        if (pi) &.{pi_endpoint_variable} else if (opencode) &opencode_endpoint_variables else if (claude) &claude_endpoint_variables else if (codex) &.{codex_endpoint_variable} else &deepseek_endpoint_variables;
     if (provider.len > 0)
         return reader.refuse("{s}: \"model_provider\" and \"model_endpoint\" name two providers", .{where});
     const object = try reader.members(raw, where, &.{ "base_url", "credential_env", "wire", "auth" }) orelse
@@ -253,8 +269,12 @@ fn readModelEndpoint(
     const base_url = try reader.string(object, where, "base_url");
     if (!validModelEndpointUrl(base_url))
         return reader.refuse("{s}: model_endpoint base_url must be an absolute HTTPS URL or loopback HTTP URL without userinfo, query, or fragment", .{where});
-    if (object.contains("wire") and !std.mem.eql(u8, try reader.string(object, where, "wire"), wire))
-        return reader.refuse("{s}: {s} model_endpoint requires the {s} wire", .{ where, kind, wire });
+    const wire = try reader.string(object, where, "wire");
+    if (pi or opencode) {
+        if (!std.mem.eql(u8, wire, "anthropic-messages") and !std.mem.eql(u8, wire, "openai-completions") and !std.mem.eql(u8, wire, "openai-responses"))
+            return reader.refuse("{s}: model_endpoint wire must be anthropic-messages, openai-completions, or openai-responses", .{where});
+    } else if (object.contains("wire") and !std.mem.eql(u8, wire, fixed_wire))
+        return reader.refuse("{s}: {s} model_endpoint requires the {s} wire", .{ where, kind, fixed_wire });
     if (object.contains("auth") and !claude)
         return reader.refuse("{s}: model_endpoint auth is only supported on claude adapters", .{where});
     const auth = try reader.string(object, where, "auth");
@@ -264,9 +284,23 @@ fn readModelEndpoint(
     const variable = try reader.string(object, where, "credential_env");
     if (variable.len == 0)
         return reader.refuse("{s}: model_endpoint credential_env must name a variable", .{where});
+    const env_names = std.process.Environ.Map.EnvNameHashContext{};
+    if (pi or opencode) {
+        if (pi and !std.ascii.isAlphabetic(variable[0]) and variable[0] != '_')
+            return reader.refuse("{s}: model_endpoint credential_env must be an interpolatable variable name", .{where});
+        for (variable) |byte| {
+            if (!std.ascii.isAlphanumeric(byte) and byte != '_')
+                return reader.refuse("{s}: model_endpoint credential_env must be an interpolatable variable name", .{where});
+        }
+        for (destinations) |destination| {
+            if (env_names.eql(variable, destination, 0))
+                return reader.refuse("{s}: model_endpoint credential_env conflicts with {s}", .{ where, destination });
+        }
+        if (opencode and env_names.eql(variable, "OPENCODE_PASSWORD", 0))
+            return reader.refuse("{s}: model_endpoint credential_env conflicts with OPENCODE_PASSWORD", .{where});
+    }
     for (environment) |item| {
         const name = item[0 .. std.mem.indexOfScalar(u8, item, '=') orelse item.len];
-        const env_names = std.process.Environ.Map.EnvNameHashContext{};
         if (env_names.eql(name, variable, 0))
             return reader.refuse("{s}: \"environment\" names {s}, which model_endpoint controls", .{ where, name });
         for (destinations) |destination| {
@@ -280,12 +314,14 @@ fn readModelEndpoint(
     const minimum_key_bytes = 16;
     if (key.len < minimum_key_bytes)
         return reader.refuse("{s}: model_endpoint credential variable {s} must contain at least {d} bytes for redaction", .{ where, variable, minimum_key_bytes });
-    return .{ .base_url = base_url, .credential_env = variable, .bearer = bearer };
+    return .{ .base_url = base_url, .credential_env = variable, .bearer = bearer, .wire = wire };
 }
 
 pub const claude_endpoint_variables = [_][]const u8{ "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN" };
 pub const codex_endpoint_variable = "OAPX_PROVIDER_API_KEY";
 pub const deepseek_endpoint_variables = [_][]const u8{ "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY" };
+pub const opencode_endpoint_variables = [_][]const u8{ "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT" };
+pub const pi_endpoint_variable = "PI_CODING_AGENT_DIR";
 
 fn validModelEndpointUrl(url: []const u8) bool {
     for (url, 0..) |byte, i| {

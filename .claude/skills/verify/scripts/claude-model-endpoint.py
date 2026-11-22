@@ -188,7 +188,7 @@ def verify(binary, root, endpoint, key, auth):
         ({"environment": [VARIABLE]}, VARIABLE),
         ({"environment": ["ANTHROPIC_AUTH_TOKEN="]}, "ANTHROPIC_AUTH_TOKEN"),
         ({"environment": ["ANTHROPIC_API_KEY"]}, "ANTHROPIC_API_KEY"),
-        ({"type": "memory"}, "routes only claude, codex, and deepseek"),
+        ({"type": "memory"}, "routes only claude, codex, deepseek, opencode, and pi"),
         ({"model_endpoint": None}, "must be an object"),
         ({"model_endpoint": {**route, "wire": "openai-responses"}}, "anthropic-messages"),
         ({"model_endpoint": {**route, "base_url": endpoint + "?"}}, "base_url"),
