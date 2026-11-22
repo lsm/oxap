@@ -817,6 +817,12 @@ fn runHub(
             return error.BackendRefused;
         };
     }
+    for (file.adapters) |entry| {
+        if (entry.model_endpoint) |endpoint| {
+            const value = environ.get(endpoint.credential_env).?;
+            try redactions.keys.append(arena, .{ .variable = endpoint.credential_env, .value = value });
+        }
+    }
     const tool_sources = try hubConfiguredSources(arena, file.tool_sources);
     var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = surface, .configured_sources = tool_sources };
     defer registry.deinit();
@@ -5371,10 +5377,15 @@ fn backendEntry(
         return error.BackendRefused;
     };
     sources.* = file.tool_sources;
-    return file.adapter(name) orelse {
+    const entry = file.adapter(name) orelse {
         try surface.refuse("--config {s} names no adapter \"{s}\"", .{ path, name });
         return error.BackendRefused;
     };
+    if (entry.model_endpoint != null) {
+        try surface.refuse("{s} \"{s}\" uses model_endpoint, which requires the hub", .{ surface.noun, entry.name });
+        return error.BackendRefused;
+    }
+    return entry;
 }
 
 fn claudeBackendConfig(
@@ -5394,7 +5405,11 @@ fn claudeBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; name one with \"executable\" in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
-    const environment = if (entry.model_provider.len > 0)
+    const custom = entry.model_endpoint;
+    const key = if (custom) |endpoint| environ.get(endpoint.credential_env).? else "";
+    const environment = if (custom) |endpoint|
+        try claudeRouteEnvironment(arena, entry.environment, endpoint.base_url, if (endpoint.bearer) "ANTHROPIC_AUTH_TOKEN" else "ANTHROPIC_API_KEY", key)
+    else if (entry.model_provider.len > 0)
         try routedClaudeEnvironment(surface, arena, entry, environ, routeStorage)
     else
         entry.environment;
@@ -5402,6 +5417,7 @@ fn claudeBackendConfig(
         .executable = executable,
         .args = entry.args,
         .environment = environment,
+        .stderr_redaction = if (custom) |endpoint| .{ .value = key, .variable = endpoint.credential_env } else null,
         .working_directory = entry.working_directory,
         .model = entry.model,
         .tools = switch (posture) {
@@ -5410,8 +5426,6 @@ fn claudeBackendConfig(
         },
     } };
 }
-
-const claude_routed_variables = [_][]const u8{ "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN" };
 
 const RouteStorage = *const fn (std.mem.Allocator) ?oauth_storage.AuthStorage;
 
@@ -5481,16 +5495,20 @@ fn routedClaudeEnvironment(
         try surface.refuse("{s} \"{s}\" names model_provider \"{s}\", which serves no anthropic-messages endpoint, the only wire Claude Code's provider settings reach", .{ surface.noun, entry.name, id });
         return error.BackendRefused;
     };
-    try refuseRoutedVariables(surface, entry, &claude_routed_variables);
+    try refuseRoutedVariables(surface, entry, &adapter_config.claude_endpoint_variables);
     const credential = try routedCredential(surface, arena, entry, row, environ, load_storage);
 
     const variable = if (std.mem.eql(u8, credential.name, "ANTHROPIC_AUTH_TOKEN")) "ANTHROPIC_AUTH_TOKEN" else "ANTHROPIC_API_KEY";
     const trimmed = std.mem.trimEnd(u8, base, "/");
     const endpoint = if (provider_catalog.endpointCarriesVersion(id, base) and std.mem.endsWith(u8, trimmed, "/v1")) trimmed[0 .. trimmed.len - "/v1".len] else trimmed;
-    const environment = try arena.alloc([]const u8, entry.environment.len + 2);
-    @memcpy(environment[0..entry.environment.len], entry.environment);
-    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "ANTHROPIC_BASE_URL={s}", .{endpoint});
-    environment[entry.environment.len + 1] = try std.fmt.allocPrint(arena, "{s}={s}", .{ variable, credential.key });
+    return claudeRouteEnvironment(arena, entry.environment, endpoint, variable, credential.key);
+}
+
+fn claudeRouteEnvironment(arena: std.mem.Allocator, inherited: []const []const u8, endpoint: []const u8, variable: []const u8, key: []const u8) ![]const []const u8 {
+    const environment = try arena.alloc([]const u8, inherited.len + 2);
+    @memcpy(environment[0..inherited.len], inherited);
+    environment[inherited.len] = try std.fmt.allocPrint(arena, "ANTHROPIC_BASE_URL={s}", .{endpoint});
+    environment[inherited.len + 1] = try std.fmt.allocPrint(arena, "{s}={s}", .{ variable, key });
     return environment;
 }
 

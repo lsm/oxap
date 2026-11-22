@@ -7,6 +7,12 @@ pub const Diagnostic = struct {
     message: []const u8 = "",
 };
 
+pub const ModelEndpoint = struct {
+    base_url: []const u8,
+    credential_env: []const u8,
+    bearer: bool,
+};
+
 pub const AdapterEntry = struct {
     name: []const u8,
     kind: []const u8,
@@ -28,6 +34,7 @@ pub const AdapterEntry = struct {
     endpoint: []const u8 = "",
     agent: []const u8 = "",
     model_provider: []const u8 = "",
+    model_endpoint: ?ModelEndpoint = null,
 };
 
 pub const ToolSource = struct {
@@ -65,7 +72,7 @@ const adapter_members = [_][]const u8{
     "working_directory",  "model",           "journal_capacity", "allowed_tools",
     "unrestricted_tools", "approval_policy", "sandbox",          "provider",
     "max_tokens",         "agent_config",    "system_prompt",    "endpoint",
-    "agent",              "any_directory",   "model_provider",
+    "agent",              "any_directory",   "model_provider",   "model_endpoint",
 };
 const source_members = [_][]const u8{ "kind", "display_name", "protocol", "endpoint", "command", "args", "environment", "headers", "auth" };
 const source_kinds = [_][]const u8{ "native", "local", "process", "remote", "hosted" };
@@ -189,6 +196,10 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
     }
     const args = try reader.strings(object, where, "args") orelse &.{};
     const listed_environment = try reader.strings(object, where, "environment") orelse &.{};
+    const model_endpoint = if (object.get("model_endpoint")) |raw|
+        try readModelEndpoint(reader, where, kind, raw, model_provider, listed_environment, environ)
+    else
+        null;
     const environment = try resolveEnvironment(reader, where, listed_environment, environ, false);
     const allowed_tools = try reader.strings(object, where, "allowed_tools");
     var agent_config_json: ?[]const u8 = null;
@@ -216,7 +227,75 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
         .endpoint = try reader.string(object, where, "endpoint"),
         .agent = try reader.string(object, where, "agent"),
         .model_provider = model_provider,
+        .model_endpoint = model_endpoint,
     };
+}
+
+fn readModelEndpoint(
+    reader: Reader,
+    where: []const u8,
+    kind: []const u8,
+    raw: std.json.Value,
+    provider: []const u8,
+    environment: []const []const u8,
+    environ: *const std.process.Environ.Map,
+) Error!ModelEndpoint {
+    if (!std.mem.eql(u8, kind, "claude"))
+        return reader.refuse("{s}: \"model_endpoint\" routes only claude adapters; a {s} adapter has no custom endpoint translation", .{ where, kind });
+    if (provider.len > 0)
+        return reader.refuse("{s}: \"model_provider\" and \"model_endpoint\" name two providers", .{where});
+    const object = try reader.members(raw, where, &.{ "base_url", "credential_env", "wire", "auth" }) orelse
+        return reader.refuse("{s}: \"model_endpoint\" must be an object", .{where});
+    const base_url = try reader.string(object, where, "base_url");
+    if (!validModelEndpointUrl(base_url))
+        return reader.refuse("{s}: model_endpoint base_url must be an absolute HTTPS URL or loopback HTTP URL without userinfo, query, or fragment", .{where});
+    if (object.contains("wire") and !std.mem.eql(u8, try reader.string(object, where, "wire"), "anthropic-messages"))
+        return reader.refuse("{s}: Claude model_endpoint requires the anthropic-messages wire", .{where});
+    const auth = try reader.string(object, where, "auth");
+    const bearer = std.mem.eql(u8, auth, "bearer");
+    if (object.contains("auth") and !bearer and !std.mem.eql(u8, auth, "api-key"))
+        return reader.refuse("{s}: model_endpoint auth must be api-key or bearer", .{where});
+    const variable = try reader.string(object, where, "credential_env");
+    if (variable.len == 0)
+        return reader.refuse("{s}: model_endpoint credential_env must name a variable", .{where});
+    for (environment) |item| {
+        const name = item[0 .. std.mem.indexOfScalar(u8, item, '=') orelse item.len];
+        if (std.mem.eql(u8, name, variable) or listed(&claude_endpoint_variables, name))
+            return reader.refuse("{s}: \"environment\" names {s}, which model_endpoint controls", .{ where, name });
+    }
+    const key: []const u8 = environ.get(variable) orelse "";
+    if (key.len == 0)
+        return reader.refuse("{s}: model_endpoint credential variable {s} is unset or empty", .{ where, variable });
+    return .{ .base_url = base_url, .credential_env = variable, .bearer = bearer };
+}
+
+pub const claude_endpoint_variables = [_][]const u8{ "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN" };
+
+fn validModelEndpointUrl(url: []const u8) bool {
+    for (url, 0..) |byte, i| {
+        if (byte <= ' ' or byte >= 127 or std.mem.indexOfScalar(u8, "\\<>\"{}|^`", byte) != null) return false;
+        if (byte == '%' and (url.len - i < 3 or !std.ascii.isHex(url[i + 1]) or !std.ascii.isHex(url[i + 2]))) return false;
+    }
+    const uri = std.Uri.parse(url) catch return false;
+    if (uri.user != null or uri.password != null or uri.query != null or uri.fragment != null) return false;
+    const host = (uri.host orelse return false).percent_encoded;
+    const after_host = url[uri.scheme.len + "://".len + host.len ..];
+    const port = after_host[0 .. std.mem.indexOfScalar(u8, after_host, '/') orelse after_host.len];
+    if (port.len > 0) {
+        if (port[0] != ':' or port.len == 1) return false;
+        for (port[1..]) |digit| if (!std.ascii.isDigit(digit)) return false;
+    }
+    if (std.mem.startsWith(u8, host, "[") and std.mem.endsWith(u8, host, "]")) {
+        const ip = std.Io.net.IpAddress.parseIp6(host[1 .. host.len - 1], 0) catch return false;
+        return std.ascii.eqlIgnoreCase(uri.scheme, "https") or
+            (std.ascii.eqlIgnoreCase(uri.scheme, "http") and std.mem.eql(u8, &ip.ip6.bytes, &std.Io.net.Ip6Address.loopback(0).bytes));
+    }
+    _ = std.Io.net.HostName.init(host) catch return false;
+    if (std.ascii.eqlIgnoreCase(uri.scheme, "https")) return true;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "http")) return false;
+    if (std.ascii.eqlIgnoreCase(host, "localhost") or std.ascii.eqlIgnoreCase(host, "localhost.")) return true;
+    const ip = std.Io.net.IpAddress.parseIp4(host, 0) catch return false;
+    return ip.ip4.bytes[0] == 127;
 }
 
 fn readToolSource(reader: Reader, id: []const u8, value: std.json.Value, environ: *const std.process.Environ.Map) Error!ToolSource {

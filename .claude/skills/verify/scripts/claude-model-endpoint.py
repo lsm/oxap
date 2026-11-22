@@ -80,6 +80,55 @@ def exchange(process, messages, last):
             return b"".join(lines)
 
 
+def verify_http(command, environment, opening, submit, key):
+    command = [item if item != "--stdio" else "--addr=127.0.0.1:0" for item in command]
+    with tempfile.TemporaryFile() as stderr, subprocess.Popen(
+        command, env=environment, stdout=subprocess.PIPE, stderr=stderr, stdin=subprocess.DEVNULL, bufsize=0,
+    ) as hub:
+        try:
+            assert select.select([hub.stdout], [], [], 10)[0], "HTTP hub did not announce its address"
+            ready = hub.stdout.readline().decode().strip()
+            assert ready.startswith("listening on http://127.0.0.1:"), "HTTP hub did not bind"
+            base = ready.removeprefix("listening on ")
+
+            def request(path, payload=None):
+                data = json.dumps(payload).encode() if payload is not None else None
+                return urllib.request.urlopen(urllib.request.Request(
+                    base + path, data=data, headers={"Content-Type": "application/json"}), timeout=10)
+
+            with request("/adapters/routed/sessions", opening) as response:
+                assert json.load(response)["type"] == "session.open.response"
+            observed = b""
+            with request("/sessions/s1/events") as stream:
+                for index, terminal in enumerate(("run.completed", "run.failed"), 4):
+                    submit["id"] = f"submit-{index}"
+                    with request("/sessions/s1/submit", submit) as response:
+                        assert json.load(response)["type"] == "session.message.submit.response"
+                    for _ in range(50):
+                        line = stream.readline()
+                        assert line, "HTTP event stream ended before the terminal event"
+                        if line.startswith(b"data: "):
+                            observed += line
+                            if json.loads(line.removeprefix(b"data: ")).get("type") == terminal:
+                                break
+                    else:
+                        raise AssertionError("HTTP event stream missed the terminal event")
+            assert key.encode() not in observed, "sentinel escaped into HTTP events"
+            assert f"native output: {VARIABLE}".encode() in observed, "HTTP output lacks the replacement"
+            assert f"native failure: {VARIABLE}".encode() in observed, "HTTP failure lacks the replacement"
+            hub.terminate()
+            assert hub.wait(timeout=10) == 0, f"HTTP hub exit={hub.returncode}"
+        finally:
+            if hub.poll() is None:
+                hub.kill()
+                hub.wait(timeout=10)
+        stderr.seek(0)
+        logs = stderr.read()
+        assert key.encode() not in logs, "sentinel escaped into HTTP hub logs"
+        assert f"native stderr: {VARIABLE}".encode() in logs, "HTTP hub logs lack the replacement"
+        print(f"HTTP: hub exit={hub.returncode}, one completed turn, one failed turn, three redacted surfaces")
+
+
 def verify(binary, root, endpoint, key, auth):
     route = {"base_url": endpoint, "credential_env": VARIABLE}
     if auth != "api-key":
@@ -101,7 +150,6 @@ def verify(binary, root, endpoint, key, auth):
     fixture = ROOT / "go/cmd/goap/testdata/parity/claude/scenario.jsonl"
     frames = [json.loads(line) for line in fixture.read_text().splitlines()]
     opening = frames[2]
-    opening["payload"]["subscribe"] = True
     submit = frames[4]
     with tempfile.TemporaryFile() as stderr, subprocess.Popen(
         command, env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, bufsize=0,
@@ -109,8 +157,12 @@ def verify(binary, root, endpoint, key, auth):
         try:
             observed = exchange(hub, [{"id": 1, "op": "open", "adapter": "routed", "request": opening}],
                                 lambda line: line.get("id") == 1)
-            assert b"session.open.response" in observed, "routed session did not open"
-            for index, terminal in enumerate((b"run.completed", b"run.failed"), 2):
+            if b"session.open.response" not in observed:
+                raise AssertionError(observed.replace(key.encode(), VARIABLE.encode()).decode())
+            observed += exchange(hub, [{"id": 2, "op": "events", "session_id": "s1"}],
+                                 lambda line: line.get("id") == 2)
+            assert b'"error"' not in observed, "hub refused the event subscription"
+            for index, terminal in enumerate((b"run.completed", b"run.failed"), 3):
                 submit["id"] = f"submit-{index}"
                 observed += exchange(hub, [{"id": index, "op": "submit", "session_id": "s1", "request": submit}],
                                      lambda line: terminal in json.dumps(line).encode())
@@ -128,12 +180,23 @@ def verify(binary, root, endpoint, key, auth):
         assert f"native stderr: {VARIABLE}".encode() in logs, "stderr lacks the replacement"
         print(f"{auth}: hub exit={hub.returncode}, one completed turn, one failed turn, three redacted surfaces")
 
+    if auth == "bearer":
+        verify_http(command, environment, opening, submit, key)
+
     refused = [
         ({"model_provider": "anthropic"}, "model_provider"),
         ({"environment": [VARIABLE]}, VARIABLE),
         ({"environment": ["ANTHROPIC_AUTH_TOKEN="]}, "ANTHROPIC_AUTH_TOKEN"),
+        ({"environment": ["ANTHROPIC_API_KEY"]}, "ANTHROPIC_API_KEY"),
+        ({"type": "memory"}, "routes only claude"),
+        ({"model_endpoint": None}, "must be an object"),
         ({"model_endpoint": {**route, "wire": "openai-responses"}}, "anthropic-messages"),
         ({"model_endpoint": {**route, "base_url": endpoint + "?"}}, "base_url"),
+        ({"model_endpoint": {**route, "base_url": endpoint + "#"}}, "base_url"),
+        ({"model_endpoint": {**route, "base_url": "https://user@localhost"}}, "base_url"),
+        ({"model_endpoint": {**route, "base_url": "/gateway"}}, "base_url"),
+        ({"model_endpoint": {**route, "base_url": endpoint + "%zz"}}, "base_url"),
+        ({"model_endpoint": {**route, "base_url": "http://[::1]suffix"}}, "base_url"),
         ({"model_endpoint": {**route, "base_url": "http://192.0.2.1"}}, "base_url"),
         ({"model_endpoint": {**route, "credential_env": "ABSENT"}}, "ABSENT"),
         ({"model_endpoint": {**route, "auth": "invalid"}}, "auth"),
@@ -172,6 +235,7 @@ def main():
             worker.join()
         assert server.observed == [
             ("/gateway/messages", key, None),
+            ("/gateway/messages", None, "Bearer " + key),
             ("/gateway/messages", None, "Bearer " + key),
         ], "stub upstream saw the wrong path or authentication scheme"
         print(f"PASS: stub upstream observed {len(server.observed)} requests with the expected auth schemes")
