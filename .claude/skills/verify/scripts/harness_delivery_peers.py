@@ -73,7 +73,8 @@ def peer(kind):
         rpc(request("turn/start"), turn=turn)
         fields = {"threadId": SESSION, "turnId": turn["id"]}
         notify("turn/started", threadId=SESSION, turn=turn)
-        notify("item/reasoning/summaryTextDelta", itemId="thought", summaryIndex=0, delta=THOUGHT, **fields)
+        for delta in (THOUGHT[:6], THOUGHT[6:]):
+            notify("item/reasoning/summaryTextDelta", itemId="thought", summaryIndex=0, delta=delta, **fields)
         for text in (REPLY[:5], REPLY[5:]):
             notify("item/agentMessage/delta", itemId="message", delta=text, **fields)
         notify("item/completed", item={"type": "agentMessage", "id": "message", "text": REPLY}, **fields)
