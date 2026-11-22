@@ -73,3 +73,17 @@ cargo build --locked --manifest-path rust/Cargo.toml -p oxap-adapter-hermes --ex
   exit "$status"
 )
 ```
+
+For prompt projection, build the same example and run it against the pinned
+streaming-provenance frames over stdio:
+
+```sh
+cargo build --locked --manifest-path rust/Cargo.toml -p oxap-adapter-hermes --example gateway_session
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session"
+```
+
+Expect one started prompt, three deltas, one completion matching the corpus
+text and usage, and one clean shutdown. This uses a credential-free replay
+gateway. The targeted gateway session test also covers invalid usage, failed
+and interrupted turns, and a child mirror on the parent stream.
