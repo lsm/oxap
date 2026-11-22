@@ -10,9 +10,9 @@ use oxap_adapter_hermes::GatewaySession;
 const READY: &str = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"skin":{"name":"default"},"change_events":true,"replay_epoch":"0123456789abcdef0123456789abcdef"}}}"#;
 const INFO: &str = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"session.info","session_id":"running","seq":1,"payload":{"model":"example"}}}"#;
 const CREATED: &str = r#"{"jsonrpc":"2.0","id":1,"result":{"session_id":"running","stored_session_id":"saved","extra":true}}"#;
-const EMPTY_CREATE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"session.create","params":{}}"#;
-const CREATE_WITH_REASONING: &str = r#"{"jsonrpc":"2.0","id":1,"method":"session.create","params":{"model":"example","reasoning_effort":"none"}}"#;
-const SET_REASONING: &str = r#"{"jsonrpc":"2.0","id":2,"method":"config.set","params":{"session_id":"running","key":"reasoning","value":"none"}}"#;
+const EMPTY_CREATE: &str = r#"{"id":1,"jsonrpc":"2.0","method":"session.create","params":{}}"#;
+const CREATE_WITH_REASONING: &str = r#"{"id":1,"jsonrpc":"2.0","method":"session.create","params":{"model":"example","reasoning_effort":"none"}}"#;
+const SET_REASONING: &str = r#"{"id":2,"jsonrpc":"2.0","method":"config.set","params":{"session_id":"running","key":"reasoning","value":"none"}}"#;
 
 fn gateway(create: &str, replies: &str, subsequent: &str) -> ProcessConfig {
     ProcessConfig {
@@ -38,7 +38,7 @@ fn open(config: &ProcessConfig, model: &str, reasoning: &str) -> Result<GatewayS
     GatewaySession::create(
         config,
         model,
-        reasoning,
+        &reasoning.into(),
         Some(Instant::now() + Duration::from_secs(5)),
     )
 }

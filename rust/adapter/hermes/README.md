@@ -4,7 +4,12 @@ The Rust port of `go/adapter/hermes`: an OAP adapter over the Hermes TUI
 gateway's JSON-RPC on stdio, pinned by `harnesses/hermes.json` and judged by
 the corpus in `fixtures/adapters/hermes-v0.23.3`.
 
-So far it holds the gateway's event envelope, the payloads of its run events,
+On Unix, `GatewaySession::create` starts the gateway, creates a native
+session, and keeps its runtime and stored identities. A requested reasoning
+level is passed to creation and checked by a session-scoped `config.set`.
+The session relays observations in order, including those sent during startup.
+
+The wire layer holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's
 `DecodeServerRequest` and `RequestSessionID`, and `rpc::DIALECT`, the
 gateway's JSON-RPC over `oxap_adapter::jsonrpc`: strict framing, params only as
