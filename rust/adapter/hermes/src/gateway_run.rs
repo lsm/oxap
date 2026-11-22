@@ -9,6 +9,7 @@ use oxap_protocol::{
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 
+use crate::gateway_session::ObservationError;
 use crate::native::{
     decode_strict, InterruptResult, ToolCompletePayload, ToolStartPayload, EVENT_TOOL_COMPLETE,
     EVENT_TOOL_START,
@@ -104,7 +105,17 @@ impl GatewayRun<'_> {
             if self.terminal.is_some() {
                 return Ok(None);
             }
-            let event = match self.session.next_prompt_observation(deadline)? {
+            let observation = match self.session.next_prompt_observation_result(deadline) {
+                Ok(observation) => observation,
+                Err(ObservationError::Transport(reason)) => {
+                    let event =
+                        self.fail(protocol_error("hermes_process_exit", &reason), "inferred")?;
+                    self.pending.push_back(event);
+                    continue;
+                }
+                Err(ObservationError::Other(error)) => return Err(error),
+            };
+            let event = match observation {
                 PromptObservation::Delta(part) => self.emit(
                     EnvelopeType::CONTENT_DELTA,
                     &ContentDeltaPayload {
@@ -135,7 +146,7 @@ impl GatewayRun<'_> {
                     self.terminal = Some(RunStatus::COMPLETED);
                     event
                 }
-                PromptObservation::Failed(error) => self.fail(error)?,
+                PromptObservation::Failed(error) => self.fail(error, "")?,
                 PromptObservation::Other(Observation::Event(event)) => {
                     let failure = match event.kind.as_str() {
                         EVENT_TOOL_START => self.start_tool(
@@ -147,7 +158,8 @@ impl GatewayRun<'_> {
                         _ => return Ok(Some(RunObservation::Other(Observation::Event(event)))),
                     };
                     if let Some(message) = failure {
-                        let event = self.fail(protocol_error("hermes_tool_lifecycle", message))?;
+                        let event =
+                            self.fail(protocol_error("hermes_tool_lifecycle", message), "")?;
                         self.pending.push_back(event);
                     }
                     continue;
@@ -233,7 +245,7 @@ impl GatewayRun<'_> {
         Ok(())
     }
 
-    fn fail(&mut self, error: ProtocolError) -> Result<Envelope, Error> {
+    fn fail(&mut self, error: ProtocolError, settled_by: &str) -> Result<Envelope, Error> {
         self.settle_tools()?;
         let event = self.emit(
             EnvelopeType::RUN_FAILED,
@@ -241,6 +253,7 @@ impl GatewayRun<'_> {
                 session_id: self.session_id.clone(),
                 run_id: self.run_id.clone(),
                 error,
+                settled_by: settled_by.to_owned(),
                 ..RunFailedPayload::default()
             },
         )?;

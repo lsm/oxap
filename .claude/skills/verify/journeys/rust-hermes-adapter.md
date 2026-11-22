@@ -111,3 +111,17 @@ envelopes link requests, starts and completions across two tools. The
 targeted gateway session suite also checks that duplicate starts and
 unmatched completions fail the run and that unfinished tools fail before
 run settlement.
+
+Replay a malformed frame and a gateway that closes stdout after emitting a delta:
+
+```sh
+for case in malformed-frame process-exit; do
+  python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+    "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run "$case" || exit $?
+done
+```
+
+Expect three matched envelopes and one clean shutdown per case. The last
+envelope is an inferred `run.failed` with `hermes_process_exit` and the
+transport diagnostic. The process-exit fixture supplies a synthetic error
+message. The replay expects `EOF`, the diagnostic from the real stdio closure.

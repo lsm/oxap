@@ -3,6 +3,7 @@ use std::time::Instant;
 use oxap_adapter::Error;
 use oxap_protocol::{ContentPart, ContentPartType, ProtocolError, Usage};
 
+use crate::gateway_session::ObservationError;
 use crate::native::{
     decode_strict, DeltaPayload, MessageCompletePayload, Usage as NativeUsage,
     EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_DELTA, EVENT_MESSAGE_START, EVENT_REASONING_DELTA,
@@ -22,8 +23,16 @@ impl GatewaySession {
         &mut self,
         deadline: Option<Instant>,
     ) -> Result<PromptObservation, Error> {
+        self.next_prompt_observation_result(deadline)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn next_prompt_observation_result(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<PromptObservation, ObservationError> {
         loop {
-            let observation = self.next_observation(deadline)?;
+            let observation = self.next_observation_result(deadline)?;
             let Observation::Event(event) = &observation else {
                 return Ok(PromptObservation::Other(observation));
             };

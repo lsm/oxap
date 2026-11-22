@@ -68,6 +68,26 @@ pub enum Observation {
     Request(Arc<IncomingRequest>),
 }
 
+pub(crate) enum ObservationError {
+    Transport(String),
+    Other(Error),
+}
+
+impl From<Error> for ObservationError {
+    fn from(error: Error) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<ObservationError> for Error {
+    fn from(error: ObservationError) -> Self {
+        match error {
+            ObservationError::Transport(reason) => Self::harness(reason),
+            ObservationError::Other(error) => error,
+        }
+    }
+}
+
 pub struct GatewaySession {
     _stop_relay: Sender<()>,
     process: Process,
@@ -156,8 +176,15 @@ impl GatewaySession {
     }
 
     pub fn next_observation(&mut self, deadline: Option<Instant>) -> Result<Observation, Error> {
+        self.next_observation_result(deadline).map_err(Into::into)
+    }
+
+    pub(crate) fn next_observation_result(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<Observation, ObservationError> {
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(observation_timeout());
+            return Err(observation_timeout().into());
         }
         if let Some(observation) = self.buffered_observations.pop_front() {
             return Ok(observation);
@@ -165,9 +192,12 @@ impl GatewaySession {
         self.read_observation(deadline)
     }
 
-    fn read_observation(&mut self, deadline: Option<Instant>) -> Result<Observation, Error> {
+    fn read_observation(
+        &mut self,
+        deadline: Option<Instant>,
+    ) -> Result<Observation, ObservationError> {
         if let Some(error) = &self.observation_error {
-            return Err(error.clone());
+            return Err(error.clone().into());
         }
         loop {
             let inbound = match deadline {
@@ -190,11 +220,13 @@ impl GatewaySession {
                 }
                 Ok(Inbound::Request(request)) => return Ok(Observation::Request(request)),
                 Ok(Inbound::Barrier(ack)) => drop(ack),
-                Err(RecvTimeoutError::Timeout) => return Err(observation_timeout()),
+                Err(RecvTimeoutError::Timeout) => return Err(observation_timeout().into()),
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(Error::harness(self.client().err().unwrap_or_else(|| {
-                        "hermes adapter: observation stream closed".into()
-                    })));
+                    return Err(ObservationError::Transport(
+                        self.client()
+                            .err()
+                            .unwrap_or_else(|| "hermes adapter: observation stream closed".into()),
+                    ));
                 }
             }
         }
