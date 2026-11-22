@@ -1,10 +1,14 @@
 #![doc = include_str!("../README.md")]
 
 #[cfg(unix)]
+mod gateway_run;
+#[cfg(unix)]
 mod gateway_session;
 #[cfg(unix)]
 mod prompt_observation;
 
+#[cfg(unix)]
+pub use gateway_run::{GatewayRun, RunObservation};
 #[cfg(unix)]
 pub use gateway_session::{GatewaySession, Observation};
 #[cfg(unix)]

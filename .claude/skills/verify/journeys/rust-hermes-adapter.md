@@ -87,3 +87,14 @@ Expect one started prompt, three deltas, one completion matching the corpus
 text and usage, and one clean shutdown. This uses a credential-free replay
 gateway. The targeted gateway session test also covers invalid usage, failed
 and interrupted turns, and a child mirror on the parent stream.
+
+To verify the OAP run stream, run the same consumer with the `--run` mode:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run
+```
+
+Expect five envelopes matching `streaming-provenance/expected-oap.json` byte
+for byte after compacting the fixture, and one clean gateway shutdown.
+The pinned replay also sends native observations that consume no OAP sequence.

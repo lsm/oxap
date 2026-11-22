@@ -418,3 +418,81 @@ fn started_prompt_projects_deltas_and_settlement() {
         session.close().unwrap();
     }
 }
+
+#[test]
+fn run_replays_streaming_provenance_byte_for_byte() {
+    use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
+
+    use oxap_adapter::{gojson::go_marshal, runtime::Runtime};
+    use oxap_adapter_hermes::RunObservation;
+    use serde::Deserialize;
+    use serde_json::value::RawValue;
+
+    #[derive(Deserialize)]
+    struct Frame {
+        direction: String,
+        raw: Box<RawValue>,
+    }
+
+    let corpus = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../fixtures/adapters/hermes-v0.23.3/streaming-provenance/"
+    );
+    let native = std::fs::read_to_string(format!("{corpus}native.jsonl")).unwrap();
+    let mut script = String::new();
+    for frame in native.lines() {
+        let frame: Frame = serde_json::from_str(frame).unwrap();
+        let wire = frame.raw.get();
+        match frame.direction.as_str() {
+            "host-to-gateway" => {
+                script.push_str(&format!("IFS= read -r line\ntest \"$line\" = '{wire}'\n"));
+            }
+            "gateway-to-host" => script.push_str(&format!("printf '%s\\n' '{wire}'\n")),
+            _ => {}
+        }
+    }
+    let created = r#"{"jsonrpc":"2.0","id":1,"result":{"session_id":"sess0001","stored_session_id":"stored"}}"#;
+    let config = gateway(
+        EMPTY_CREATE,
+        &format!("printf '%s\\n' '{created}'"),
+        &script,
+    );
+    let mut session = open(&config, "", "").unwrap();
+    let now = AtomicI64::new(2);
+    let next = AtomicU8::new(b'a');
+    let runtime = Runtime::new(
+        move || now.fetch_add(1, Ordering::Relaxed),
+        move |kind| {
+            format!(
+                "{kind}-{}",
+                char::from(next.fetch_add(1, Ordering::Relaxed))
+            )
+        },
+    );
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    let mut run = session
+        .start_run("hello", "session".into(), "hermes-test", runtime, deadline)
+        .unwrap();
+    let mut trace = Vec::new();
+    let mut observed = Vec::new();
+    while let Some(item) = run.next_observation(deadline).unwrap() {
+        match item {
+            RunObservation::Event(envelope) => {
+                trace.push(go_marshal(&serde_json::to_string(&envelope).unwrap()));
+            }
+            RunObservation::Other(oxap_adapter_hermes::Observation::Event(event)) => {
+                observed.push(event.kind);
+            }
+            item => panic!("unexpected observation: {item:?}"),
+        }
+    }
+    assert!(run.next_observation(deadline).unwrap().is_none());
+    assert!(matches!(
+        run.interrupt(deadline),
+        Err(Error::RunAlreadyTerminal { .. })
+    ));
+    let expected = std::fs::read_to_string(format!("{corpus}expected-oap.json")).unwrap();
+    assert_eq!(format!("[{}]", trace.join(",")), go_marshal(&expected));
+    assert_eq!(observed, ["thinking.delta", "message.interim"]);
+    session.close().unwrap();
+}

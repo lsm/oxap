@@ -26,6 +26,13 @@ the turn's final response or failure. Stop at the first completion or
 failure. Other observations pass through in order, including gateway
 requests.
 
+`GatewaySession::start_run` takes an OAP session ID, the effective model ID
+and the runtime clock and ID source. The returned `GatewayRun` emits
+`run.started`, content deltas and a completion or failure with contiguous
+OAP sequence numbers. It passes other native observations through without
+consuming a sequence number. Reading ends after settlement. To interrupt a
+running turn, use `GatewayRun::interrupt` and continue reading its settlement.
+
 The wire layer holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's
 `DecodeServerRequest` and `RequestSessionID`, and `rpc::DIALECT`, the
