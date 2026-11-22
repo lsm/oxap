@@ -44,7 +44,9 @@ def verify(binary, verb, root, configured, model, advertises_images, supports_im
 
     try:
         capabilities = hub.call("capabilities", adapter="deepseek")["result"]
-        feature = capabilities["payload"]["features"].get("content.image")
+        features = capabilities["payload"]["features"]
+        assert list(features) == sorted(features), list(features)
+        feature = features.get("content.image")
         RESUME["opened"](hub, "s1")
         if model != configured:
             request = RESUME["envelope"]("session.model.switch.request", {"session_id": "s1", "model_id": model})
