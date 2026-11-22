@@ -137,7 +137,9 @@ type Session struct {
 	closing bool
 	release func(*Session)
 
-	binding binding.Record
+	binding       binding.Record
+	modelSwitchMu sync.Mutex
+	recordModel   func(context.Context, protocol.SessionState)
 
 	work workLog
 
@@ -471,6 +473,8 @@ func (s *Session) SwitchModel(ctx context.Context, request protocol.SessionModel
 			Feature: protocol.FeatureSessionModelSwitch, Reason: base.ControlUnadvertised,
 		}
 	}
+	s.modelSwitchMu.Lock()
+	defer s.modelSwitchMu.Unlock()
 	response, state, err := switcher.SwitchModel(ctx, request)
 	if errors.Is(err, base.ErrSessionClosed) {
 		s.markClosed()
@@ -480,6 +484,9 @@ func (s *Session) SwitchModel(ctx context.Context, request protocol.SessionModel
 	}
 	if response.SessionID != s.id || state.SessionID != s.id || response.ModelID != state.CurrentModelID {
 		return protocol.SessionModelSwitchResponse{}, protocol.SessionState{}, fmt.Errorf("serve: adapter reported a model switch outside session %q", s.id)
+	}
+	if s.recordModel != nil {
+		s.recordModel(ctx, state)
 	}
 	return response, state, nil
 }

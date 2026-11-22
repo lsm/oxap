@@ -118,7 +118,8 @@ impl Shared {
         {
             sessions.live.remove(&entry.id);
         }
-        self.options.record(&entry.record, Action::Closed, now_ms());
+        self.options
+            .record(&entry.record(), Action::Closed, now_ms());
     }
 }
 
@@ -278,7 +279,7 @@ impl Hub {
             closed: AtomicBool::new(false),
             hub: Arc::downgrade(&self.shared),
             options: self.shared.options.clone(),
-            record,
+            record: Mutex::new(record),
             live: Mutex::default(),
             created_ms: now_ms(),
         });
@@ -287,13 +288,13 @@ impl Hub {
             if sessions.live.contains_key(&entry.id) {
                 self.shared
                     .options
-                    .record(&entry.record, Action::Refused, now_ms());
+                    .record(&entry.record(), Action::Refused, now_ms());
                 false
             } else {
                 sessions.live.insert(entry.id.clone(), entry.clone());
                 self.shared
                     .options
-                    .record(&entry.record, began, state.updated_at_ms);
+                    .record(&entry.record(), began, state.updated_at_ms);
                 true
             }
         };
@@ -567,7 +568,7 @@ pub struct HubSession {
     closed: AtomicBool,
     hub: Weak<Shared>,
     options: HubOptions,
-    record: Record,
+    record: Mutex<Record>,
     live: Mutex<Live>,
     created_ms: i64,
 }
@@ -583,8 +584,17 @@ pub struct SessionListing {
 }
 
 impl HubSession {
-    pub(crate) fn record(&self) -> &Record {
-        &self.record
+    pub(crate) fn record(&self) -> MutexGuard<'_, Record> {
+        self.record.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn record_model(&self, state: &SessionState) {
+        let mut record = self.record();
+        if !self.is_closed() && record.model != state.current_model_id {
+            record.model.clone_from(&state.current_model_id);
+            self.options
+                .record(&record, Action::Opened, state.updated_at_ms);
+        }
     }
 
     pub fn id(&self) -> &SessionId {
@@ -608,7 +618,9 @@ impl HubSession {
             live::finish(self.with_live(Live::close));
             match self.hub.upgrade() {
                 Some(hub) => hub.release(self),
-                None => self.options.record(&self.record, Action::Closed, now_ms()),
+                None => self
+                    .options
+                    .record(&self.record(), Action::Closed, now_ms()),
             }
         }
     }

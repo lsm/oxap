@@ -224,10 +224,10 @@ refused rather than one being chosen. The keys are the ones `oapx tui` sends —
 `user_input` — plus `model`, a `provider/api@id` reference as the session's
 model catalog prints it, so two sessions on one hub can run different providers
 and models. An open naming a model the catalog lacks is refused
-`model_not_found` with the `model_id` it named. The model is fixed for the
-session's life over the hub: the adapter does not advertise
+`model_not_found` with the `model_id` it named. The adapter does not advertise
 `run.model_selection`, so a submit carrying `model_id` is refused
-`unsupported_feature`, and the hub has no op for `session.model.switch`.
+`unsupported_feature`. Use `session.model.switch` over stdio to change
+the session default.
 This type is Zig's alone: Go has no counterpart adapter, so `goap serve` refuses
 the entry as an unknown type, and `examples/oap-serve.json` does not carry one
 because `goap serve` reads that file too (D27).
@@ -1528,8 +1528,10 @@ never connects overflows exactly as a slow consumer does, and the adopter reads
 
 ## The operations
 
-Seventeen ops, plus `shutdown`, which [Shutdown and exit on
-stdio](#shutdown-and-exit-on-stdio) describes, with its route `POST /shutdown`.
+The transports share seventeen ops and [`shutdown`](#shutdown-and-exit-on-stdio),
+which uses `POST /shutdown` over HTTP. The stdio hubs also serve
+[`session.model.switch`](#sessionmodelswitch). See [D38](#d38--session-model-switch-has-no-http-route)
+for HTTP.
 Each row gives the request line's parameters, the answer, and the errors. A
 refusal the row does not name is `internal` on both, with the
 exceptions stated once here rather than repeated per row:
@@ -1973,6 +1975,21 @@ are specified in [triggered runs](triggered-runs.md).
   adapter, and one naming nothing or another session is refused before it`.
   `oapx serve --stdio` serves the op through the same `Frontend.settingsControl`
   the daemon route runs.
+
+### `session.model.switch`
+
+- **params:** `session_id` and a `session.model.switch.request` envelope in
+  `request`. Both session IDs in the envelope must match `session_id`.
+- **answer:** the held adapter's correlated `session.model.switch.response`.
+  When the model changes, the hub refreshes the live binding with the model
+  the adapter confirmed. Read `state` for the current model and `history`
+  for the latest stored binding. DeepSeek allows a different model before
+  the first turn and refuses a different model after it has run.
+- **errors:** `unknown_session`, `scope_mismatch`, `unsupported_feature`,
+  `capability_degraded`, `model_not_found`, `run_active`, `session_closed`,
+  and the standard envelope and transport refusals.
+- **pinned by:** the `stdio-deepseek-model-switch.py` parity journey in CI,
+  run against the Go, Rust and Zig stdio hubs.
 
 ### `close`
 
@@ -2871,6 +2888,13 @@ says `Allow: GET`, and its route test pins that. Answering `GET, HEAD` for a
 [Parking](#parking) lands one tree at a time. Zig parks and wakes a session, by
 default after five idle seconds and never with `--park-after 0`; Go and Rust have no
 park at all.
+
+### D38 — Session model switch has no HTTP route
+
+All three stdio hubs serve [`session.model.switch`](#sessionmodelswitch). Their
+HTTP bindings do not expose it yet. The host initiating this change connects
+over stdio. Closing the gap requires a shared HTTP route with the same
+envelope, scope checks, and refusal mapping.
 
 ### Recorded, and not divergences
 
