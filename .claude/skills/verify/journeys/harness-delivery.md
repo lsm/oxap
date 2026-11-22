@@ -25,12 +25,8 @@ sequence gap in either case.
 
 The table checks the Zig, Go and Rust registries and runs each case on every
 hub that registers its adapter. Adding a registered type requires a case.
-The in-memory reference backend has no native reasoning to send. Docker Agent
-(ACP) currently omits the native reasoning notifications in its fixture. Its
-case checks the exact remaining delivery and identifies the omission in the
-output. Add `--strict-reasoning` to require reasoning from that fixture and
-reproduce the omission. Use `--case codex` to check that both Codex reasoning
-fragments arrive before the assistant reply on all three hubs.
+Each harness fixture requires reasoning before the assistant reply. The
+in-memory reference backend has no native reasoning and checks text delivery.
 
 Inspect the per-case JSONL and stderr alongside the printed counts and exit
 status. CI runs this journey on every pull request and retains both files.
