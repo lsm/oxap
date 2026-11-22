@@ -187,8 +187,8 @@ the member as unknown.
   receive that layer, so `endpoint` is refused. Pi receives a generated
   `models.json` in a content-addressed directory under oxap state and
   selects the model through `--provider` and `--model`. A routed Pi entry
-  uses this directory for its agent state. Its `args` must leave both
-  selection flags to oxap.
+  uses this directory for its agent state. Startup refuses `--provider`,
+  `--model`, and `--api-key` in the entry's `args`.
 
 The three fixed-wire adapters can omit `wire`. Only Claude accepts `auth`.
 Both generated configs reference `credential_env` by name. OpenCode's own

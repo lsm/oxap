@@ -209,7 +209,7 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
             return reader.refuse("{s}: model_endpoint requires model oapx/<model-id>", .{where});
         if (pi) for (args) |arg| {
             const flag = arg[0 .. std.mem.indexOfScalar(u8, arg, '=') orelse arg.len];
-            if (std.mem.eql(u8, flag, "--model") or std.mem.eql(u8, flag, "--provider"))
+            if (std.mem.eql(u8, flag, "--model") or std.mem.eql(u8, flag, "--provider") or std.mem.eql(u8, flag, "--api-key"))
                 return reader.refuse("{s}: args pass {s}, which model_endpoint controls", .{ where, flag });
         };
     }
