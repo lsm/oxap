@@ -37,3 +37,12 @@ the pinned commit, tree and capability revision moved to 0.167.2; the
 protocol surface is identical. No real account, credential, model call, or
 real-process compatibility check was used. Binary behavior and full upstream
 compatibility remain unverified.
+
+## Reasoning summaries
+
+Go, Rust and Zig forward `item/reasoning/summaryTextDelta` on the owning
+started turn as `content.delta` with a reasoning part. The fragments retain
+their arrival order. The final assistant text is assembled from
+`item/agentMessage/delta`. The shared harness delivery journey checks both
+channels against a synthetic peer using the
+[pinned notification shape](https://raw.githubusercontent.com/openai/codex/ce21072c90d32c40af7a55b60b2fb35c84a43a6a/codex-rs/app-server-protocol/schema/json/v2/ReasoningSummaryTextDeltaNotification.json).

@@ -818,9 +818,12 @@ pub const Reducer = struct {
             if (!native.decodesPresent(message.params, native.turn_started_notification)) return self.failActive("invalid_native_event", "invalid turn/started payload");
             return self.onStarted(message.params.?);
         }
-        if (std.mem.eql(u8, method, native.method_agent_delta)) {
-            if (!native.decodesPresent(message.params, native.agent_delta_notification)) return self.failActive("invalid_native_event", "invalid agent message delta");
-            return self.onDelta(message.params.?);
+        const reasoning = std.mem.eql(u8, method, native.method_reasoning_delta);
+        if (reasoning or std.mem.eql(u8, method, native.method_agent_delta)) {
+            if (!native.decodesPresent(message.params, native.agent_delta_notification)) {
+                return self.failActive("invalid_native_event", if (reasoning) "invalid reasoning summary delta" else "invalid agent message delta");
+            }
+            return self.onDelta(message.params.?, reasoning);
         }
         if (std.mem.eql(u8, method, native.method_item_started) or std.mem.eql(u8, method, native.method_item_completed)) {
             if (!native.decodesPresent(message.params, native.item_notification)) return self.failActive("invalid_native_event", "invalid item lifecycle payload");
@@ -878,15 +881,20 @@ pub const Reducer = struct {
         try self.emit(index, "run.started", payload, "", false);
     }
 
-    fn onDelta(self: *Reducer, params: std.json.Value) !void {
+    fn onDelta(self: *Reducer, params: std.json.Value, reasoning: bool) !void {
         const index = self.runFor(native.text(params, &.{"threadId"}), native.text(params, &.{"turnId"})) orelse return;
         const run = &self.runs.items[index];
         if (!run.started or run.terminal) return;
         const delta = native.text(params, &.{"delta"});
-        try run.text.appendSlice(self.allocator(), delta);
         var part = std.json.ObjectMap.empty;
-        try self.put(&part, "type", str("text"));
-        try self.putNonEmpty(&part, "text", delta);
+        if (reasoning) {
+            try self.put(&part, "type", str("reasoning"));
+            try self.put(&part, "reasoning", str(delta));
+        } else {
+            try run.text.appendSlice(self.allocator(), delta);
+            try self.put(&part, "type", str("text"));
+            try self.putNonEmpty(&part, "text", delta);
+        }
         var payload = try self.runPayload(index);
         try self.putNonEmpty(&payload, "message_id", run.message_id);
         try self.put(&payload, "part", .{ .object = part });

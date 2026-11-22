@@ -466,6 +466,11 @@ jobs:
       - name: Verify Codex and DeepSeek custom endpoints
         run: python3 .claude/skills/verify/scripts/codex-deepseek-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
 
+      - name: Verify OpenCode, Pi, Copilot and Docker Agent custom endpoints
+        run: |
+          go build -o /tmp/oapx-hub/bin/goap ./go/cmd/goap
+          python3 .claude/skills/verify/scripts/opencode-pi-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
+
       - name: Require the oapx alias to match oxap on stdout and exit code
         run: |
           set -euo pipefail
