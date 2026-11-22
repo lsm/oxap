@@ -259,3 +259,65 @@ fn ordered_observations_refuse_foreign_events_and_sequence_breaks() {
         session.close().unwrap();
     }
 }
+
+#[test]
+fn prompt_start_requires_both_receipt_and_open_in_either_order() {
+    use oxap_adapter_hermes::Observation;
+
+    let receipt = r#"{"jsonrpc":"2.0","id":2,"result":{"status":"streaming"}}"#;
+    let request =
+        r#"{"jsonrpc":"2.0","id":"check","method":"approval","params":{"session_id":"running"}}"#;
+    for (first, second) in [(receipt, STARTED), (STARTED, receipt)] {
+        let config = gateway(
+            EMPTY_CREATE,
+            &format!("printf '%s\\n' '{INFO}' '{CREATED}'"),
+            &format!(
+                "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+                 printf '%s\\n' '{request}' '{first}' '{second}'"
+            ),
+        );
+        let mut session = open(&config, "", "").unwrap();
+        let deadline = Some(Instant::now() + Duration::from_secs(5));
+        let start = session.start_prompt("hello\n<world>", deadline).unwrap();
+        assert_eq!((start.kind.as_str(), start.seq), ("message.start", 2));
+        let Observation::Event(info) = session.next_observation(deadline).unwrap() else {
+            panic!("expected the buffered session.info");
+        };
+        assert_eq!((info.kind.as_str(), info.seq), ("session.info", 1));
+        let Observation::Request(observed) = session.next_observation(deadline).unwrap() else {
+            panic!("expected the buffered reverse request");
+        };
+        assert_eq!(observed.method, "approval");
+        session.close().unwrap();
+    }
+}
+
+#[test]
+fn prompt_settling_before_open_does_not_start() {
+    use oxap_adapter_hermes::Observation;
+
+    let complete = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"running","seq":2,"payload":{"status":"error","error":"no model"}}}"#;
+    let config = gateway(
+        EMPTY_CREATE,
+        &format!("printf '%s\\n' '{INFO}' '{CREATED}'"),
+        &format!(
+            "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\"}}}}' '{complete}'"
+        ),
+    );
+    let mut session = open(&config, "", "").unwrap();
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    let error = session
+        .start_prompt("hello\n<world>", deadline)
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("settlement before the turn opened"));
+    for (kind, seq) in [("session.info", 1), ("message.complete", 2)] {
+        let Observation::Event(event) = session.next_observation(deadline).unwrap() else {
+            panic!("expected buffered {kind}");
+        };
+        assert_eq!((event.kind.as_str(), event.seq), (kind, seq));
+    }
+    session.close().unwrap();
+}
