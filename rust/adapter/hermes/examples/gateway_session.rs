@@ -25,21 +25,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(answers),
         ),
         [python, source, state, mode, model]
-            if matches!(mode.as_str(), "--run" | "--reopen" | "--reopen-deadline") =>
+            if matches!(
+                mode.as_str(),
+                "--run" | "--reopen" | "--reopen-deadline" | "--shared-reopen"
+            ) =>
         {
             (python, source, state, mode.as_str(), model.as_str(), None)
         }
         [python, source, state, mode]
             if matches!(
                 mode.as_str(),
-                "--prompt" | "--observe" | "--start" | "--project" | "--run"
+                "--prompt" | "--observe" | "--start" | "--project" | "--run" | "--shared-open"
             ) =>
         {
             (python, source, state, mode.as_str(), "", None)
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>]"
                     .into(),
             );
         }
@@ -68,6 +71,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]),
         ..ProcessConfig::default()
     };
+    if matches!(mode, "--shared-open" | "--shared-reopen") {
+        return shared_session(config, (mode == "--shared-reopen").then_some(model));
+    }
     let timeout = if mode == "--reopen-deadline" {
         Duration::from_secs(1)
     } else {
@@ -203,6 +209,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(error) = start_error {
         return Err(error.to_string().into());
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_session(
+    config: oxap_adapter_hermes::process::ProcessConfig,
+    stored: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Adapter, Error, OpenRequest};
+    use oxap_protocol::{Participant, ReasoningLevel, SupportLevel};
+
+    let adapter = oxap_adapter_hermes::Adapter::new(config, "configured".into());
+    let adapter: &dyn Adapter = &adapter;
+    let descriptor = block_on(adapter.probe())?;
+    assert_eq!(
+        descriptor.capabilities.endpoint.id.as_str(),
+        "hermes.gateway"
+    );
+    assert!(!descriptor.capability_revision.is_empty());
+    assert_eq!(
+        descriptor.capabilities.features["session.open"].level,
+        SupportLevel::NATIVE
+    );
+    let request = OpenRequest {
+        session_id: "session".into(),
+        participant: Participant {
+            id: "user".into(),
+            ..Participant::default()
+        },
+        reopen: stored.is_some(),
+        native_session_id: stored.unwrap_or_default().into(),
+        ..OpenRequest::default()
+    };
+    let with_reasoning = OpenRequest {
+        reasoning_level: ReasoningLevel::OFF,
+        ..request.clone()
+    };
+    let refused = block_on(adapter.open(with_reasoning));
+    assert!(matches!(refused, Err(Error::UnsupportedControl(refusal))
+        if refusal.feature == oxap_protocol::FEATURE_SESSION_REASONING));
+    let session = block_on(adapter.open(request))?;
+    let mut state = block_on(session.state())?;
+    assert!(state.updated_at_ms > 0);
+    state.updated_at_ms = 0;
+    println!("state: {}", serde_json::to_string(&state)?);
+    println!(
+        "stored session ID: {}",
+        session.native_session_id().ok_or("missing binding")?
+    );
+    block_on(session.close())?;
+    block_on(session.close())?;
+    assert!(matches!(
+        block_on(session.state()),
+        Err(Error::SessionClosed)
+    ));
+    println!("gateway exited cleanly");
     Ok(())
 }
 

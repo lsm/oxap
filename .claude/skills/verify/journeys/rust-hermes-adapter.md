@@ -188,3 +188,21 @@ done
 Each example invocation exits 1 with `DeadlineExceeded`. The verifier exits 0
 after observing the timeout and confirming whether the gateway read the
 recorded resume request.
+
+Exercise the shared adapter interface over stdio:
+
+```sh
+cargo build --locked --manifest-path rust/Cargo.toml -p oxap-adapter-hermes --example gateway_session
+example="${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session"
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "$example" --shared-open shared-open
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "$example" --shared-reopen session-reopen
+```
+
+The consumer probes the adapter and opens through the shared trait. Create
+returns idle state with the configured model and a stored binding. Reopen
+sends the recorded resume request and returns the restored model and binding.
+Both paths reject a reasoning setting the shared adapter has yet to
+advertise. After close, the gateway has reached EOF and the shared session
+returns `SessionClosed` to a state query.
