@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>]"
                     .into(),
             );
         }
@@ -233,7 +233,7 @@ fn shared_session(
         descriptor.capabilities.features["session.open"].level,
         SupportLevel::NATIVE
     );
-    let session = block_on(adapter.open(OpenRequest {
+    let request = OpenRequest {
         session_id: "session".into(),
         participant: Participant {
             id: "user".into(),
@@ -241,13 +241,16 @@ fn shared_session(
         },
         reopen: stored.is_some(),
         native_session_id: stored.unwrap_or_default().into(),
-        reasoning_level: if stored.is_some() {
-            ReasoningLevel::default()
-        } else {
-            ReasoningLevel::OFF
-        },
         ..OpenRequest::default()
-    }))?;
+    };
+    let with_reasoning = OpenRequest {
+        reasoning_level: ReasoningLevel::OFF,
+        ..request.clone()
+    };
+    let refused = block_on(adapter.open(with_reasoning));
+    assert!(matches!(refused, Err(Error::UnsupportedControl(refusal))
+        if refusal.feature == oxap_protocol::FEATURE_SESSION_REASONING));
+    let session = block_on(adapter.open(request))?;
     let mut state = block_on(session.state())?;
     assert!(state.updated_at_ms > 0);
     state.updated_at_ms = 0;

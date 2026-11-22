@@ -4,6 +4,12 @@ The Rust port of `go/adapter/hermes`: an OAP adapter over the Hermes TUI
 gateway's JSON-RPC on stdio, pinned by `harnesses/hermes.json` and judged by
 the corpus in `fixtures/adapters/hermes-v0.23.3`.
 
+On Unix, `Adapter` implements the shared adapter contract for creating,
+reopening, inspecting and closing Hermes sessions. Construct it with a
+`ProcessConfig` and a configured model. The shared session exposes the
+stored Hermes binding and an idle OAP state. Use the gateway API below
+for prompt control, run streams and reasoning settings.
+
 On Unix, `GatewaySession::create` starts the gateway, creates a native
 session, and keeps its runtime and stored identities. A requested reasoning
 level is passed to creation and checked by a session-scoped `config.set`.

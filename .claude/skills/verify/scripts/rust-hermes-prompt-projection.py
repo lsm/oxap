@@ -67,15 +67,11 @@ def gateway(corpus, case):
     if case == "shared-open":
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {
-            "model": "configured", "reasoning_effort": "none",
+            "model": "configured",
         }}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "runtime", "stored_session_id": "stored",
         }})
-        assert read() == {"jsonrpc": "2.0", "id": 2, "method": "config.set", "params": {
-            "session_id": "runtime", "key": "reasoning", "value": "none",
-        }}
-        send({"jsonrpc": "2.0", "id": 2, "result": {}})
         assert sys.stdin.read() == ""
         Path("replay-complete").touch()
         return
@@ -260,7 +256,6 @@ def verify(binary, corpus, mode, case):
         states = [json.loads(line[7:]) for line in lines if line.startswith("state: ")]
         assert states == [{
             "session_id": "session", "status": "idle", "current_model_id": "configured",
-            "reasoning_level": "off",
         }]
         assert "stored session ID: stored" in lines
         assert shutdowns == 1 and replay_complete
