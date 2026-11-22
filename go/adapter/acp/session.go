@@ -338,10 +338,13 @@ func (s *session) handleNotification(n rpc.NotificationMessage) {
 
 	<-run.admitted
 	switch h.SessionUpdate {
-	case "agent_message_chunk":
+	case "agent_message_chunk", "agent_thought_chunk":
+		thought := h.SessionUpdate == "agent_thought_chunk"
 		var u native.AgentMessageChunk
 		if json.Unmarshal(p.Update, &u) != nil || u.Content.Type != "text" {
-			s.failActive("acp_invalid_message_chunk", "unsupported assistant chunk")
+			if !thought {
+				s.failActive("acp_invalid_message_chunk", "unsupported assistant chunk")
+			}
 			return
 		}
 		s.mu.Lock()
@@ -358,13 +361,17 @@ func (s *session) handleNotification(n rpc.NotificationMessage) {
 				}
 				run.nativeMessages[u.MessageID] = mid
 			}
-			run.messageID = mid
 		}
-		if !run.terminal {
-			run.messageTexts[mid] += u.Content.Text
+		part := protocol.ContentPart{Type: protocol.ContentReasoning, Reasoning: u.Content.Text}
+		if !thought {
+			run.messageID = mid
+			part = protocol.ContentPart{Type: protocol.ContentText, Text: u.Content.Text}
+			if !run.terminal {
+				run.messageTexts[mid] += u.Content.Text
+			}
 		}
 		s.mu.Unlock()
-		_ = s.emit(run, protocol.TypeContentDelta, protocol.ContentDeltaPayload{SessionID: s.state.SessionID, RunID: run.id, MessageID: mid, Part: protocol.ContentPart{Type: protocol.ContentText, Text: u.Content.Text}}, false)
+		_ = s.emit(run, protocol.TypeContentDelta, protocol.ContentDeltaPayload{SessionID: s.state.SessionID, RunID: run.id, MessageID: mid, Part: part}, false)
 	case "tool_call":
 		var u native.ToolCall
 		if json.Unmarshal(p.Update, &u) != nil {
@@ -380,7 +387,7 @@ func (s *session) handleNotification(n rpc.NotificationMessage) {
 		}
 		s.applyToolUpdate(run, u)
 
-	case "user_message_chunk", "agent_thought_chunk", "plan", "plan_update", "plan_removed",
+	case "user_message_chunk", "plan", "plan_update", "plan_removed",
 		"available_commands_update", "current_mode_update", "session_info_update":
 		return
 	default:
