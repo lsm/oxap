@@ -1,7 +1,9 @@
 # Design: route hub entries through a custom model endpoint
 
 Status: design, not implemented. Written 2026-11-21, revised the same day after
-review.
+review; the Hermes section was amended 2026-11-21 after re-checking the pinned
+v0.23.3 sources corrected how the provider is selected and which wire the
+endpoint speaks.
 
 ## Problem
 
@@ -48,14 +50,33 @@ sources and docs:
   `$NAME` or `${NAME}` from the environment (pinned v1.6.0
   configuration.md and models-configuration.md). Translatable by pointing the
   variable at a directory the hub owns and generating that one file.
-- **Hermes** (`hermes`): `OPENAI_BASE_URL` and `OPENAI_API_KEY` name a custom
-  OpenAI-compatible endpoint, with the key "sent only to that URL's exact
-  origin (scheme, host and port), never to another port or to `http://` on
-  the same host", and the model id `openai-api/<model>` is what selects
-  that provider (pinned v0.23.3 environment-variables.md,
-  integrations/providers.md). `config.yaml`'s `model.base_url` with
-  `custom_providers`/`key_env` is the file-based alternative; the env pair is
-  the surface a hub entry can set.
+- **Hermes** (`hermes`): a custom endpoint is the `openai-api` provider with
+  `OPENAI_BASE_URL` — which Hermes honors *only* for that provider — and
+  `OPENAI_API_KEY`, with the key "sent only to that URL's exact origin
+  (scheme, host and port), never to another port or to `http://` on the same
+  host" (pinned v0.23.3 environment-variables.md, integrations/providers.md).
+  The provider is selected by a separate `session.create` parameter: the
+  gateway's create-override path reads `provider` from the params object and
+  leaves it `None` when absent, falling back to profile config, then
+  `HERMES_INFERENCE_PROVIDER`, then `auto` (pinned v0.23.3
+  `tui_gateway/methods_session_model_guard.py` lines 32-40,
+  `hermes_cli/runtime_provider.py` `resolve_requested_provider`). The
+  `openai-api` overlay's transport is `codex_responses` (pinned v0.23.3
+  `hermes_cli/providers.py` lines 28-35), so the wire is OpenAI Responses;
+  URL-based detection overrides it only for host-mandated hosts and
+  `/anthropic`-suffixed paths (`_fallback_api_mode`). But the env pair and
+  the create parameter are not on their own authoritative: a matching
+  `model.base_url` in `config.yaml` beats the environment URL
+  (`_api_key_provider_runtime`), the credential pool's `openai-api` rung runs
+  before the environment rung (`_ladder_rungs`), and a persisted
+  `model.api_mode` recorded for the provider overrides the overlay
+  (`_configured_or_fallback_api_mode`). All of that state lives under one
+  root: `HERMES_HOME` holds `config.yaml`, `.env` and the auth store the
+  credential pool reads (pinned v0.23.3 environment-variables.md,
+  `hermes_cli/auth.py` `read_credential_pool`). `config.yaml`'s
+  `model.base_url` with `custom_providers`/`key_env` is the file-based
+  alternative; the env pair plus the create parameter is the surface a hub
+  entry can set.
 - **Copilot** (`copilot`, Go-only adapter): BYOK through
   `COPILOT_PROVIDER_BASE_URL` and `COPILOT_PROVIDER_API_KEY`, used for model
   requests regardless of GitHub sign-in (GitHub Copilot CLI auth docs, checked
@@ -86,7 +107,7 @@ One new optional object member, `model_endpoint`, on `claude`, `codex`,
 and `pi` entries and takes `anthropic-messages`, `openai-completions`, or
 `openai-responses`; on the other kinds the harness fixes the wire, and a
 `wire` that contradicts it (`claude`/`deepseek` must say `anthropic-messages`,
-`codex` `openai-responses`, `hermes` `openai-completions`) is refused.
+`codex` and `hermes` `openai-responses`) is refused.
 `auth` is optional, admitted only on a `claude` entry, and takes `"api-key"`
 (the default) or `"bearer"`. The member stays `oapx`'s own, refused by Go and
 Rust as unknown, exactly as `model_provider` is.
@@ -144,11 +165,50 @@ Per kind, `oapx` appends after the entry's own `environment`:
   also means settings and extensions it holds do not load for a routed pi
   entry; that is the trade-off of the only deterministic path Pi offers,
   recorded as an open question.
-- `hermes`: `OPENAI_BASE_URL=<base_url>` and `OPENAI_API_KEY=<key>`. The
-  entry's `model` member must name the provider explicitly
-  (`openai-api/<model-id>`), which is what binds the key to the endpoint's
-  origin under Hermes's origin-binding rule; the entry's model choice, not
-  Hermes's main-model config, selects the endpoint.
+- `hermes`: `OPENAI_BASE_URL=<base_url>` and `OPENAI_API_KEY=<key>`, and
+  `HERMES_HOME=<fresh directory under the oapx state directory, created for
+  the entry>`, and the adapter passes `provider: "openai-api"` beside the
+  entry's `model` at `session.create` — the adapter sends the model there
+  today, and the provider rides the same params object — with the `model`
+  member a bare model id, no prefix. The create parameter is what selects
+  the provider: present, it wins over profile config and
+  `HERMES_INFERENCE_PROVIDER` for that session, and the origin-binding rule
+  ties the key to the endpoint. The hub-owned home is what makes the route
+  authoritative: with no `config.yaml` there is no `model.base_url` to beat
+  the environment URL and no `model.api_mode` to override the overlay, with
+  no auth store the pool rung finds nothing and the environment rung
+  resolves the pair, and with no `.env` no ambient provider variable
+  competes. Nothing oapx writes goes into it — Hermes keeps its own session
+  state there, shared at worst between entries, which cannot misroute
+  because the route travels in the process environment; the user's own
+  Hermes login, settings and extensions do not load for a routed entry, the
+  same trade-off as Pi's hub-owned directory. The wire is Responses, the
+  overlay's transport, once the URL re-classification refusal below has
+  run. One shadow source survives the fresh home: the pool seeds itself
+  from the *environment* — for every registry key variable it also reads
+  the numbered siblings `VAR_2`, `VAR_3`, … (`_seed_from_env`,
+  `_env_key_var_candidates`), and each seeded `openai-api` row carries the
+  environment's `OPENAI_BASE_URL`, so a numbered `OPENAI_API_KEY_2` sibling
+  in the child environment adds a second row the pool's rotating selection
+  can pick — another account's key presented to the routed endpoint. The
+  hub's environment allowlist keeps an unlisted ambient sibling out of the
+  child, so the one path in is the entry's own `environment` list, and
+  listing a numbered sibling is refused below. The sweep of the other
+  environment-seeded rungs comes back clean for this route: other
+  providers' pools seed from their own variables but their ladder rungs
+  never run for an explicit `openai-api` selection, the OpenRouter
+  fallback rung is unreachable because an explicitly selected provider
+  resolves or raises rather than falling through, and `.env` — which
+  `get_env_prefer_dotenv` prefers over the process environment — does not
+  exist in the hub-owned home. The journey's hermes case runs a stub that
+  speaks Responses and asserts the requests it receives are
+  Responses-shaped (the responses path, not chat completions) and carry
+  the resolved key, beside a decoy home seeded with a conflicting
+  `config.yaml` (`provider`, `model.base_url`, `model.api_mode` pointing
+  at a decoy stub), a decoy `.env` carrying decoy `OPENAI_*` values, and
+  a pooled `openai-api` credential: every request must still arrive at
+  the real stub and the decoy must receive none. The redaction assertions
+  are the existing journey's.
 
 For Copilot and ACP the surface above is not extended — their adapters are
 Go-only and the member stays `oapx`'s — but both are covered by forwarding by
@@ -184,7 +244,7 @@ Each names the entry, at startup:
   kind (`ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`;
   `OAPX_PROVIDER_API_KEY`; `DEEPSEEK_BASE_URL`, `DEEPSEEK_API_KEY`;
   `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT`; `PI_CODING_AGENT_DIR`;
-  `OPENAI_BASE_URL`, `OPENAI_API_KEY`).
+  `OPENAI_BASE_URL`, `OPENAI_API_KEY`; `HERMES_HOME`).
 - An entry `environment` that names the *source* variable `credential_env`
   gives. The environment merge preserves explicitly listed names, so without
   this refusal the raw key would reach the child under its original name as
@@ -206,6 +266,24 @@ Each names the entry, at startup:
   managed credentials take precedence over the environment for the key, so
   the route would be silently shadowed. Checked at startup; the control layer
   keeps `DSH_HOME` pointing at a directory it owns with no such file.
+- A `hermes` entry whose `base_url` Hermes's URL detection would
+  re-classify off Responses: a host Hermes mandates another wire for
+  (`api.anthropic.com` speaks Messages, `api.actual.inc` Chat Completions)
+  or a path ending `/anthropic` or `/anthropic/v1`, or `api.kimi.com` with
+  `/coding` in the path (pinned v0.23.3 `runtime_provider.py`
+  `_HOST_MANDATED_API_MODES` and `_detect_api_mode_for_url`). Detection is a
+  pure function of the URL and runs even in the hub-owned home, so a
+  re-classifying URL would silently speak a wire the entry does not declare;
+  refused rather than re-declared. The journey's refusal case asserts the
+  message names the entry.
+- A `hermes` entry whose `environment` lists a numbered sibling
+  `OPENAI_API_KEY_<n>` (`_2` on: Hermes's pool seeder reads those even in a
+  fresh home, and each seeded row carries the routed base URL while
+  selection rotates, so a sibling would send another account's key to the
+  routed endpoint — pinned v0.23.3 `agent/credential_pool.py`
+  `_env_key_var_candidates`, `_seed_from_env`). `credential_env` naming a
+  numbered sibling stays allowed: the value then arrives only under
+  `OPENAI_API_KEY`. The journey's refusal case covers this list entry too.
 
 Scope: `zig/src/adapter/config.zig` (admit the member and its object's fields
 on the six kinds), `zig/src/tools/makai.zig` (the per-kind translation and
@@ -245,6 +323,11 @@ already carry the named variable for the hub process to resolve it.
   kinds: works for no kind uniformly — Claude Code, codex, dsh, and Hermes
   each read different names — and without the source-name refusal it would
   put a key-bearing name into the child environment uncontrolled.
+- **Selecting Hermes's provider by environment** (`HERMES_INFERENCE_PROVIDER`
+  on the child): profile config beats the env, and a local session reads it
+  from the client's export, not the daemon's (pinned v0.23.3
+  `runtime_provider.py` `resolve_requested_provider`), so a hub-set value is
+  not authoritative; the per-session `session.create` parameter is.
 
 ## Open questions
 
@@ -255,7 +338,10 @@ already carry the named variable for the hub process to resolve it.
 2. **A routed pi entry runs on the hub-owned agent directory**, so a user's
    pi extensions and settings do not load for it. Whether Pi grows a layered
    models source (or the entry should copy a named user directory) is an
-   upstream question; the live run decides whether the limitation matters.
+   upstream question; the live run decides whether the limitation matters. A
+   routed hermes entry's hub-owned `HERMES_HOME` carries the same trade-off
+   for the same reason — it is the only root that also carries the config,
+   `.env` and credential pool that would shadow the route.
 3. **Entitlement and streaming at a custom endpoint** are verifiable only by
    the live run this design unblocks; `oxap` cannot check the wire a URL
    speaks.
