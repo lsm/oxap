@@ -48,10 +48,22 @@ pub fn native_prompt(
         let parts: Vec<ContentPart> =
             serde_json::from_str(&content).map_err(|_| Error::InvalidSubmission)?;
         for part in parts {
-            if part.part_type != ContentPartType::TEXT {
+            if part.part_type == ContentPartType::TEXT {
+                blocks.push(text(part.text));
+            } else if part.part_type == ContentPartType::IMAGE {
+                let image = part.image.ok_or(Error::InvalidSubmission)?;
+                if image.data.is_empty() || image.media_type.is_empty() {
+                    return Err(Error::InvalidSubmission);
+                }
+                blocks.push(ContentBlock {
+                    kind: "image".into(),
+                    data: image.data,
+                    mime_type: image.media_type,
+                    ..ContentBlock::default()
+                });
+            } else {
                 return Err(Error::InvalidSubmission);
             }
-            blocks.push(text(part.text));
         }
     }
     Ok((blocks, ids))

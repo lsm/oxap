@@ -169,6 +169,22 @@ func (p *processClient) Close() error {
 	return p.bridge.Close(ctx)
 }
 
+func acceptsImages(model string) bool {
+	switch model {
+	case "deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp":
+		return true
+	default:
+		return false
+	}
+}
+
+func capabilityRevision(model string) string {
+	if acceptsImages(model) {
+		return CapabilityRevision + "-image"
+	}
+	return CapabilityRevision
+}
+
 func (a *Adapter) Probe(ctx context.Context) (base.Descriptor, error) {
 	if err := ctx.Err(); err != nil {
 		return base.Descriptor{}, err
@@ -195,7 +211,10 @@ func (a *Adapter) Probe(ctx context.Context) (base.Descriptor, error) {
 		"action.tools.execute": {Level: protocol.SupportUnavailable, Reason: "Harness executes tools internally"},
 		"action.permissions":   {Level: protocol.SupportUnavailable, Reason: "selected SDK wire has no interaction channel"},
 	}
-	return base.Descriptor{Capabilities: protocol.CapabilityDescriptor{Endpoint: protocol.EndpointDescriptor{ID: endpointID, Name: "DeepSeek Harness SDK Adapter", Version: PinnedVersion, Adapter: "deepseek-harness-jsonrpc"}, ProtocolVersions: []string{protocol.Version}, Profiles: []string{protocol.Profile}, Features: features}, CapabilityRevision: CapabilityRevision, Journal: base.JournalDescriptor{Scope: "session", Persistence: "process_memory", Replay: protocol.SupportDegraded, Capacity: a.config.JournalCapacity}, MaxActiveRunsPerSession: 1, InteractiveGates: false, CancellationTarget: "none", CancellationImplementation: "unavailable"}, nil
+	if acceptsImages(a.config.Model) {
+		features[protocol.FeatureContentImage] = protocol.FeatureSupport{Level: protocol.SupportNative, Reason: "inline image input on the configured model; after a model switch, the selected model governs admission"}
+	}
+	return base.Descriptor{Capabilities: protocol.CapabilityDescriptor{Endpoint: protocol.EndpointDescriptor{ID: endpointID, Name: "DeepSeek Harness SDK Adapter", Version: PinnedVersion, Adapter: "deepseek-harness-jsonrpc"}, ProtocolVersions: []string{protocol.Version}, Profiles: []string{protocol.Profile}, Features: features}, CapabilityRevision: capabilityRevision(a.config.Model), Journal: base.JournalDescriptor{Scope: "session", Persistence: "process_memory", Replay: protocol.SupportDegraded, Capacity: a.config.JournalCapacity}, MaxActiveRunsPerSession: 1, InteractiveGates: false, CancellationTarget: "none", CancellationImplementation: "unavailable"}, nil
 }
 
 func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session, error) {
@@ -236,7 +255,7 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 		nativeID = a.nativeSessionID(id)
 	}
 	now := a.clock.Now().UnixMilli()
-	s := &Session{client: client, inbound: client.Inbound(), clock: a.clock, ids: a.ids, journal: journal.New(a.config.JournalCapacity), nativeID: nativeID, model: model, state: protocol.SessionState{SessionID: id, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, ReasoningLevel: req.ReasoningLevel, CompactionPolicy: req.CompactionPolicy, Recovery: recovery}, runs: map[protocol.RunID]*runState{}, tools: map[string]*toolState{}, children: map[string]*childState{}, stop: make(chan struct{}), exited: make(chan struct{}), restart: func(ctx context.Context, model string) (Client, string, error) { return a.resumed(ctx, req, model) }}
+	s := &Session{client: client, inbound: client.Inbound(), clock: a.clock, ids: a.ids, journal: journal.New(a.config.JournalCapacity), nativeID: nativeID, model: model, revision: descriptor.CapabilityRevision, state: protocol.SessionState{SessionID: id, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, ReasoningLevel: req.ReasoningLevel, CompactionPolicy: req.CompactionPolicy, Recovery: recovery}, runs: map[protocol.RunID]*runState{}, tools: map[string]*toolState{}, children: map[string]*childState{}, stop: make(chan struct{}), exited: make(chan struct{}), restart: func(ctx context.Context, model string) (Client, string, error) { return a.resumed(ctx, req, model) }}
 	go s.dispatch(s.client, s.inbound, s.stop, s.exited)
 	return s, nil
 }

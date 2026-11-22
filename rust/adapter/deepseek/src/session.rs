@@ -14,11 +14,14 @@ use oxap_protocol::{
     MessageSubmitResponse, ProtocolError, RequestedDeliveryMode, RunCancelResponse,
     RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus, SessionId,
     SessionModelSwitchRequest, SessionModelSwitchResponse, SessionState, SessionStatus,
-    SubmissionId, ToolCallId, Usage, FEATURE_SESSION_MODEL_SWITCH, SETTLED_BY_INFERRED,
+    SubmissionId, ToolCallId, Usage, FEATURE_CONTENT_IMAGE, FEATURE_SESSION_MODEL_SWITCH,
+    SETTLED_BY_INFERRED,
 };
 use serde_json::value::RawValue;
 
-use crate::adapter::{resume, unsatisfiable, Launch, ENDPOINT_ID};
+use crate::adapter::{
+    accepts_images, capability_revision, resume, unsatisfiable, Launch, ENDPOINT_ID,
+};
 use crate::admission::{Admission, Candidate};
 use crate::content::{final_content, stream_parts};
 use crate::native::{
@@ -41,6 +44,7 @@ struct Shared {
     inner: Mutex<Inner>,
     journal: Journal,
     native_id: String,
+    revision: String,
     recovered: bool,
     runtime: Runtime,
     launch: Launch,
@@ -128,6 +132,7 @@ impl Session {
         let client = process.client.clone();
         let shared = Arc::new(Shared {
             native_id,
+            revision: capability_revision(&launch.process.initialize.model),
             recovered: state
                 .recovery
                 .as_ref()
@@ -456,6 +461,11 @@ impl Shared {
         let _prompting = hold(&self.prompting);
         let (client, stream, started) = {
             let mut inner = self.lock();
+            if !accepts_images(&inner.state.current_model_id)
+                && blocks.iter().any(|block| block.kind == "image")
+            {
+                return Err(unsatisfiable(FEATURE_CONTENT_IMAGE, "", ""));
+            }
             let client = match &inner.process {
                 Some(process) if !inner.unusable => process.client.clone(),
                 _ => return Err(Error::SessionClosed),
@@ -1031,7 +1041,7 @@ impl Shared {
         envelope.timestamp_ms = Some(now);
         envelope.session_id = Some(inner.state.session_id.clone());
         envelope.run_id.clone_from(&run.id);
-        envelope.capability_revision = Some(crate::adapter::pin().capability_revision.clone());
+        envelope.capability_revision = Some(self.revision.clone());
         inner.state.transcript_cursor = run.next.to_string();
         inner.state.updated_at_ms = now;
         run.next += 1;

@@ -30,6 +30,7 @@ type Session struct {
 	ids       base.IDGenerator
 	nativeID  string
 	model     string
+	revision  string
 	state     protocol.SessionState
 	closed    bool
 	unusable  bool
@@ -102,12 +103,13 @@ func (s *Session) Submit(ctx context.Context, submit base.SubmitRequest) (protoc
 	if err := ctx.Err(); err != nil {
 		return protocol.MessageSubmitResponse{}, nil, err
 	}
+	s.promptMu.Lock()
 	blocks, messageIDs, err := s.nativePrompt(req)
 	if err != nil {
+		s.promptMu.Unlock()
 		return protocol.MessageSubmitResponse{}, nil, err
 	}
 
-	s.promptMu.Lock()
 	s.reduceMu.Lock()
 	s.mu.Lock()
 	if s.closed || s.unusable {
@@ -138,7 +140,7 @@ func (s *Session) Submit(ctx context.Context, submit base.SubmitRequest) (protoc
 	started := make(chan error, 1)
 	callDone := make(chan error, 1)
 	go func() {
-		callDone <- s.client.CallStarted(ctx, native.MethodSessionPrompt, native.SessionPromptParams{SessionID: s.nativeID, ContentBlocks: blocks}, &result, started)
+		callDone <- s.client.CallStarted(ctx, native.MethodSessionPrompt, native.EncodedPromptParams{SessionID: s.nativeID, ContentBlocks: blocks}, &result, started)
 	}()
 	if startErr := <-started; startErr != nil {
 		s.promptMu.Unlock()
@@ -186,7 +188,7 @@ func (s *Session) Submit(ctx context.Context, submit base.SubmitRequest) (protoc
 	return protocol.MessageSubmitResponse{SessionID: req.SessionID, Accepted: true, SubmissionID: protocol.SubmissionID(result.MessageID), RequestedDelivery: protocol.DeliveryAuto, EffectiveDelivery: protocol.DeliveryStart, DeliveryResolution: "session_idle", Admission: protocol.AdmissionStarted, RunID: run.id, Status: protocol.RunRunning, ModelID: s.model, MessageIDs: messageIDs}, run.stream.Stream(), nil
 }
 
-func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.ContentBlock, []protocol.MessageID, error) {
+func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.PromptBlock, []protocol.MessageID, error) {
 
 	if err := base.RefuseUnadvertisedControls(req); err != nil {
 		return nil, nil, err
@@ -194,7 +196,7 @@ func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.Cont
 	if req.SessionID == "" || len(req.Messages) == 0 || (req.Delivery != "" && req.Delivery != protocol.DeliveryAuto) {
 		return nil, nil, base.ErrInvalidSubmission
 	}
-	var blocks []native.ContentBlock
+	var blocks []native.PromptBlock
 	ids := make([]protocol.MessageID, len(req.Messages))
 	for i, m := range req.Messages {
 		if m.Role != protocol.RoleUser {
@@ -205,7 +207,7 @@ func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.Cont
 			ids[i] = protocol.MessageID(s.ids.NewID("message"))
 		}
 		if text, ok := m.Content.Text(); ok {
-			blocks = append(blocks, native.ContentBlock{Type: "text", Text: text})
+			blocks = append(blocks, native.PromptBlock{Type: "text", Text: text})
 			continue
 		}
 		parts, ok := m.Content.Parts()
@@ -213,10 +215,20 @@ func (s *Session) nativePrompt(req protocol.MessageSubmitRequest) ([]native.Cont
 			return nil, nil, base.ErrInvalidSubmission
 		}
 		for _, p := range parts {
-			if p.Type != protocol.ContentText {
+			switch p.Type {
+			case protocol.ContentText:
+				blocks = append(blocks, native.PromptBlock{Type: "text", Text: p.Text})
+			case protocol.ContentImage:
+				if p.Image == nil || p.Image.Data == "" || p.Image.MediaType == "" {
+					return nil, nil, base.ErrInvalidSubmission
+				}
+				if !acceptsImages(s.model) {
+					return nil, nil, &base.UnsupportedControlError{Feature: protocol.FeatureContentImage, Reason: base.ControlUnsatisfiable}
+				}
+				blocks = append(blocks, native.PromptBlock{Type: "image", Data: p.Image.Data, MimeType: p.Image.MediaType})
+			default:
 				return nil, nil, base.ErrInvalidSubmission
 			}
-			blocks = append(blocks, native.ContentBlock{Type: "text", Text: p.Text})
 		}
 	}
 	return blocks, ids, nil
@@ -1068,7 +1080,7 @@ func (s *Session) emitEnvelope(run *runState, t protocol.EnvelopeType, p any, te
 	e.TimestampMS = &now
 	e.SessionID = s.state.SessionID
 	e.RunID = run.id
-	e.CapabilityRevision = CapabilityRevision
+	e.CapabilityRevision = s.revision
 	e.InReplyTo = reply
 	if strings.HasPrefix(string(t), "action.call.") {
 		var a struct {

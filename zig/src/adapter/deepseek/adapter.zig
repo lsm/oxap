@@ -15,12 +15,16 @@ pub const server_name = "deepseek-harness-sdk-runtime";
 pub const server_version = harness_pins.deepseek_harness_admits[0];
 const reopen_support_reason = "session/resume reloads the bound stored session after initialize, under the initialized model route";
 const reopen_recovery_reason = "the harness restored the bound conversation; OAP runs and cursors remain process-local";
+const image_feature = "content.image";
 
-const features = [_]contract.Feature{
+const feature_prefix = [_]contract.Feature{
     .{ .key = "action.permissions", .level = .unavailable, .reason = "selected SDK wire has no interaction channel" },
     .{ .key = "action.tools", .level = .degraded, .reason = "call/result only; started is synthesized" },
     .{ .key = "action.tools.execute", .level = .unavailable, .reason = "Harness executes tools internally" },
     .{ .key = "capabilities", .level = .emulated, .reason = "conservative descriptor for pinned SDK wire" },
+};
+
+const feature_suffix = [_]contract.Feature{
     .{ .key = "protocol.initialize", .level = .emulated, .reason = "adapter-owned one-shot initialization freeze" },
     .{ .key = "run.cancel", .level = .unavailable, .reason = "selected SDK wire has no cancel request" },
     .{ .key = "run.reconciliation", .level = .degraded, .reason = "live status corroboration only" },
@@ -39,6 +43,11 @@ const features = [_]contract.Feature{
     .{ .key = contract.feature_session_reasoning, .level = .native, .reason = "initialize carries reasoningEffort for the runtime this session starts; the DeepSeek route takes off, low, high and max", .modes = &.{contract.mode_session_open} },
     .{ .key = "session.state", .level = .degraded, .reason = "reducer-owned live projection; no native query" },
 };
+
+const features = feature_prefix ++ feature_suffix;
+const image_features = feature_prefix ++ [_]contract.Feature{
+    .{ .key = image_feature, .level = .native, .reason = "inline image input on the configured model; after a model switch, the selected model governs admission" },
+} ++ feature_suffix;
 
 const deepseek_efforts = [_][]const u8{ "off", "low", "high", "max" };
 
@@ -71,6 +80,20 @@ pub const descriptor = contract.Descriptor{
     .capability_revision = capability_revision,
     .features = &features,
 };
+
+fn acceptsImages(model: []const u8) bool {
+    return std.mem.eql(u8, model, "deepseek-flash") or
+        std.mem.eql(u8, model, "deepseek-v4-flash") or
+        std.mem.eql(u8, model, "deepseek-v4-flash-vision-exp");
+}
+
+fn describe(model: []const u8) contract.Descriptor {
+    if (!acceptsImages(model)) return descriptor;
+    var enabled = descriptor;
+    enabled.capability_revision = capability_revision ++ "-image";
+    enabled.features = &image_features;
+    return enabled;
+}
 
 pub const Config = struct {
     executable: []const u8,
@@ -123,9 +146,9 @@ pub const Adapter = struct {
     }
 
     fn probe(ptr: *anyopaque, refusal: *contract.Refusal) contract.Failure!contract.Descriptor {
-        _ = ptr;
         _ = refusal;
-        return descriptor;
+        const self: *Adapter = @ptrCast(@alignCast(ptr));
+        return describe(self.config.model);
     }
 
     fn open(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!contract.Session {
@@ -240,7 +263,7 @@ pub const Session = struct {
         var reducer = session.Reducer.init(reducer_arena.allocator());
         reducer.session_id = id;
         reducer.native_id = native_id;
-        reducer.revision = capability_revision;
+        reducer.revision = describe(config.model).capability_revision;
         reducer.counters.shared = &owner.ids;
         reducer.counters.now_ms = wallClock;
         session.openSession(&reducer);
@@ -321,11 +344,13 @@ pub const Session = struct {
         self.awaited = self.calls;
         self.reply = null;
         var frame: std.json.ObjectMap = .empty;
-        try frame.put(self.owned(), "id", .{ .integer = self.calls });
-        try frame.put(self.owned(), "jsonrpc", .{ .string = "2.0" });
-        try frame.put(self.owned(), "method", .{ .string = method });
-        if (params) |carried| try frame.put(self.owned(), "params", carried);
-        const line = json_encode.valueAlloc(self.owned(), .{ .object = frame }) catch |err| return lift(err);
+        defer frame.deinit(self.gpa);
+        try frame.put(self.gpa, "id", .{ .integer = self.calls });
+        try frame.put(self.gpa, "jsonrpc", .{ .string = "2.0" });
+        try frame.put(self.gpa, "method", .{ .string = method });
+        if (params) |carried| try frame.put(self.gpa, "params", carried);
+        const line = try json_encode.valueAlloc(self.gpa, .{ .object = frame });
+        defer self.gpa.free(line);
         self.transport.write(line) catch |err| {
             self.reap();
             const departed = self.transport.departed();
@@ -491,15 +516,22 @@ pub const Session = struct {
         _ = envelope_id;
         const self = cast(ptr);
         if (request.session_id.len == 0 or request.messages.len == 0 or request.delivery != .auto) return error.InvalidSubmission;
-        var blocks = std.json.Array.init(self.owned());
+        var blocks = std.json.Array.init(arena);
         const message_ids = try arena.alloc([]const u8, request.messages.len);
         for (request.messages, message_ids) |message, *slot| {
             if (message.role != .user) return error.InvalidSubmission;
             slot.* = if (message.id) |carried| carried else try self.reducer.counters.nextID(arena, "message");
             switch (message.content) {
-                .text => |content| try blocks.append(try textBlock(self.owned(), content)),
+                .text => |content| try blocks.append(try textBlock(arena, content)),
                 .parts => |parts| for (parts) |part| switch (part) {
-                    .text => |content| try blocks.append(try textBlock(self.owned(), content)),
+                    .text => |content| try blocks.append(try textBlock(arena, content)),
+                    .image => |image| {
+                        const data = image.data orelse return error.InvalidSubmission;
+                        const mime = image.media_type orelse return error.InvalidSubmission;
+                        if (data.len == 0 or mime.len == 0) return error.InvalidSubmission;
+                        if (!acceptsImages(self.reducer.model)) return refusal.unsupported(image_feature, contract.reason_unsatisfiable);
+                        try blocks.append(try imageBlock(arena, data, mime));
+                    },
                     else => return error.InvalidSubmission,
                 },
             }
@@ -514,8 +546,8 @@ pub const Session = struct {
         };
         self.ran = true;
         var params: std.json.ObjectMap = .empty;
-        try params.put(self.owned(), "sessionId", .{ .string = self.native_id });
-        try params.put(self.owned(), "contentBlocks", .{ .array = blocks });
+        try params.put(arena, "sessionId", .{ .string = self.native_id });
+        try params.put(arena, "contentBlocks", .{ .array = blocks });
         if (!try self.send("session/prompt", .{ .object = params })) {
             session.abortSubmission(&self.reducer);
             return refusal.fail(error.BackendFailed, "the deepseek harness exited before answering session/prompt");
@@ -646,7 +678,15 @@ pub const Session = struct {
 fn textBlock(allocator: std.mem.Allocator, content: []const u8) !std.json.Value {
     var block: std.json.ObjectMap = .empty;
     try block.put(allocator, "type", .{ .string = "text" });
-    try block.put(allocator, "text", .{ .string = try allocator.dupe(u8, content) });
+    try block.put(allocator, "text", .{ .string = content });
+    return .{ .object = block };
+}
+
+fn imageBlock(allocator: std.mem.Allocator, data: []const u8, mime: []const u8) !std.json.Value {
+    var block: std.json.ObjectMap = .empty;
+    try block.put(allocator, "type", .{ .string = "image" });
+    try block.put(allocator, "data", .{ .string = data });
+    try block.put(allocator, "mimeType", .{ .string = mime });
     return .{ .object = block };
 }
 
