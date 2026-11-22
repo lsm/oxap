@@ -17,11 +17,14 @@ const reopen_support_reason = "session/resume reloads the bound stored session a
 const reopen_recovery_reason = "the harness restored the bound conversation; OAP runs and cursors remain process-local";
 const image_feature = "content.image";
 
-const features = [_]contract.Feature{
+const feature_prefix = [_]contract.Feature{
     .{ .key = "action.permissions", .level = .unavailable, .reason = "selected SDK wire has no interaction channel" },
     .{ .key = "action.tools", .level = .degraded, .reason = "call/result only; started is synthesized" },
     .{ .key = "action.tools.execute", .level = .unavailable, .reason = "Harness executes tools internally" },
     .{ .key = "capabilities", .level = .emulated, .reason = "conservative descriptor for pinned SDK wire" },
+};
+
+const feature_suffix = [_]contract.Feature{
     .{ .key = "protocol.initialize", .level = .emulated, .reason = "adapter-owned one-shot initialization freeze" },
     .{ .key = "run.cancel", .level = .unavailable, .reason = "selected SDK wire has no cancel request" },
     .{ .key = "run.reconciliation", .level = .degraded, .reason = "live status corroboration only" },
@@ -41,10 +44,12 @@ const features = [_]contract.Feature{
     .{ .key = "session.state", .level = .degraded, .reason = "reducer-owned live projection; no native query" },
 };
 
-const deepseek_efforts = [_][]const u8{ "off", "low", "high", "max" };
-const image_features = features ++ [_]contract.Feature{
+const features = feature_prefix ++ feature_suffix;
+const image_features = feature_prefix ++ [_]contract.Feature{
     .{ .key = image_feature, .level = .native, .reason = "inline image input on the configured model; after a model switch, the selected model governs admission" },
-};
+} ++ feature_suffix;
+
+const deepseek_efforts = [_][]const u8{ "off", "low", "high", "max" };
 
 fn effortFor(request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure![]const u8 {
     const level = request.reasoning_level orelse return "";
