@@ -121,10 +121,18 @@ fn refused_feature(error: Error) -> (String, &'static str) {
 #[test]
 fn a_reopen_resumes_the_bound_native_session_after_initialize_and_reports_it_recovered() {
     let fixture = Fixture::new();
+    let wire = fixture.dir.join("wire");
+    let resumed = format!(
+        r#"read line; printf '%s\n' "$line" >> "{wire}"; printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{}}}}'; read line; printf '%s\n' "$line" >> "{wire}"; printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{}}}}'; exit 0; "#,
+        wire = wire.display()
+    );
     let mut reopen = request("s");
     reopen.reopen = true;
     reopen.native_session_id = "stored".into();
-    let session = fixture.adapter().open(reopen).unwrap();
+    let session = fixture
+        .adapter_then(true, Duration::ZERO, &resumed)
+        .open(reopen)
+        .unwrap();
     let wire = fixture.wire();
     assert_eq!(wire[0]["method"], "initialize");
     assert_eq!(wire[1]["method"], "session/resume");
@@ -142,6 +150,7 @@ fn a_reopen_resumes_the_bound_native_session_after_initialize_and_reports_it_rec
     );
     assert_eq!(session.native_session_id(), "stored");
     session.close().unwrap();
+    assert_eq!(fixture.wire()[2]["method"], "shutdown");
 }
 
 #[test]
