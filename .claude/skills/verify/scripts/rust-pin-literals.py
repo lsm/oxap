@@ -19,7 +19,7 @@ def main():
         subprocess.run(
             ["go", "build", "-o", binary, "./go/cmd/goap"], check=True, timeout=120
         )
-        with TemporaryDirectory(dir="rust", prefix="pin-probe-") as directory:
+        with TemporaryDirectory(dir=Path.cwd() / "rust", prefix="pin-probe-") as directory:
             probe = Path(directory) / "probe.rs"
             probe.write_text(
                 f'const REVISION: &str = "{pin["capability_revision"]}";\n'
