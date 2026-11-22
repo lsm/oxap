@@ -11,19 +11,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     use oxap_protocol::ReasoningLevel;
 
     let args: Vec<_> = std::env::args().skip(1).collect();
-    let (python, source, state, mode) = match args.as_slice() {
-        [python, source, state] => (python, source, state, ""),
+    let (python, source, state, mode, model) = match args.as_slice() {
+        [python, source, state] => (python, source, state, "", ""),
+        [python, source, state, mode, model] if mode == "--run" => {
+            (python, source, state, mode.as_str(), model.as_str())
+        }
         [python, source, state, mode]
             if matches!(
                 mode.as_str(),
                 "--prompt" | "--observe" | "--start" | "--project" | "--run"
             ) =>
         {
-            (python, source, state, mode.as_str())
+            (python, source, state, mode.as_str(), "")
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model]]"
                     .into(),
             );
         }
@@ -48,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut session = GatewaySession::create(
         &config,
-        "",
+        model,
         &ReasoningLevel::default(),
         Some(Instant::now() + Duration::from_secs(30)),
     )?;

@@ -17,16 +17,20 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
-    send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
-    assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {}}
-    send({"jsonrpc": "2.0", "id": 1, "result": {
-        "session_id": "sess0001", "stored_session_id": "stored",
-    }})
+    if case != "malformed-frame":
+        send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
+        assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {}}
+        send({"jsonrpc": "2.0", "id": 1, "result": {
+            "session_id": "sess0001", "stored_session_id": "stored",
+        }})
     for frame in frames(corpus / case / "native.jsonl"):
         if frame["direction"] == "host-to-gateway":
-            assert read() == frame["raw"]
+            raw = frame["raw"]
+            assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
             send(frame["raw"])
+        elif frame["action"] == "process-exit":
+            return
     assert sys.stdin.read() == ""
 
 
@@ -41,8 +45,9 @@ def verify(binary, corpus, mode, case):
             f"from pathlib import Path\n"
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
+        model = ["hermes-test"] if case == "malformed-frame" else []
         result = subprocess.run(
-            [binary, sys.executable, directory, directory, mode],
+            [binary, sys.executable, directory, directory, mode, *model],
             env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
             timeout=45, capture_output=True, text=True,
         )
@@ -55,10 +60,11 @@ def verify(binary, corpus, mode, case):
     shutdowns = lines.count("gateway exited cleanly")
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
-        with expected_path.open() as expected:
-            assert envelopes == [
-                json.dumps(envelope, separators=(",", ":")) for envelope in json.load(expected)
-            ]
+        expected = json.loads(expected_path.read_text())
+        if case == "process-exit":
+            assert expected[-1]["payload"]["error"]["message"] == "gateway died"
+            expected[-1]["payload"]["error"]["message"] = "EOF"
+        assert envelopes == [json.dumps(envelope, separators=(",", ":")) for envelope in expected]
         assert shutdowns == 1
         print(f"BYTE-MATCHED ENVELOPES: {len(envelopes)}\nCLEAN SHUTDOWNS: {shutdowns}")
         return
