@@ -588,7 +588,7 @@ jobs:
     name: Rust SDK
     needs: [unit-tests]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ github.event_name == 'push' && 25 || 15 }}
     defaults:
       run:
         working-directory: rust
@@ -606,8 +606,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Restore Cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -686,6 +687,16 @@ jobs:
         if: always()
         working-directory: .
         run: ./scripts/check-no-test-litter.sh
+
+      - name: Save Cargo cache on main
+        if: github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # =============================================================================
   # Python SDK (sdk/python/)
