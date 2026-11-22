@@ -86,7 +86,7 @@ def envelope(kind, **payload):
             "id": kind, "session_id": "s1", "payload": {"session_id": "s1", **payload}}
 
 
-def verify_turns(command, env, sentinel, source):
+def verify_turns(command, env, sentinel, decoy_key, source):
     with tempfile.TemporaryFile() as stderr, subprocess.Popen(
         command, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, bufsize=0,
     ) as hub:
@@ -111,7 +111,7 @@ def verify_turns(command, env, sentinel, source):
                 hub.wait(timeout=10)
         stderr.seek(0)
         logs = stderr.read()
-        assert sentinel.encode() not in observed + logs, "sentinel escaped into hub output"
+        assert all(value.encode() not in observed + logs for value in (sentinel, decoy_key)), "credential escaped into hub output"
         for label, surface in (("native output", observed), ("native failure", observed), ("native stderr", logs)):
             assert f"{label}: {source}".encode() in surface, f"missing redaction of {label}"
 
@@ -148,9 +148,9 @@ def verify(binary, root, real, decoy):
         config.write_text(json.dumps({"adapters": {"routed": {**entry, **overrides}}}))
 
     configure({})
-    verify_turns(command, env, sentinel, VARIABLE)
+    verify_turns(command, env, sentinel, other, VARIABLE)
     configure({"model_endpoint": {"base_url": base, "credential_env": SIBLING}})
-    verify_turns(command, {**env, SIBLING: sentinel}, sentinel, SIBLING)
+    verify_turns(command, {**env, SIBLING: sentinel}, sentinel, other, SIBLING)
     assert real.observed == [("/gateway/v1/responses", None, "Bearer " + sentinel)] * 4, "incorrect upstream route or auth"
     assert real.payloads == [{"model": MODEL, "input": "fixture input"}] * 4, "wrong Responses payload"
     assert not decoy.observed, "decoy saw a request"
@@ -158,6 +158,8 @@ def verify(binary, root, real, decoy):
     print("Hermes: two fresh homes, four Responses requests, zero decoy requests, three redacted surfaces per hub")
 
     refused = [
+        ({"model": ""}, "requires a model id"),
+        ({"model": "\u00a0"}, "requires a model id"),
         ({"environment": ["HERMES_HOME"]}, "HERMES_HOME"),
         ({"environment": ["OPENAI_BASE_URL"]}, "OPENAI_BASE_URL"),
         ({"environment": ["OPENAI_API_KEY"]}, "OPENAI_API_KEY"),
@@ -171,6 +173,7 @@ def verify(binary, root, real, decoy):
         "https://api.actual.inc/v1",
         base + "/ANTHROPIC///",
         base + "/anthropic/v1",
+        base + "/anthropic;fixture",
         "https://api.kimi.com/coding/v1",
         "https://bedrock-runtime.us-east-1.amazonaws.com/v1",
     ))
@@ -180,8 +183,13 @@ def verify(binary, root, real, decoy):
         assert all(value.encode() not in result.stdout + result.stderr for value in (sentinel, other)), "credential escaped into startup refusal"
         assert result.returncode != 0 and b'"routed"' in result.stderr, "expected a named startup refusal"
         assert diagnostic.encode() in result.stderr, f"refusal lacks {diagnostic}"
+    configure({"model_endpoint": {**route, "base_url":
+        "https://bedrock-runtime.us-east-1.amazonaws.com.example.test/v1"}})
+    result = subprocess.run(command, env=env, capture_output=True, input=b"", timeout=10)
+    assert all(value.encode() not in result.stdout + result.stderr for value in (sentinel, other)), "credential escaped at startup"
+    assert result.returncode == 0, "Bedrock lookalike hostname was refused"
     assert len(real.observed) == 4 and not decoy.observed, "startup refusal contacted an endpoint"
-    print(f"Hermes: {len(refused)} named startup refusals with nonzero exit")
+    print(f"Hermes: {len(refused)} named startup refusals with nonzero exit, Bedrock lookalike exit=0")
 
 
 def main():

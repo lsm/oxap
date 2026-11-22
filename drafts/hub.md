@@ -161,7 +161,7 @@ the named entry for an unknown row, a missing endpoint or key, an OAuth login,
 or either translated variable already set in `environment`. The dsh
 `provider` and the adapter's capabilities stay the same.
 
-A Claude, Codex, DeepSeek, OpenCode, or Pi hub entry can use `model_endpoint` to route
+A Claude, Codex, DeepSeek, Hermes, OpenCode, or Pi hub entry can use `model_endpoint` to route
 directly to a gateway. Set `base_url` to an absolute HTTPS URL or a
 loopback HTTP URL without userinfo, a query, or a fragment. The hub passes
 it through verbatim. Set `credential_env` to the name of a hub environment
@@ -180,6 +180,12 @@ the member as unknown.
 - DeepSeek uses `anthropic-messages` and receives `DEEPSEEK_BASE_URL` and
   `DEEPSEEK_API_KEY`. Startup refuses `--patch` or a `.credentials.yaml`
   under the resolved dsh home because either can override the route.
+- Hermes uses `openai-responses` and sends `provider: "openai-api"` beside
+  the required bare model id at session creation. The child receives
+  `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and a fresh `HERMES_HOME` under oxap
+  state. Startup refuses these destination variables, numbered
+  `OPENAI_API_KEY_2` and later siblings listed in `environment`, and URLs
+  Hermes reclassifies away from Responses, including AWS Bedrock Runtime.
 - OpenCode and Pi require `model: "oapx/<model-id>"` and one of
   `anthropic-messages`, `openai-completions`, or `openai-responses` in
   `wire`. OpenCode receives an inline `OPENCODE_CONFIG_CONTENT` layer and
@@ -190,7 +196,7 @@ the member as unknown.
   uses this directory for its agent state. Startup refuses `--provider`,
   `--model`, and `--api-key` in the entry's `args`.
 
-The three fixed-wire adapters can omit `wire`. Only Claude accepts `auth`.
+Fixed-wire adapters can omit `wire`. Only Claude accepts `auth`.
 Both generated configs reference `credential_env` by name. OpenCode's own
 server log is outside the hub's redaction boundary.
 

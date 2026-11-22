@@ -204,6 +204,8 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
         null;
     if (model_endpoint != null) {
         const pi = std.mem.eql(u8, kind, "pi");
+        if (std.mem.eql(u8, kind, "hermes") and hermesModelBlank(model))
+            return reader.refuse("{s}: Hermes model_endpoint requires a model id", .{where});
         if ((pi or std.mem.eql(u8, kind, "opencode")) and
             (!std.mem.startsWith(u8, model, "oapx/") or model.len == "oapx/".len))
             return reader.refuse("{s}: model_endpoint requires model oapx/<model-id>", .{where});
@@ -257,11 +259,12 @@ fn readModelEndpoint(
     const codex = std.mem.eql(u8, kind, "codex");
     const pi = std.mem.eql(u8, kind, "pi");
     const opencode = std.mem.eql(u8, kind, "opencode");
-    if (!claude and !codex and !pi and !opencode and !std.mem.eql(u8, kind, "deepseek"))
-        return reader.refuse("{s}: \"model_endpoint\" routes only claude, codex, deepseek, opencode, and pi adapters; a {s} adapter has no custom endpoint translation", .{ where, kind });
-    const fixed_wire = if (codex) "openai-responses" else "anthropic-messages";
+    const hermes = std.mem.eql(u8, kind, "hermes");
+    if (!claude and !codex and !pi and !opencode and !hermes and !std.mem.eql(u8, kind, "deepseek"))
+        return reader.refuse("{s}: \"model_endpoint\" routes only claude, codex, deepseek, hermes, opencode, and pi adapters; a {s} adapter has no custom endpoint translation", .{ where, kind });
+    const fixed_wire = if (codex or hermes) "openai-responses" else "anthropic-messages";
     const destinations: []const []const u8 =
-        if (pi) &.{pi_endpoint_variable} else if (opencode) &opencode_endpoint_variables else if (claude) &claude_endpoint_variables else if (codex) &.{codex_endpoint_variable} else &deepseek_endpoint_variables;
+        if (pi) &.{pi_endpoint_variable} else if (opencode) &opencode_endpoint_variables else if (claude) &claude_endpoint_variables else if (codex) &.{codex_endpoint_variable} else if (hermes) &hermes_endpoint_variables else &deepseek_endpoint_variables;
     if (provider.len > 0)
         return reader.refuse("{s}: \"model_provider\" and \"model_endpoint\" name two providers", .{where});
     const object = try reader.members(raw, where, &.{ "base_url", "credential_env", "wire", "auth" }) orelse
@@ -269,6 +272,8 @@ fn readModelEndpoint(
     const base_url = try reader.string(object, where, "base_url");
     if (!validModelEndpointUrl(base_url))
         return reader.refuse("{s}: model_endpoint base_url must be an absolute HTTPS URL or loopback HTTP URL without userinfo, query, or fragment", .{where});
+    if (hermes and !try hermesKeepsResponses(reader.arena, base_url))
+        return reader.refuse("{s}: Hermes reclassifies this model_endpoint base_url away from openai-responses", .{where});
     const wire = try reader.string(object, where, "wire");
     if (pi or opencode) {
         if (!std.mem.eql(u8, wire, "anthropic-messages") and !std.mem.eql(u8, wire, "openai-completions") and !std.mem.eql(u8, wire, "openai-responses"))
@@ -307,6 +312,8 @@ fn readModelEndpoint(
             if (env_names.eql(name, destination, 0))
                 return reader.refuse("{s}: \"environment\" names {s}, which model_endpoint controls", .{ where, name });
         }
+        if (hermes and hermesNumberedKey(name))
+            return reader.refuse("{s}: \"environment\" names {s}, which can override the model_endpoint credential", .{ where, name });
     }
     const key: []const u8 = environ.get(variable) orelse "";
     if (key.len == 0)
@@ -320,8 +327,56 @@ fn readModelEndpoint(
 pub const claude_endpoint_variables = [_][]const u8{ "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN" };
 pub const codex_endpoint_variable = "OAPX_PROVIDER_API_KEY";
 pub const deepseek_endpoint_variables = [_][]const u8{ "DEEPSEEK_BASE_URL", "DEEPSEEK_API_KEY" };
+pub const hermes_endpoint_variables = [_][]const u8{ "OPENAI_BASE_URL", "OPENAI_API_KEY", "HERMES_HOME" };
 pub const opencode_endpoint_variables = [_][]const u8{ "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT" };
 pub const pi_endpoint_variable = "PI_CODING_AGENT_DIR";
+
+fn hermesModelBlank(model: []const u8) bool {
+    const view = std.unicode.Utf8View.init(model) catch return false;
+    var chars = view.iterator();
+    while (chars.nextCodepoint()) |c| switch (c) {
+        0x09...0x0d, 0x1c...0x20, 0x85, 0xa0, 0x1680, 0x2000...0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000 => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn hermesNumberedKey(name: []const u8) bool {
+    const prefix = "OPENAI_API_KEY_";
+    if (name.len <= prefix.len) return false;
+    const starts_with = if (@import("builtin").os.tag == .windows)
+        std.ascii.eqlIgnoreCase(name[0..prefix.len], prefix)
+    else
+        std.mem.startsWith(u8, name, prefix);
+    if (!starts_with) return false;
+    const suffix = name[prefix.len..];
+    if (suffix[0] == '0' or (suffix.len == 1 and suffix[0] == '1')) return false;
+    for (suffix) |digit| {
+        if (!std.ascii.isDigit(digit)) return false;
+    }
+    return true;
+}
+
+fn hermesKeepsResponses(arena: std.mem.Allocator, url: []const u8) !bool {
+    const lower = try arena.dupe(u8, url);
+    for (lower) |*byte| byte.* = std.ascii.toLower(byte.*);
+    const uri = std.Uri.parse(lower) catch return false;
+    const host = std.mem.trimEnd(u8, uri.host.?.percent_encoded, ".");
+    for ([_][]const u8{ "api.anthropic.com", "api.actual.inc" }) |other| {
+        if (std.mem.eql(u8, host, other)) return false;
+    }
+    for ([_][]const u8{ "api.x.ai", "api.meta.ai", "api.router.com", "api.openai.com" }) |responses| {
+        if (std.mem.eql(u8, host, responses)) return true;
+    }
+    if (std.mem.endsWith(u8, host, ".api.openai.com")) return true;
+    if (std.mem.startsWith(u8, host, "bedrock-runtime.") and std.mem.endsWith(u8, host, ".amazonaws.com")) return false;
+    const path = std.mem.trimEnd(u8, uri.path.percent_encoded, "/");
+    if (std.mem.eql(u8, host, "api.kimi.com") and std.mem.indexOf(u8, path, "/coding") != null) return false;
+    const last_segment = if (std.mem.lastIndexOfScalar(u8, path, '/')) |index| index + 1 else 0;
+    const params = std.mem.indexOfScalarPos(u8, path, last_segment, ';') orelse path.len;
+    return !std.mem.endsWith(u8, path[0..params], "/anthropic") and
+        !std.mem.endsWith(u8, path[0..params], "/anthropic/v1");
+}
 
 fn validModelEndpointUrl(url: []const u8) bool {
     for (url, 0..) |byte, i| {

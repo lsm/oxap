@@ -49,8 +49,10 @@ pub const Config = struct {
     executable: []const u8,
     args: []const []const u8 = &.{},
     environment: []const []const u8 = &.{},
+    stderr_redaction: ?process.StderrRedaction = null,
     working_directory: ?[]const u8 = null,
     model: []const u8 = "",
+    provider: []const u8 = "",
     frame_limit: usize = rpc.frame_limit_default,
     exit_grace_ns: u64 = process.default_exit_grace_ns,
     request_timeout_ns: u64 = 60 * std.time.ns_per_s,
@@ -199,6 +201,7 @@ pub const Session = struct {
     fn createNative(self: *Session, arena: std.mem.Allocator, reasoning_level: ?[]const u8, refusal: *contract.Refusal) contract.Failure![]const u8 {
         var params: std.json.ObjectMap = .empty;
         if (self.owner.config.model.len > 0) try params.put(self.owned(), "model", .{ .string = self.owner.config.model });
+        if (self.owner.config.provider.len > 0) try params.put(self.owned(), "provider", .{ .string = self.owner.config.provider });
         if (reasoning_level) |level| try params.put(self.owned(), "reasoning_effort", .{ .string = nativeEffort(level) });
         const created = try self.call(arena, "session.create", .{ .object = params }, refusal);
         const native_id = member(created, "session_id");
@@ -242,6 +245,7 @@ pub const Session = struct {
             .executable = config.executable,
             .args = config.args,
             .environment = config.environment,
+            .stderr_redaction = config.stderr_redaction,
             .working_directory = config.working_directory,
             .frame_limit = config.frame_limit,
             .exit_grace_ns = config.exit_grace_ns,
