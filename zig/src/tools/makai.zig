@@ -193,13 +193,82 @@ const StderrNotice = struct {
     }
 };
 
+const RouteRedactions = struct {
+    const Key = struct { variable: []const u8, value: []const u8 };
+
+    keys: std.ArrayList(Key) = .empty,
+
+    fn text(self: *const RouteRedactions, arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error![]const u8 {
+        var rest = bytes;
+        var out: std.ArrayList(u8) = .empty;
+        while (true) {
+            var first = rest.len;
+            var matched: ?Key = null;
+            for (self.keys.items) |key| {
+                const at = std.mem.find(u8, rest, key.value) orelse continue;
+                if (at > first or (at == first and key.value.len <= matched.?.value.len)) continue;
+                first = at;
+                matched = key;
+            }
+            const key = matched orelse break;
+            try out.appendSlice(arena, rest[0..first]);
+            try out.appendSlice(arena, key.variable);
+            rest = rest[first + key.value.len ..];
+        }
+        if (rest.ptr == bytes.ptr) return bytes;
+        try out.appendSlice(arena, rest);
+        return out.items;
+    }
+
+    fn value(self: *const RouteRedactions, arena: std.mem.Allocator, node: *std.json.Value) std.mem.Allocator.Error!bool {
+        var changed = false;
+        switch (node.*) {
+            .string => |original| {
+                node.string = try self.text(arena, original);
+                return original.ptr != node.string.ptr;
+            },
+            .array => |*array| for (array.items) |*item| {
+                changed = (try self.value(arena, item)) or changed;
+            },
+            .object => |*object| {
+                for (object.keys(), object.values()) |*name, *item| {
+                    const original = name.*;
+                    name.* = try self.text(arena, original);
+                    changed = (try self.value(arena, item)) or changed or original.ptr != name.ptr;
+                }
+            },
+            else => {},
+        }
+        return changed;
+    }
+
+    fn json(context: *const anyopaque, arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error![]const u8 {
+        const self: *const RouteRedactions = @ptrCast(@alignCast(context));
+        if (self.keys.items.len == 0) return bytes;
+        var parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{ .parse_numbers = false }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return self.text(arena, bytes),
+        };
+        if (!try self.value(arena, &parsed)) return bytes;
+        return std.json.Stringify.valueAlloc(arena, parsed, .{});
+    }
+};
+
 const StdoutSink = struct {
     file: std.Io.File,
     io: std.Io,
+    redactions: ?*const RouteRedactions = null,
+    json: bool = false,
 
     fn write(context: *anyopaque, line: []const u8) anyerror!void {
         const self: *StdoutSink = @ptrCast(@alignCast(context));
-        try self.file.writeStreamingAll(self.io, line);
+        var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer scratch.deinit();
+        const bytes = if (self.redactions) |redactions|
+            if (self.json) try RouteRedactions.json(redactions, scratch.allocator(), line) else try redactions.text(scratch.allocator(), line)
+        else
+            line;
+        try self.file.writeStreamingAll(self.io, bytes);
         try self.file.writeStreamingAll(self.io, "\n");
     }
 };
@@ -598,6 +667,7 @@ fn runHubHttp(
     core: *hub.Hub,
     bind: []const u8,
     served: []const u8,
+    redactions: *const RouteRedactions,
     stdout: std.Io.File,
     stderr: std.Io.File,
 ) !void {
@@ -627,7 +697,11 @@ fn runHubHttp(
 
     var daemon = try hub_daemon.Daemon.init(allocator, core, allow orelse &.{}, hub_http.always_going);
     defer daemon.deinit();
-    var notices = StdoutSink{ .file = stderr, .io = hubIo() };
+    var notices = StdoutSink{ .file = stderr, .io = hubIo(), .redactions = redactions };
+    if (redactions.keys.items.len > 0) {
+        daemon.redact_json = RouteRedactions.json;
+        daemon.redaction_context = redactions;
+    }
     daemon.signals = endpoint_signals.count;
     daemon.signal_readable = endpoint_signals.readable();
     daemon.frontend.notices = .{ .context = &notices, .write = StdoutSink.write };
@@ -727,7 +801,9 @@ fn runHub(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var environ = try compat.createEnvMap(arena);
-    const surface = withSurface(hub_config_surface, arena, stderr);
+    var redactions: RouteRedactions = .{};
+    var surface = withSurface(hub_config_surface, arena, stderr);
+    surface.redactions = &redactions;
     var file = adapter_config.File{};
     if (config) |path| {
         const bytes = compat.fs.readFileAlloc(arena, compat.fs.getCwd(), path, backend_config_read_limit) catch |err| {
@@ -800,13 +876,13 @@ fn runHub(
         try compat.stdio.writeAll(stderr, "oxap serve: a console interrupt ends this process rather than the hub; the Windows path is #460\n");
     }
 
-    const served = try std.mem.join(arena, ", ", try core.names(arena));
-    if (!over_stdio) return runHubHttp(allocator, arena, &core, addr orelse hub_http.defaultBind(), served, stdout, stderr);
+    const served = try redactions.text(arena, try std.mem.join(arena, ", ", try core.names(arena)));
+    if (!over_stdio) return runHubHttp(allocator, arena, &core, addr orelse hub_http.defaultBind(), served, &redactions, stdout, stderr);
 
-    var sink = StdoutSink{ .file = stdout, .io = hubIo() };
+    var sink = StdoutSink{ .file = stdout, .io = hubIo(), .redactions = &redactions, .json = true };
     var frontend = try hub_stdio.Frontend.init(allocator, &core, .{ .context = &sink, .write = StdoutSink.write }, .{});
     defer frontend.deinit();
-    var notices = StdoutSink{ .file = stderr, .io = hubIo() };
+    var notices = StdoutSink{ .file = stderr, .io = hubIo(), .redactions = &redactions };
     frontend.notices = .{ .context = &notices, .write = StdoutSink.write };
     try compat.stdio.writeAll(stderr, "oxap: serving adapters over stdio: ");
     try compat.stdio.writeAll(stderr, served);
@@ -827,7 +903,8 @@ fn runHub(
                     line,
                     if (frontend.recorded.cut) " (cut)" else "",
                 }) catch "oxap: framing defect, stopped serving\n";
-                compat.stdio.writeAll(stderr, message) catch {};
+                const filtered = try redactions.text(arena, message);
+                compat.stdio.writeAll(stderr, filtered) catch {};
             } else {
                 compat.stdio.writeAll(stderr, "oxap: framing defect, stopped serving\n") catch {};
             }
@@ -5251,10 +5328,12 @@ const ConfigSurface = struct {
     noun: []const u8,
     stderr: std.Io.File = undefined,
     arena: std.mem.Allocator = undefined,
+    redactions: ?*RouteRedactions = null,
 
     fn refuse(self: ConfigSurface, comptime format: []const u8, args: anytype) !void {
         const message = try std.fmt.allocPrint(self.arena, "{s}: " ++ format ++ "\n", .{self.label} ++ args);
-        try compat.stdio.writeAll(self.stderr, message);
+        const filtered = if (self.redactions) |redactions| try redactions.text(self.arena, message) else message;
+        try compat.stdio.writeAll(self.stderr, filtered);
     }
 };
 
