@@ -4,10 +4,11 @@ use oxap_adapter::{
     gojson::go_marshal, index_input_answers, jsonrpc::RequestId, runtime::Runtime, Error,
 };
 use oxap_protocol::{
-    ActionCallPayload, ContentDeltaPayload, Envelope, EnvelopeId, EnvelopeType, InputAnswer,
-    InputOption, InputQuestion, InputQuestionKind, InteractionId, Message, MessageContent,
-    MessageId, MessageRole, ProtocolError, RunCompletedPayload, RunFailedPayload, RunId,
-    RunStartedPayload, RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
+    ActionCallPayload, Admission, ContentDeltaPayload, EffectiveDeliveryMode, Envelope, EnvelopeId,
+    EnvelopeType, InputAnswer, InputOption, InputQuestion, InputQuestionKind, InteractionId,
+    Message, MessageContent, MessageId, MessageRole, MessageSubmitResponse, ProtocolError,
+    RequestedDeliveryMode, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload,
+    RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
     UserInputResolutionStatus, UserInputResolveRequest, UserInputResolvedPayload,
 };
 use serde::Serialize;
@@ -103,6 +104,23 @@ impl GatewaySession {
 }
 
 impl GatewayRun<'_> {
+    pub(crate) fn admission(&self, model_id: &str) -> MessageSubmitResponse {
+        MessageSubmitResponse {
+            session_id: self.session_id.clone(),
+            accepted: true,
+            submission_id: self.message_id.as_str().into(),
+            requested_delivery: RequestedDeliveryMode::AUTO,
+            effective_delivery: EffectiveDeliveryMode::START,
+            delivery_resolution: "session_idle".into(),
+            admission: Admission::STARTED,
+            run_id: Some(self.run_id.clone()),
+            status: RunStatus::RUNNING,
+            model_id: model_id.to_owned(),
+            message_ids: vec![self.message_id.clone()],
+            ..MessageSubmitResponse::default()
+        }
+    }
+
     pub fn resolve_input(&mut self, resolution: UserInputResolveRequest) -> Result<(), Error> {
         let index = self
             .gates
@@ -139,6 +157,14 @@ impl GatewayRun<'_> {
     pub fn next_observation(
         &mut self,
         deadline: Option<Instant>,
+    ) -> Result<Option<RunObservation>, Error> {
+        self.observe(deadline, true)
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        deadline: Option<Instant>,
+        interactive: bool,
     ) -> Result<Option<RunObservation>, Error> {
         loop {
             if let Some(event) = self.pending.pop_front() {
@@ -209,10 +235,12 @@ impl GatewayRun<'_> {
                     continue;
                 }
                 PromptObservation::Other(Observation::Request(request)) => {
-                    if !matches!(
-                        request.method.as_str(),
-                        REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
-                    ) {
+                    if !interactive
+                        || !matches!(
+                            request.method.as_str(),
+                            REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
+                        )
+                    {
                         return Ok(Some(RunObservation::Other(Observation::Request(request))));
                     }
                     self.open_gate(request)?;
@@ -445,7 +473,12 @@ impl GatewayRun<'_> {
         Ok(event)
     }
 
-    fn queue_failure(&mut self, code: &str, message: &str, settled_by: &str) -> Result<(), Error> {
+    pub(crate) fn queue_failure(
+        &mut self,
+        code: &str,
+        message: &str,
+        settled_by: &str,
+    ) -> Result<(), Error> {
         let event = self.fail(protocol_error(code, message), settled_by)?;
         self.pending.push_back(event);
         Ok(())

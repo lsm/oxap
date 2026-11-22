@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>]"
                     .into(),
             );
         }
@@ -310,34 +310,43 @@ fn shared_submit(
             ..MessageSubmitRequest::default()
         },
     };
-    let (admission, mut stream) = block_on(session.submit(request.clone()))?;
-    let run_id = admission.run_id.clone().ok_or("missing admitted run")?;
-    println!("admission: {}", serde_json::to_string(&admission)?);
-    let state = block_on(session.state())?;
-    assert_eq!(state.status, SessionStatus::RUNNING);
-    assert_eq!(state.active_run_id, Some(run_id));
-    assert_eq!(state.active_runs.len(), 1);
-    assert_eq!(
-        state.active_runs[0].admitted_submit_requests[0].as_str(),
-        "caller-submit"
-    );
+    let mut unsupported = request.clone();
+    unsupported.request.model_id = Some("other".into());
     assert!(matches!(
-        block_on(session.submit(request)),
-        Err(Error::RunActive)
+        block_on(session.submit(unsupported)),
+        Err(Error::UnsupportedControl(_))
     ));
-    let mut first = true;
-    while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
-        let event = event?;
-        if first {
-            assert_eq!(event.envelope_type, EnvelopeType::RUN_STARTED);
-            std::fs::write(Path::new(state_dir).join("release-run"), "")?;
-            first = false;
+    for index in 1..=2 {
+        let (admission, mut stream) = block_on(session.submit(request.clone()))?;
+        let run_id = admission.run_id.clone().ok_or("missing admitted run")?;
+        println!("admission: {}", serde_json::to_string(&admission)?);
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::RUNNING);
+        assert_eq!(state.active_run_id, Some(run_id));
+        assert_eq!(state.active_runs.len(), 1);
+        assert_eq!(
+            state.active_runs[0].admitted_submit_requests[0].as_str(),
+            "caller-submit"
+        );
+        assert!(matches!(
+            block_on(session.submit(request.clone())),
+            Err(Error::RunActive)
+        ));
+        let first = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx)))
+            .ok_or("missing run.started")??;
+        assert_eq!(first.envelope_type, EnvelopeType::RUN_STARTED);
+        println!("envelope: {}", serde_json::to_string(&first)?);
+        std::fs::write(
+            Path::new(state_dir).join(format!("release-run-{index}")),
+            "",
+        )?;
+        while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
+            println!("envelope: {}", serde_json::to_string(&event?)?);
         }
-        println!("envelope: {}", serde_json::to_string(&event)?);
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::IDLE);
+        assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
     }
-    let state = block_on(session.state())?;
-    assert_eq!(state.status, SessionStatus::IDLE);
-    assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
     block_on(session.close())?;
     println!("gateway exited cleanly");
     Ok(())

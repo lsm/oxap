@@ -1,5 +1,6 @@
 import json
 import os
+import select
 from pathlib import Path
 import subprocess
 import sys
@@ -58,6 +59,19 @@ REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
 REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 
 
+def shared_submit_frames(corpus):
+    native_path = corpus / "streaming-provenance/native.jsonl"
+    replay = frames(native_path)
+    for frame in frames(native_path):
+        raw = frame["raw"]
+        if "id" in raw:
+            raw["id"] += 1
+        if "seq" in raw.get("params", {}):
+            raw["params"]["seq"] += 7
+        replay.append(frame)
+    return replay
+
+
 def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
@@ -98,10 +112,12 @@ def gateway(corpus, case):
         replay = answered_frames(corpus)
     elif case in GATE_CHECKS:
         replay = gate_frames(corpus, case)
+    elif shared_submit:
+        replay = shared_submit_frames(corpus)
     else:
-        fixture = "streaming-provenance" if shared_submit else case
-        replay = frames(corpus / fixture / "native.jsonl")
-    wait_for_release = shared_submit
+        replay = frames(corpus / case / "native.jsonl")
+    pending_start = False
+    shared_run = 0
     for frame in replay:
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
@@ -115,11 +131,18 @@ def gateway(corpus, case):
             else:
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
-            send(frame["raw"])
-        elif frame["action"] == "wait-submit" and wait_for_release:
-            wait_for_release = False
-            while not Path("release-run").exists():
-                time.sleep(0.01)
+            raw = frame["raw"]
+            send(raw)
+            if shared_submit and raw.get("params", {}).get("type") == "message.start":
+                pending_start = True
+        elif frame["action"] == "wait-submit" and pending_start:
+            pending_start = False
+            shared_run += 1
+            release = Path(f"release-run-{shared_run}")
+            deadline = time.monotonic() + 10
+            while not release.exists():
+                assert time.monotonic() < deadline, "consumer did not receive admission"
+                assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
         elif frame["action"] == "process-exit":
             return
     assert sys.stdin.read() == ""
@@ -273,33 +296,37 @@ def verify(binary, corpus, mode, case):
         print("MATCHED SHARED CREATED STATE: 1\nGATEWAY EOF: 1")
         return
     if mode == "--shared-submit":
-        (admission,) = [json.loads(line[11:]) for line in lines if line.startswith("admission: ")]
-        assert admission == {
-            "session_id": "session", "accepted": True, "submission_id": admission["message_ids"][0],
-            "requested_delivery": "auto", "effective_delivery": "start",
-            "delivery_resolution": "session_idle", "admission": "started",
-            "run_id": admission["run_id"], "status": "running", "model_id": "hermes-test",
-            "message_ids": admission["message_ids"],
-        }
-        assert len(admission["message_ids"]) == 1 and all(admission["message_ids"])
+        admissions = [json.loads(line[11:]) for line in lines if line.startswith("admission: ")]
         events = [json.loads(line[10:]) for line in lines if line.startswith("envelope: ")]
         expected = json.loads(expected_path.read_text())
-        assert len(events) == len(expected)
+        assert len(admissions) == 2 and len(events) == len(expected) * 2
         assert len({event["id"] for event in events}) == len(events)
-        for event, fixture in zip(events, expected):
-            assert event["run_id"] == event["payload"]["run_id"] == admission["run_id"]
-            assert event["type"] == fixture["type"]
-            assert event["sequence"] == fixture["sequence"]
-            assert event["session_id"] == event["payload"]["session_id"] == "session"
-            for key in ("part", "usage", "stop_reason"):
-                assert event["payload"].get(key) == fixture["payload"].get(key)
-            if event["type"] == "content.delta":
-                assert event["payload"]["message_id"] == admission["message_ids"][0]
-        response = events[-1]["payload"]["final_response"]
-        assert response["content"] == expected[-1]["payload"]["final_response"]["content"]
-        assert response["id"] == admission["message_ids"][0]
+        assert len({admission["run_id"] for admission in admissions}) == len(admissions)
+        for index, admission in enumerate(admissions):
+            (message_id,) = admission["message_ids"]
+            assert message_id and admission["run_id"]
+            assert admission == {
+                "session_id": "session", "accepted": True, "submission_id": message_id,
+                "requested_delivery": "auto", "effective_delivery": "start",
+                "delivery_resolution": "session_idle", "admission": "started",
+                "run_id": admission["run_id"], "status": "running", "model_id": "hermes-test",
+                "message_ids": [message_id],
+            }
+            run_events = events[index * len(expected):(index + 1) * len(expected)]
+            for event, fixture in zip(run_events, expected):
+                assert event["run_id"] == event["payload"]["run_id"] == admission["run_id"]
+                assert event["type"] == fixture["type"]
+                assert event["sequence"] == fixture["sequence"]
+                assert event["session_id"] == event["payload"]["session_id"] == "session"
+                for key in ("part", "usage", "stop_reason"):
+                    assert event["payload"].get(key) == fixture["payload"].get(key)
+                if event["type"] == "content.delta":
+                    assert event["payload"]["message_id"] == message_id
+            response = run_events[-1]["payload"]["final_response"]
+            assert response["content"] == expected[-1]["payload"]["final_response"]["content"]
+            assert response["id"] == message_id
         assert shutdowns == 1 and replay_complete
-        print(f"SHARED ADMISSIONS: 1\nSEQUENCED ENVELOPES: {len(events)}\nGATEWAY EOF: 1")
+        print(f"SHARED ADMISSIONS: {len(admissions)}\nSEQUENCED ENVELOPES: {len(events)}\nGATEWAY EOF: 1")
         return
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]

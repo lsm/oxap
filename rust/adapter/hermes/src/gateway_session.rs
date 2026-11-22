@@ -109,7 +109,8 @@ impl From<ObservationError> for Error {
 
 pub struct GatewaySession {
     _stop_relay: Sender<()>,
-    process: Process,
+    pub(crate) process: Arc<Process>,
+    pub(crate) observed_settlement: bool,
     inbound: Receiver<Inbound>,
     buffered_observations: VecDeque<Observation>,
     runtime_id: String,
@@ -222,7 +223,8 @@ impl GatewaySession {
         let (runtime_id, stored_id, result) = load(&process.client)?;
         let session = Self {
             _stop_relay: stop_relay,
-            process,
+            process: Arc::new(process),
+            observed_settlement: false,
             inbound,
             buffered_observations: VecDeque::new(),
             runtime_id,
@@ -342,6 +344,7 @@ impl GatewaySession {
     }
 
     pub fn start_prompt(&mut self, text: &str, deadline: Option<Instant>) -> Result<Event, Error> {
+        self.observed_settlement = false;
         self.submit_prompt(text, deadline)?;
         loop {
             let observation = self.read_observation(deadline)?;
