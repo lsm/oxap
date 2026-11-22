@@ -467,14 +467,16 @@ jobs:
         run: python3 .claude/skills/verify/scripts/codex-deepseek-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
 
       - name: Verify DeepSeek model switching over stdio
-        run: python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py /tmp/oapx-hub/bin/oxap
+        run: |
+          go build -o /tmp/oapx-hub/bin/goap ./go/cmd/goap
+          python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py /tmp/oapx-hub/bin/oxap
+          python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py /tmp/oapx-hub/bin/goap
 
       - name: Verify Hermes custom endpoint routing and key redaction
         run: python3 .claude/skills/verify/scripts/hermes-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
 
       - name: Verify OpenCode, Pi, Copilot and Docker Agent custom endpoints
         run: |
-          go build -o /tmp/oapx-hub/bin/goap ./go/cmd/goap
           python3 .claude/skills/verify/scripts/opencode-pi-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
 
       - name: Require the oapx alias to match oxap on stdout and exit code
@@ -649,6 +651,7 @@ jobs:
           set -euo pipefail
           cargo build --quiet --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
           OAP_RUST_HUB_BIN="$PWD/rust/target/debug/oap-rust-hub" go test ./go/cmd/goap/ -run 'TestHubStdioAnswersGoapAndRustTheSame|TestHubStdioHoldsASubscriptionAcrossRunsUntilItsHostEndsIt|TestBackendsMatchRustHub|TestHubHTTPAnswersGoapAndRustTheSame' -v
+          python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py rust/target/debug/oap-rust-hub --verb serve
 
       - name: Require the Rust serve agent endpoint to pass goap conformance
         working-directory: .
