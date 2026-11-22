@@ -327,3 +327,94 @@ fn prompt_settling_before_open_does_not_start() {
     }
     session.close().unwrap();
 }
+
+#[test]
+fn started_prompt_projects_deltas_and_settlement() {
+    use oxap_adapter_hermes::{Observation, PromptObservation};
+
+    let receipt = r#"{"jsonrpc":"2.0","id":2,"result":{"status":"streaming"}}"#;
+    let event = |kind: &str, seq: i64, payload: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"event","params":{{"type":"{kind}","session_id":"running","seq":{seq},"payload":{payload}}}}}"#
+        )
+    };
+    for (payload, failure) in [
+        (
+            r#"{"status":"complete","text":"final","usage":{"input":0,"total":7}}"#,
+            None,
+        ),
+        (
+            r#"{"status":"error","error":"refused","text":"fallback","error_surface":{"code":"auth"}}"#,
+            Some(("hermes_auth", "refused")),
+        ),
+        (
+            r#"{"status":"interrupted"}"#,
+            Some(("hermes_interrupted", "turn interrupted")),
+        ),
+        (
+            r#"{"text":"child"}"#,
+            Some((
+                "hermes_invalid_settlement",
+                "child-mirror settlement on the parent stream",
+            )),
+        ),
+        (
+            r#"{"status":"complete","usage":{"output":-1}}"#,
+            Some(("hermes_invalid_event", "invalid settlement")),
+        ),
+    ] {
+        let text = event(
+            "message.delta",
+            3,
+            r#"{"text":"answer","rendered":"preview"}"#,
+        );
+        let empty = event("message.delta", 4, r#"{"text":""}"#);
+        let reasoning = event("reasoning.delta", 5, r#"{"text":"thinking"}"#);
+        let terminal = event("message.complete", 6, payload);
+        let config = gateway(
+            EMPTY_CREATE,
+            &format!("printf '%s\\n' '{INFO}' '{CREATED}'"),
+            &format!(
+                "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+                 printf '%s\\n' '{receipt}' '{STARTED}' '{text}' '{empty}' '{reasoning}' '{terminal}'"
+            ),
+        );
+        let mut session = open(&config, "", "").unwrap();
+        let deadline = Some(Instant::now() + Duration::from_secs(5));
+        session.start_prompt("hello\n<world>", deadline).unwrap();
+        let PromptObservation::Other(Observation::Event(info)) =
+            session.next_prompt_observation(deadline).unwrap()
+        else {
+            panic!("expected buffered session info");
+        };
+        assert_eq!(info.kind, "session.info");
+        for expected in [
+            serde_json::json!({"type":"text","text":"answer"}),
+            serde_json::json!({"type":"reasoning","reasoning":"thinking"}),
+        ] {
+            let PromptObservation::Delta(part) = session.next_prompt_observation(deadline).unwrap()
+            else {
+                panic!("expected a content delta");
+            };
+            assert_eq!(serde_json::to_value(part).unwrap(), expected);
+        }
+        let terminal = session.next_prompt_observation(deadline).unwrap();
+        match (terminal, failure) {
+            (PromptObservation::Completed { text, usage }, None) => {
+                assert_eq!(text, "final");
+                assert_eq!(
+                    serde_json::to_value(usage).unwrap(),
+                    serde_json::json!({"input_tokens":0,"total_tokens":7})
+                );
+            }
+            (PromptObservation::Failed(error), Some((code, message))) => {
+                assert_eq!(
+                    (error.code.as_str(), error.message.as_str()),
+                    (code, message)
+                );
+            }
+            (terminal, _) => panic!("unexpected settlement: {terminal:?}"),
+        }
+        session.close().unwrap();
+    }
+}
