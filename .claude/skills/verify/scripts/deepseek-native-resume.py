@@ -35,6 +35,8 @@ def fake_runtime(store):
         if method == "initialize":
             emit({"id": number, "jsonrpc": "2.0", "result": {"serverInfo": SERVER}})
         elif method == "session/resume":
+            if (store / "stall-resume").exists():
+                continue
             session = params["sessionId"]
             history = saved(session)
             if history is None or session in live:
@@ -101,12 +103,12 @@ class Hub:
             self.lines.put(json.loads(line))
         self.lines.put(None)
 
-    def call(self, op, **fields):
+    def call(self, op, wait=30, **fields):
         self.number += 1
         self.process.stdin.write(json.dumps({"id": self.number, "op": op, **fields}) + "\n")
         self.process.stdin.flush()
         while True:
-            line = self.lines.get(timeout=30)
+            line = self.lines.get(timeout=wait)
             assert line is not None, "hub exited; inspect its stderr"
             self.seen.append(line)
             if line.get("id") == self.number:
@@ -204,14 +206,25 @@ def verify(name, command, root):
     assert fresh not in ("s2", native), f"{name}: a fresh open did not get its own native id"
     second.stop()
 
+    (store / "stall-resume").touch()
+    third = Hub(command, root, "third")
+    started = time.monotonic()
+    stalled = third.call("open", wait=120, adapter="deepseek", request=envelope("session.open.request", {"session_id": "s1", "reopen": True}))
+    waited = time.monotonic() - started
+    assert "error" in stalled or stalled.get("result", {}).get("type") != "session.open.response", f"{name}: a reopen dsh never answered still opened: {stalled}"
+    assert "unsatisfiable" in json.dumps(stalled), f"{name}: a reopen dsh never answered was not refused as unsatisfiable: {stalled}"
+    assert third.call("capabilities", adapter="deepseek").get("ok"), f"{name}: the hub stopped serving after a stalled resume"
+    third.stop()
+    (store / "stall-resume").unlink()
+
     calls = [json.loads(line) for line in (store / "calls.jsonl").read_text().splitlines()]
     resumes = [call["params"]["sessionId"] for call in calls if call["method"] == "session/resume"]
-    assert resumes == [native], f"{name}: session/resume calls {resumes}, want [{native!r}]"
+    assert resumes == [native, native], f"{name}: session/resume calls {resumes}, want the stored id twice"
     prompts = [call["params"]["sessionId"] for call in calls if call["method"] == "session/prompt"]
     assert prompts == [native, native], f"{name}: prompts went to {prompts}"
     resumed_at = next(i for i, call in enumerate(calls) if call["method"] == "session/resume")
     assert calls[resumed_at - 1]["method"] == "initialize", f"{name}: session/resume did not follow initialize"
-    print(f"{name}: fresh native id, hub exit=0, reopened session resumed {native[:8]}… after initialize, second turn saw the first")
+    print(f"{name}: fresh native id, hub exit=0, reopened session resumed {native[:8]}… after initialize, second turn saw the first, a silent resume was refused after {waited:.0f}s")
 
 
 def main():

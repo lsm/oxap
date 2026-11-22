@@ -15,7 +15,10 @@ than its session id, and `work.status` must link to that id. After the first
 hub exits, a second hub reopens the session from its session history. It must
 send `session/resume` with the same native id right after `initialize`, and the
 next turn must see the first turn's prompt. A second fresh open must get
-another native id. Require exit 0 and `PASS`. The Zig CI hub parity job runs the
+another native id. A third hub then reopens the session while the runtime
+never answers `session/resume`: the open must be refused as `unsatisfiable`
+once the hub's resume bound passes, and the hub must keep serving. Require
+exit 0 and `PASS`. The Zig CI hub parity job runs the
 same journey.
 
 For a live check, point a `deepseek` entry at a real `dsh sdk` runtime with

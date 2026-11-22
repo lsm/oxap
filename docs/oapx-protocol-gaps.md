@@ -109,7 +109,8 @@ left behind (`drafts/hub.md:72`, `:1398`).
   (`zig/src/adapter/claude/adapter.zig:27`, `zig/src/adapter/codex/session.zig:1251`,
   `zig/src/adapter/acp/adapter.zig:103`, `zig/src/adapter/hermes/adapter.zig:36`,
   `zig/src/adapter/opencode/adapter.zig:38`, `zig/src/adapter/pi/adapter.zig:69`);
-- unavailable in DeepSeek (`zig/src/adapter/deepseek/adapter.zig:35`);
+- native in DeepSeek, through `session/resume` with the bound native id right
+  after `initialize` (`zig/src/adapter/deepseek/adapter.zig:38`);
 - emulated in oapx's own loop, but only with a history loader
   (`zig/src/adapter/oapx/adapter.zig:64`). Under `serve` it advertises the
   unsaved descriptor without reopen (`:35`, `:180`), for the reason in row 1.
@@ -118,8 +119,8 @@ left behind (`drafts/hub.md:72`, `:1398`).
 no session" because reattach is staged. That row is stale: reattach has
 landed.
 
-**Status.** Partial. Implemented for every pinned harness except DeepSeek;
-not available on oapx's own loop under `serve`.
+**Status.** Partial. Implemented for every pinned harness; not available on
+oapx's own loop under `serve`.
 
 **Spec revision.** No. The oapx gap closes with row 1's wiring.
 

@@ -184,6 +184,11 @@ fn a_fresh_open_runs_under_a_native_id_of_its_own() {
     let second = adapter.open(request("s")).unwrap();
     assert_ne!(second.native_session_id(), native);
     second.close().unwrap();
+    let linker = oxap_adapter::Adapter::native_linker(&adapter).unwrap();
+    assert_eq!(
+        oxap_adapter::NativeLinker::native_link(linker, &native),
+        format!("deepseek://sessions/{native}")
+    );
 }
 
 #[test]

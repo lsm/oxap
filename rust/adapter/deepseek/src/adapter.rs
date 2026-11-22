@@ -9,8 +9,8 @@ use crossbeam_channel::Receiver;
 use futures_channel::oneshot;
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
-    Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, OpenRequest,
-    Session as SessionContract, UnsupportedControl, CONTROL_UNSATISFIABLE,
+    Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, NativeLinker,
+    OpenRequest, Session as SessionContract, UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
     CapabilityDescriptor, CompactionKind, CompactionPolicy, EndpointDescriptor, FeatureSupport,
@@ -254,9 +254,19 @@ impl Adapter {
     }
 }
 
+impl NativeLinker for Adapter {
+    fn native_link(&self, native_id: &str) -> String {
+        format!("deepseek://sessions/{native_id}")
+    }
+}
+
 impl AdapterContract for Adapter {
     fn probe(&self) -> BoxFuture<'_, Descriptor> {
         Box::pin(async move { Ok(self.describe()) })
+    }
+
+    fn native_linker(&self) -> Option<&dyn NativeLinker> {
+        Some(self)
     }
 
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {

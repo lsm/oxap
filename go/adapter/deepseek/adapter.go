@@ -267,7 +267,11 @@ func (a *Adapter) resumed(ctx context.Context, req base.OpenRequest, model strin
 	return client, model, nil
 }
 
+var resumeTimeout = 30 * time.Second
+
 func resume(ctx context.Context, client Client, nativeID string) error {
+	ctx, cancel := context.WithTimeout(ctx, resumeTimeout)
+	defer cancel()
 	answered := make(chan error, 1)
 	go func() {
 		var result native.SessionResumeResult

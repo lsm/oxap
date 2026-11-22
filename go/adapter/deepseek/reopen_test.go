@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	base "github.com/lsm/oxap/go/adapter"
 	"github.com/lsm/oxap/go/adapter/deepseek/internal/native"
@@ -21,6 +22,7 @@ type resumingClient struct {
 	mu        sync.Mutex
 	calls     []recordedCall
 	resumeErr error
+	silent    bool
 	closed    bool
 	in        chan rpc.InboundMessage
 	done      chan struct{}
@@ -34,7 +36,7 @@ func (c *resumingClient) Call(ctx context.Context, method string, params, result
 	return c.CallStarted(ctx, method, params, result, nil)
 }
 
-func (c *resumingClient) CallStarted(_ context.Context, method string, params, _ any, started chan<- error) error {
+func (c *resumingClient) CallStarted(ctx context.Context, method string, params, _ any, started chan<- error) error {
 	c.mu.Lock()
 	c.calls = append(c.calls, recordedCall{method, params})
 	c.mu.Unlock()
@@ -46,6 +48,10 @@ func (c *resumingClient) CallStarted(_ context.Context, method string, params, _
 		acknowledged := make(chan struct{})
 		c.in <- rpc.InboundMessage{Barrier: acknowledged}
 		<-acknowledged
+		if c.silent {
+			<-ctx.Done()
+			return ctx.Err()
+		}
 		return c.resumeErr
 	}
 	return errors.New("refused")
@@ -120,6 +126,22 @@ func TestAReopenTheHarnessCannotResumeIsRefusedAsUnsatisfiable(t *testing.T) {
 	}
 	if !client.closed {
 		t.Fatal("the runtime that could not resume was left running")
+	}
+}
+
+func TestAReopenTheHarnessNeverAnswersIsRefusedAsUnsatisfiableOnceTheResumeBoundPasses(t *testing.T) {
+	bound := resumeTimeout
+	resumeTimeout = 50 * time.Millisecond
+	defer func() { resumeTimeout = bound }()
+	client := newResumingClient(nil)
+	client.silent = true
+	_, err := resumingAdapter(t, client, sameNativeID).Open(context.Background(), base.OpenRequest{SessionID: "s1", Reopen: true, NativeSessionID: "stored"})
+	var refusal *base.UnsupportedControlError
+	if !errors.As(err, &refusal) || refusal.Feature != protocol.FeatureOpenReopen || refusal.Reason != base.ControlUnsatisfiable {
+		t.Fatalf("open answered %v, want reopen unsatisfiable", err)
+	}
+	if !client.closed {
+		t.Fatal("the runtime that never answered the resume was left running")
 	}
 }
 
