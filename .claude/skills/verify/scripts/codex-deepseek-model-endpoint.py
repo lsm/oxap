@@ -62,7 +62,9 @@ def verify(binary, root, base, kind, key):
     launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{Path(__file__).resolve()}" --child {kind} "{child}" "$@"\n')
     launcher.chmod(0o700)
     entry = json.loads((fixture / "registry.json").read_text().replace("@DIR@", str(root)))["adapters"][kind]
-    route = {"base_url": base, "credential_env": VARIABLE, "wire": wire}
+    route = {"base_url": base, "credential_env": VARIABLE}
+    if kind == "deepseek":
+        route["wire"] = wire
     entry.update(executable=str(launcher), model_endpoint=route)
     home = root / "home"
     home.mkdir()
@@ -120,7 +122,16 @@ def verify(binary, root, base, kind, key):
         refused.append(({}, ".credentials.yaml"))
         (home / ".dsh").mkdir()
         (home / ".dsh" / ".credentials.yaml").touch()
-        refused.append(({"environment": ["HOME", "PATH"]}, ".credentials.yaml"))
+        for dsh_override in ([], ["DSH_HOME=\u00a0"], ["DSH_HOME=~/.dsh"]):
+            refused.append(({"environment": ["HOME", "PATH", *dsh_override]}, ".credentials.yaml"))
+        cwd = root / "real" / "cwd"
+        cwd.mkdir(parents=True)
+        alias = root / "alias"
+        alias.symlink_to(cwd, target_is_directory=True)
+        managed = cwd.parent / "managed"
+        managed.mkdir()
+        (managed / ".credentials.yaml").touch()
+        refused.append(({"working_directory": str(alias), "environment": ["DSH_HOME=../managed"]}, ".credentials.yaml"))
     for override, diagnostic in refused:
         config.write_text(json.dumps({"adapters": {"routed": {**entry, **override}}}))
         result = subprocess.run(command, env=environment, input=b"", capture_output=True, timeout=10)

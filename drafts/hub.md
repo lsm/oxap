@@ -161,18 +161,28 @@ the named entry for an unknown row, a missing endpoint or key, an OAuth login,
 or either translated variable already set in `environment`. The dsh
 `provider` and the adapter's capabilities stay the same.
 
-A Claude hub entry can use `model_endpoint` to route directly to an
-Anthropic Messages endpoint. Set `base_url` to an absolute HTTPS URL or
-a loopback HTTP URL without userinfo, a query, or a fragment. The hub
-passes it through verbatim. Set `credential_env` to the name of a hub
-environment variable whose value is at least 16 bytes. Short credentials
-can collide with protocol field names during redaction. The optional `auth` selects
-`api-key` by default or `bearer`. An explicit `wire` must be
-`anthropic-messages`. Startup refuses an entry that combines this setting
-with `model_provider` or lists the source variable or any of Claude's
-three routing variables in `environment`. The hub replaces the resolved
-key with its variable name in child stderr and hub output. Go and Rust
-refuse the member as unknown.
+A Claude, Codex, or DeepSeek hub entry can use `model_endpoint` to route
+directly to a gateway. Set `base_url` to an absolute HTTPS URL or a
+loopback HTTP URL without userinfo, a query, or a fragment. The hub passes
+it through verbatim. Set `credential_env` to the name of a hub environment
+variable whose value is at least 16 bytes. Short credentials can collide
+with protocol field names during redaction. Startup refuses an entry that
+combines this setting with `model_provider` or lists the source variable or
+a routing destination in `environment`. The hub replaces the key with its
+source variable name in child stderr and hub output. Go and Rust refuse
+the member as unknown.
+
+- Claude uses `anthropic-messages`. Its optional `auth` selects `api-key`
+  by default or `bearer`.
+- Codex uses `openai-responses` and selects `oapx-custom` through its own
+  `-c` settings. The key goes to `OAPX_PROVIDER_API_KEY`. A running
+  app-server selected its provider at launch, so `endpoint` is refused.
+- DeepSeek uses `anthropic-messages` and receives `DEEPSEEK_BASE_URL` and
+  `DEEPSEEK_API_KEY`. Startup refuses `--patch` or a `.credentials.yaml`
+  under the resolved dsh home because either can override the route.
+
+The `wire` can be omitted and must agree with the adapter when supplied.
+Only Claude accepts `auth`.
 
 `any_directory: true` makes the entry a template: a `work.start` naming another
 absolute directory gets a session from an adapter built from this entry with
