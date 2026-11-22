@@ -13,9 +13,10 @@ use serde_json::value::{to_raw_value, RawValue};
 
 use crate::gateway_session::ObservationError;
 use crate::native::{
-    decode_server_request, decode_strict, request_session_id, InterruptResult, ServerRequest,
-    ToolCompletePayload, ToolStartPayload, EVENT_TOOL_COMPLETE, EVENT_TOOL_START, REQUEST_APPROVAL,
-    REQUEST_CLARIFY, REQUEST_SECRET, REQUEST_SUDO,
+    decode_server_request, decode_strict, request_session_id, InterruptResult,
+    RequestCancelPayload, ServerRequest, ToolCompletePayload, ToolStartPayload,
+    EVENT_REQUEST_CANCEL, EVENT_TOOL_COMPLETE, EVENT_TOOL_START, REQUEST_APPROVAL, REQUEST_CLARIFY,
+    REQUEST_SECRET, REQUEST_SUDO,
 };
 use crate::rpc::IncomingRequest;
 use crate::{GatewaySession, Observation, PromptObservation};
@@ -47,6 +48,7 @@ struct ToolCall {
 }
 
 struct Gate {
+    native_id: String,
     id: InteractionId,
     requested: EnvelopeId,
 }
@@ -164,6 +166,12 @@ impl GatewayRun<'_> {
                         EVENT_TOOL_COMPLETE => self.complete_tool(
                             decode_strict(event.payload_bytes()).map_err(Error::harness)?,
                         )?,
+                        EVENT_REQUEST_CANCEL => {
+                            let cancel: RequestCancelPayload =
+                                decode_strict(event.payload_bytes()).map_err(Error::harness)?;
+                            self.withdraw_gate(&cancel.id)?;
+                            continue;
+                        }
                         _ => return Ok(Some(RunObservation::Other(Observation::Event(event)))),
                     };
                     if let Some(message) = failure {
@@ -188,13 +196,13 @@ impl GatewayRun<'_> {
 
     fn open_gate(&mut self, request: &IncomingRequest) -> Result<(), Error> {
         let method = request.method.as_str();
-        if !matches!(request.id, RequestId::String(_)) {
+        let RequestId::String(native_id) = &request.id else {
             return self.queue_failure(
                 "hermes_external_activity",
                 &format!("{method} request with a non-string id"),
                 "",
             );
-        }
+        };
         let params = request
             .params
             .as_ref()
@@ -243,21 +251,45 @@ impl GatewayRun<'_> {
         )?;
         requested.turn_id = Some(id.clone());
         self.gates.push(Gate {
-            id: id.clone(),
+            native_id: native_id.clone(),
+            id,
             requested: requested.id.clone(),
         });
         self.pending.push_back(requested);
-        let waiting = self.emit(
+        self.queue_gate_status()
+    }
+
+    fn withdraw_gate(&mut self, native_id: &str) -> Result<(), Error> {
+        if let Some(index) = self
+            .gates
+            .iter()
+            .position(|gate| gate.native_id == native_id)
+        {
+            let gate = self.gates.remove(index);
+            self.cancel_gate(gate)?;
+            self.queue_gate_status()?;
+        }
+        Ok(())
+    }
+
+    fn queue_gate_status(&mut self) -> Result<(), Error> {
+        let pending_user_input_id = self.gates.last().map(|gate| gate.id.clone());
+        let status = if pending_user_input_id.is_some() {
+            RunStatus::WAITING_FOR_INPUT
+        } else {
+            RunStatus::RUNNING
+        };
+        let event = self.emit(
             EnvelopeType::RUN_STATUS_UPDATED,
             &RunStatusUpdatedPayload {
                 session_id: self.session_id.clone(),
                 run_id: self.run_id.clone(),
-                status: RunStatus::WAITING_FOR_INPUT,
-                pending_user_input_id: Some(id),
+                status,
+                pending_user_input_id,
                 updated_at_ms: self.runtime.now_ms(),
             },
         )?;
-        self.pending.push_back(waiting);
+        self.pending.push_back(event);
         Ok(())
     }
 
@@ -318,23 +350,28 @@ impl GatewayRun<'_> {
         Ok(None)
     }
 
+    fn cancel_gate(&mut self, gate: Gate) -> Result<(), Error> {
+        let mut resolved = self.emit(
+            EnvelopeType::USER_INPUT_RESOLVED,
+            &UserInputResolvedPayload {
+                interaction_id: gate.id.clone(),
+                requested_by: "hermes.gateway".into(),
+                responded_by: "user".into(),
+                session_id: self.session_id.clone(),
+                run_id: self.run_id.clone(),
+                status: UserInputResolutionStatus::CANCELLED,
+                ..UserInputResolvedPayload::default()
+            },
+        )?;
+        resolved.turn_id = Some(gate.id);
+        resolved.in_reply_to = Some(gate.requested);
+        self.pending.push_back(resolved);
+        Ok(())
+    }
+
     fn settle_children(&mut self) -> Result<(), Error> {
         for gate in std::mem::take(&mut self.gates) {
-            let mut resolved = self.emit(
-                EnvelopeType::USER_INPUT_RESOLVED,
-                &UserInputResolvedPayload {
-                    interaction_id: gate.id.clone(),
-                    requested_by: "hermes.gateway".into(),
-                    responded_by: "user".into(),
-                    session_id: self.session_id.clone(),
-                    run_id: self.run_id.clone(),
-                    status: UserInputResolutionStatus::CANCELLED,
-                    ..UserInputResolvedPayload::default()
-                },
-            )?;
-            resolved.turn_id = Some(gate.id);
-            resolved.in_reply_to = Some(gate.requested);
-            self.pending.push_back(resolved);
+            self.cancel_gate(gate)?;
         }
         for ToolCall {
             mut payload,
