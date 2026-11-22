@@ -231,6 +231,12 @@ def verify(binary, corpus, mode, case):
             assert shutdowns == 1
         else:
             assert not any(line.startswith(("state: ", "runtime session ID: ")) for line in lines)
+            detail = next(line.removeprefix("detail: ") for line in lines if line.startswith("detail: "))
+            assert detail == (
+                "Hermes could not reload its binding: Hermes would restart the turn a crash "
+                "interrupted, which a reopen must not do; open it in Hermes to settle the turn, "
+                "or wait for Hermes to retire the marker"
+            ), detail
         assert replay_complete
         print(f"BYTE-MATCHED SESSION RESUMES: 1\nMATCHED OUTCOME: {prefix.strip(': ')}\nGATEWAY EOF: 1")
         return

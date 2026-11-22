@@ -84,6 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("gateway exited cleanly");
             }
             Err(Error::UnsupportedControl(refusal)) => {
+                println!("detail: {}", refusal.detail);
                 println!(
                     "refusal: {}",
                     serde_json::json!({
