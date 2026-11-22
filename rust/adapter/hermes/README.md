@@ -14,6 +14,13 @@ admission, and `interrupt` returns its native interruption response.
 It skips session-less events and stops the stream on a foreign session ID or a
 non-contiguous sequence. Use either `next_observation` or the raw `inbound`
 receiver from session creation onward, since both read the same queue.
+When the gateway session is idle and observations from any previous turn
+have been drained, `start_prompt` waits for both a streaming receipt and
+`message.start`. It returns the start event separately. Earlier observations
+remain available through `next_observation`. If the gateway settles the
+parent turn before opening it, the start fails and the settlement remains
+readable. If the deadline expires, use `next_observation` to follow any
+in-flight turn before submitting again.
 
 The wire layer holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's

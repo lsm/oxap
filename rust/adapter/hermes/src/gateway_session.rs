@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 use crossbeam_channel::{bounded, select_biased, Receiver, RecvTimeoutError, Sender};
 use oxap_adapter::gojson::{go_quote, zero};
@@ -7,8 +7,9 @@ use oxap_protocol::{ReasoningLevel, FEATURE_SESSION_REASONING};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::native::{
-    decode_strict, Event, InterruptResult, PromptSubmitResult, METHOD_CONFIG_SET,
-    METHOD_PROMPT_SUBMIT, METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, SUBMIT_STREAMING,
+    decode_strict, Event, InterruptResult, MessageCompletePayload, PromptSubmitResult,
+    EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_START, METHOD_CONFIG_SET, METHOD_PROMPT_SUBMIT,
+    METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, SUBMIT_STREAMING,
 };
 use crate::process::{Process, ProcessConfig};
 use crate::rpc::{decode_event, Inbound, IncomingRequest, RpcClient};
@@ -71,6 +72,7 @@ pub struct GatewaySession {
     _stop_relay: Sender<()>,
     process: Process,
     inbound: Receiver<Inbound>,
+    buffered_observations: VecDeque<Observation>,
     created: SessionCreateResult,
     last_seq: i64,
     observation_error: Option<Error>,
@@ -130,6 +132,7 @@ impl GatewaySession {
             _stop_relay: stop_relay,
             process,
             inbound,
+            buffered_observations: VecDeque::new(),
             created,
             last_seq: 0,
             observation_error: None,
@@ -153,6 +156,16 @@ impl GatewaySession {
     }
 
     pub fn next_observation(&mut self, deadline: Option<Instant>) -> Result<Observation, Error> {
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Err(observation_timeout());
+        }
+        if let Some(observation) = self.buffered_observations.pop_front() {
+            return Ok(observation);
+        }
+        self.read_observation(deadline)
+    }
+
+    fn read_observation(&mut self, deadline: Option<Instant>) -> Result<Observation, Error> {
         if let Some(error) = &self.observation_error {
             return Err(error.clone());
         }
@@ -177,11 +190,7 @@ impl GatewaySession {
                 }
                 Ok(Inbound::Request(request)) => return Ok(Observation::Request(request)),
                 Ok(Inbound::Barrier(ack)) => drop(ack),
-                Err(RecvTimeoutError::Timeout) => {
-                    return Err(Error::harness(
-                        "hermes adapter: observation deadline exceeded",
-                    ));
-                }
+                Err(RecvTimeoutError::Timeout) => return Err(observation_timeout()),
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(Error::harness(self.client().err().unwrap_or_else(|| {
                         "hermes adapter: observation stream closed".into()
@@ -226,6 +235,34 @@ impl GatewaySession {
         Ok(())
     }
 
+    pub fn start_prompt(&mut self, text: &str, deadline: Option<Instant>) -> Result<Event, Error> {
+        self.submit_prompt(text, deadline)?;
+        loop {
+            let observation = self.read_observation(deadline)?;
+            let Observation::Event(event) = observation else {
+                self.buffered_observations.push_back(observation);
+                continue;
+            };
+            if event.kind == EVENT_MESSAGE_START {
+                return Ok(event);
+            }
+            let parent_settlement = if event.kind == EVENT_MESSAGE_COMPLETE {
+                let payload: MessageCompletePayload =
+                    decode_strict(event.payload_bytes()).map_err(Error::harness)?;
+                !payload.status.is_empty()
+            } else {
+                false
+            };
+            self.buffered_observations
+                .push_back(Observation::Event(event));
+            if parent_settlement {
+                return Err(Error::harness(
+                    "hermes adapter: invalid native protocol observation: settlement before the turn opened",
+                ));
+            }
+        }
+    }
+
     pub fn interrupt(&self, deadline: Option<Instant>) -> Result<InterruptResult, Error> {
         call(
             self.client(),
@@ -240,6 +277,10 @@ impl GatewaySession {
     pub fn close(&self) -> Result<(), Error> {
         self.process.close().map_err(Error::harness)
     }
+}
+
+fn observation_timeout() -> Error {
+    Error::harness("hermes adapter: observation deadline exceeded")
 }
 
 fn call<T: DeserializeOwned + Default>(
