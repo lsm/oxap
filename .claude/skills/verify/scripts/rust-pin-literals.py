@@ -19,7 +19,7 @@ def main():
         subprocess.run(
             ["go", "build", "-o", binary, "./go/cmd/goap"], check=True, timeout=120
         )
-        with TemporaryDirectory(dir="rust", prefix="pin-probe-") as directory:
+        with TemporaryDirectory(dir=Path.cwd() / "rust", prefix="pin-probe-") as directory:
             probe = Path(directory) / "probe.rs"
             probe.write_text(
                 f'const REVISION: &str = "{pin["capability_revision"]}";\n'
@@ -32,9 +32,10 @@ def main():
             print(f"Pin probe exit {rejected.returncode}, {len(diagnostics)} pin diagnostics")
             for line in diagnostics:
                 print(line)
+            source = probe.relative_to(Path.cwd()).as_posix()
             expected = [
-                f'{probe}:1 spells the catalog\'s capability_revision "{pin["capability_revision"]}"',
-                f'{probe}:2 spells the catalog\'s corpus "{pin["corpus"]}"',
+                f'{source}:1 spells the catalog\'s capability_revision "{pin["capability_revision"]}"',
+                f'{source}:2 spells the catalog\'s corpus "{pin["corpus"]}"',
             ]
             if rejected.returncode != 1 or len(diagnostics) != 2 or not all(
                 detail in line for detail, line in zip(expected, diagnostics)
