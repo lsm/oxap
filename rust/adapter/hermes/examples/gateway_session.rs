@@ -10,12 +10,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let (python, source, state, mode) = match args.as_slice() {
         [python, source, state] => (python, source, state, ""),
-        [python, source, state, mode] if matches!(mode.as_str(), "--prompt" | "--observe") => {
+        [python, source, state, mode]
+            if matches!(mode.as_str(), "--prompt" | "--observe" | "--start") =>
+        {
             (python, source, state, mode.as_str())
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start]"
                     .into(),
             );
         }
@@ -46,7 +48,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     println!("runtime session ID: {}", session.runtime_id());
     println!("stored session ID: {}", session.stored_id());
-    if !mode.is_empty() {
+    let mut start_error = None;
+    if mode == "--start" {
+        let deadline = Some(Instant::now() + Duration::from_secs(30));
+        match session.start_prompt("Hello from the Rust Hermes adapter.", deadline) {
+            Ok(event) => println!("prompt started at native sequence {}", event.seq),
+            Err(error) => start_error = Some(error),
+        }
+    } else if !mode.is_empty() {
         let deadline = Some(Instant::now() + Duration::from_secs(30));
         session.submit_prompt("Hello from the Rust Hermes adapter.", deadline)?;
         println!("prompt status: streaming");
@@ -76,6 +85,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     session.close()?;
     println!("gateway exited cleanly");
+    if let Some(error) = start_error {
+        return Err(error.to_string().into());
+    }
     Ok(())
 }
 

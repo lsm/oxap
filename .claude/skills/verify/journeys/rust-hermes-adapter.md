@@ -46,6 +46,13 @@ The ordered reader checks early session events, interleaved requests, deadlines,
 foreign session IDs, and gaps and duplicates in native sequence numbers. Run
 the suite on the test host or in CI.
 
+The prompt-start tests exercise both orders of the streaming receipt and
+`message.start`, along with the buffered observations and a settlement before
+start. For the credential-free gateway's early-settlement path, set
+`OAP_HERMES_BIN` and `OAP_HERMES_ROOT` as below and run
+`bash .claude/skills/verify/scripts/rust-hermes-prompt-start.sh`. Expect zero
+started prompts, one pre-start settlement and a clean gateway shutdown.
+
 For the native session smoke, use the selected catalog release's source and a
 Python interpreter with its dependencies already installed. The example runs
 the adapter against the actual stdio gateway with an isolated home and no
