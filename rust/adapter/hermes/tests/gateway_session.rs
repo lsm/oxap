@@ -190,3 +190,64 @@ fn submit_refuses_non_streaming_results_and_gateway_errors() {
         session.close().unwrap();
     }
 }
+
+#[test]
+fn ordered_observations_keep_early_session_events_and_interleaved_requests() {
+    use oxap_adapter_hermes::Observation;
+
+    let global = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"notice"}}"#;
+    let request = r#"{"jsonrpc":"2.0","id":"check","method":"approval","params":{"session_id":"running"}}"#;
+    let config = gateway(
+        EMPTY_CREATE,
+        &format!("printf '%s\\n' '{INFO}' '{global}' '{CREATED}'"),
+        &format!(
+            "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{request}' '{STARTED}' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\"}}}}'"
+        ),
+    );
+    let mut session = open(&config, "", "").unwrap();
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    session.submit_prompt("hello\n<world>", deadline).unwrap();
+    let Observation::Event(info) = session.next_observation(deadline).unwrap() else {
+        panic!("expected session.info");
+    };
+    assert_eq!((info.kind.as_str(), info.seq), ("session.info", 1));
+    let Observation::Request(request) = session.next_observation(deadline).unwrap() else {
+        panic!("expected the interleaved request");
+    };
+    assert_eq!(request.method, "approval");
+    let Observation::Event(start) = session.next_observation(deadline).unwrap() else {
+        panic!("expected message.start");
+    };
+    assert_eq!((start.kind.as_str(), start.seq), ("message.start", 2));
+    session.close().unwrap();
+}
+
+#[test]
+fn ordered_observations_refuse_foreign_events_and_sequence_breaks() {
+    for (id, seq, expected) in [
+        ("saved", 2, "event for foreign session \"saved\""),
+        ("running", 1, "non-contiguous seq 1 after 1"),
+        ("running", 3, "non-contiguous seq 3 after 1"),
+    ] {
+        let invalid = format!(
+            r#"{{"jsonrpc":"2.0","method":"event","params":{{"type":"notice","session_id":"{id}","seq":{seq}}}}}"#
+        );
+        let config = gateway(
+            EMPTY_CREATE,
+            &format!("printf '%s\\n' '{INFO}' '{CREATED}' '{invalid}' '{STARTED}'"),
+            "",
+        );
+        let mut session = open(&config, "", "").unwrap();
+        let deadline = Some(Instant::now() + Duration::from_secs(5));
+        session.next_observation(deadline).unwrap();
+        let error = format!("hermes adapter: invalid native protocol observation: {expected}");
+        for _ in 0..2 {
+            assert_eq!(
+                session.next_observation(deadline).unwrap_err().to_string(),
+                error
+            );
+        }
+        session.close().unwrap();
+    }
+}
