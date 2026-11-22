@@ -15,8 +15,8 @@ use oxap_adapter::{
 use oxap_protocol::{
     CapabilityDescriptor, CompactionKind, CompactionPolicy, EndpointDescriptor, FeatureSupport,
     ReasoningLevel, RecoveryMetadata, SessionState, SessionStatus, SupportLevel,
-    FEATURE_COMPACTION_POLICY, FEATURE_OPEN_REOPEN, FEATURE_SESSION_MODEL_SWITCH,
-    FEATURE_SESSION_REASONING, MODE_SESSION_OPEN, PROFILE, VERSION,
+    FEATURE_COMPACTION_POLICY, FEATURE_CONTENT_IMAGE, FEATURE_OPEN_REOPEN,
+    FEATURE_SESSION_MODEL_SWITCH, FEATURE_SESSION_REASONING, MODE_SESSION_OPEN, PROFILE, VERSION,
 };
 
 use crate::native::{
@@ -61,6 +61,22 @@ pub struct Adapter {
 
 pub fn pin() -> &'static oxap_harness::Version {
     oxap_harness::current("deepseek-harness").expect("embedded catalog pins deepseek-harness")
+}
+
+pub(crate) fn accepts_images(model: &str) -> bool {
+    matches!(
+        model,
+        "deepseek-flash" | "deepseek-v4-flash" | "deepseek-v4-flash-vision-exp"
+    )
+}
+
+pub(crate) fn capability_revision(model: &str) -> String {
+    let revision = &pin().capability_revision;
+    if accepts_images(model) {
+        format!("{revision}-image")
+    } else {
+        revision.clone()
+    }
 }
 
 fn harness(text: &str) -> Error {
@@ -116,7 +132,7 @@ impl Adapter {
             modes: vec![MODE_SESSION_OPEN.into()],
             ..feature(level, reason)
         };
-        let features: BTreeMap<String, FeatureSupport> = [
+        let mut features: BTreeMap<String, FeatureSupport> = [
             ("protocol.initialize", feature(SupportLevel::EMULATED, "adapter-owned one-shot initialization freeze")),
             ("capabilities", feature(SupportLevel::EMULATED, "conservative descriptor for pinned SDK wire")),
             ("session.open", feature(SupportLevel::EMULATED, "one process and native session per OAP session")),
@@ -142,6 +158,9 @@ impl Adapter {
         .into_iter()
         .map(|(key, support)| (key.to_owned(), support))
         .collect();
+        if accepts_images(&self.config.model) {
+            features.insert(FEATURE_CONTENT_IMAGE.into(), feature(SupportLevel::NATIVE, "inline image input on the configured model; after a model switch, the selected model governs admission"));
+        }
         Descriptor {
             capabilities: CapabilityDescriptor {
                 endpoint: EndpointDescriptor {
@@ -155,7 +174,7 @@ impl Adapter {
                 features,
                 ..CapabilityDescriptor::default()
             },
-            capability_revision: pin().capability_revision.clone(),
+            capability_revision: capability_revision(&self.config.model),
             journal: JournalDescriptor {
                 scope: "session".into(),
                 persistence: "process_memory".into(),

@@ -12,4 +12,4 @@ The corpus carries rc.2's fixtures forward with the new OAP capability revision.
 
 ## Inline image input
 
-The Zig hub translates inline OAP image parts to dsh prompt blocks with `type: "image"`, `data` and `mimeType`. The SDK stores the bytes as an attachment before enqueueing the message. The adapter descriptor offers `content.image` for the configured Flash model and its [documented aliases](https://api-docs.deepseek.com/quick_start/pricing/). Prompt admission uses the session's current model, including after a switch. Go and Rust currently accept text prompts only.
+The Zig, Go, and Rust hubs translate inline OAP image parts to dsh prompt blocks with `type: "image"`, `data` and `mimeType`. The SDK stores the bytes as an attachment before enqueueing the message. The adapter descriptor offers `content.image` for the configured Flash model and its [documented aliases](https://api-docs.deepseek.com/quick_start/pricing/). Prompt admission uses the session's current model, including after a switch.

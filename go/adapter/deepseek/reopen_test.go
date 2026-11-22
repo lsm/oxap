@@ -181,7 +181,7 @@ func TestAFreshOpenRunsUnderANativeIDOfItsOwnWhichThePromptAndLinkCarry(t *testi
 	if len(calls) == 0 || calls[0].method != native.MethodSessionPrompt {
 		t.Fatalf("calls = %+v, want a session/prompt", calls)
 	}
-	if prompt, ok := calls[0].params.(native.SessionPromptParams); !ok || prompt.SessionID != nativeID {
+	if prompt, ok := calls[0].params.(native.EncodedPromptParams); !ok || prompt.SessionID != nativeID {
 		t.Fatalf("prompt = %+v, want it addressed to %q", calls[0].params, nativeID)
 	}
 }

@@ -521,8 +521,11 @@ pub const Session = struct {
                 .parts => |parts| for (parts) |part| switch (part) {
                     .text => |content| try blocks.append(try textBlock(arena, content)),
                     .image => |image| {
+                        const data = image.data orelse return error.InvalidSubmission;
+                        const mime = image.media_type orelse return error.InvalidSubmission;
+                        if (data.len == 0 or mime.len == 0) return error.InvalidSubmission;
                         if (!acceptsImages(self.reducer.model)) return refusal.unsupported(image_feature, contract.reason_unsatisfiable);
-                        try blocks.append(try imageBlock(arena, image));
+                        try blocks.append(try imageBlock(arena, data, mime));
                     },
                     else => return error.InvalidSubmission,
                 },
@@ -674,10 +677,7 @@ fn textBlock(allocator: std.mem.Allocator, content: []const u8) !std.json.Value 
     return .{ .object = block };
 }
 
-fn imageBlock(allocator: std.mem.Allocator, image: oap_types.ImagePart) contract.Failure!std.json.Value {
-    const data = image.data orelse return error.InvalidSubmission;
-    const mime = image.media_type orelse return error.InvalidSubmission;
-    if (data.len == 0 or mime.len == 0) return error.InvalidSubmission;
+fn imageBlock(allocator: std.mem.Allocator, data: []const u8, mime: []const u8) !std.json.Value {
     var block: std.json.ObjectMap = .empty;
     try block.put(allocator, "type", .{ .string = "image" });
     try block.put(allocator, "data", .{ .string = data });

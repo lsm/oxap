@@ -172,6 +172,10 @@ pub struct ContentBlock {
         skip_serializing_if = "String::is_empty"
     )]
     pub text: String,
+    #[serde(skip_deserializing, skip_serializing_if = "String::is_empty")]
+    pub data: String,
+    #[serde(skip_deserializing, skip_serializing_if = "String::is_empty")]
+    pub mime_type: String,
     #[serde(default, deserialize_with = "raw", skip_serializing_if = "none")]
     pub attachment: Raw,
     #[serde(

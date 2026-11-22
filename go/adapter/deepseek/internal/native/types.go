@@ -101,6 +101,18 @@ type SessionPromptParams struct {
 	SessionID     string         `json:"sessionId"`
 	ContentBlocks []ContentBlock `json:"contentBlocks"`
 }
+type EncodedPromptParams struct {
+	SessionID     string        `json:"sessionId"`
+	ContentBlocks []PromptBlock `json:"contentBlocks"`
+}
+
+type PromptBlock struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	Data     string `json:"data,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
 type SessionResumeParams struct {
 	SessionID string `json:"sessionId"`
 }

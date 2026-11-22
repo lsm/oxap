@@ -52,7 +52,8 @@ def verify(binary, verb, root, configured, model, advertises_images, supports_im
             assert switched["ok"] and switched["result"]["payload"]["model_id"] == model, switched
         assert hub.call("events", session_id="s1")["ok"]
         url = {"type": "image", "image": {"url": "https://example.invalid/pixel.png"}}
-        assert not submit([url])["ok"], "URL-only image was accepted"
+        refused = submit([url])
+        assert not refused["ok"] and refused["error"]["code"] == "invalid_submission", refused
         reply = submit([TEXT, IMAGE])
         if supports_images:
             assert reply["ok"], f"{model} refused inline PNG: {reply}"
@@ -66,6 +67,9 @@ def verify(binary, verb, root, configured, model, advertises_images, supports_im
         else:
             assert not feature or feature["level"] == "unavailable", feature
         hub.completed("s1")
+        starts = [line["envelope"] for line in hub.seen
+                  if line.get("envelope", {}).get("type") == "run.started"]
+        assert [event["capability_revision"] for event in starts] == [capabilities["capability_revision"]], starts
         hub.stop()
     finally:
         if hub.process.poll() is None:
