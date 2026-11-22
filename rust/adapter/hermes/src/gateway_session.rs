@@ -185,7 +185,13 @@ impl GatewaySession {
             let resumed = resume_stored(client, stored_id, deadline)?;
             Ok((resumed.session_id, stored_id.to_owned(), resumed.info))
         })
-        .map_err(reopen_refusal)?;
+        .map_err(|error| {
+            if deadline.is_some_and(|at| Instant::now() >= at) {
+                Error::DeadlineExceeded
+            } else {
+                reopen_refusal(error)
+            }
+        })?;
         let current_model_id = info
             .and_then(|info| decode_strict::<SessionInfoPayload>(info.get().as_bytes()).ok())
             .map(|info| info.model)

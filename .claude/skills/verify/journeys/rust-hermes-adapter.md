@@ -174,3 +174,17 @@ requires EOF without another gateway write. The idle reload preserves the
 stored ID, uses the new runtime ID, and matches the recovered OAP state.
 The auto-continue reply matches the recorded unsatisfiable reopen and
 returns no session.
+
+Check the deadline when the gateway withholds either its ready notification
+or the resume reply:
+
+```sh
+for case in reopen-ready-timeout reopen-resume-timeout; do
+  python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+    "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --reopen-deadline "$case" || exit $?
+done
+```
+
+Each example invocation exits 1 with `DeadlineExceeded`. The verifier exits 0
+after observing the timeout and confirming whether the gateway read the
+recorded resume request.
