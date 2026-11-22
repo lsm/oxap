@@ -147,3 +147,15 @@ python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
 
 Expect one linked cancellation and a return to running before completion,
 with six sequenced envelopes and one clean shutdown.
+
+Replay the complete interaction corpus with caller input:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run answered-gates
+```
+
+The gateway waits for each reply before it sends the next tool observation.
+Expect four native replies and 31 OAP envelopes matching the pinned fixture
+byte for byte, and one clean shutdown. The sudo and secret answers are fixture
+strings. The gateway replay executes no tools and receives no credentials.

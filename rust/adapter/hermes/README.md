@@ -33,7 +33,11 @@ OAP sequence numbers. Native tool starts produce linked action requests and
 starts. Native tool completions produce results on the same action call,
 and unfinished tools fail before run settlement. Approval, clarification,
 sudo and secret requests produce OAP input requests and a waiting status.
-Gateway withdrawals cancel the linked input and update the run status.
+Pass the declared identities and all required answers to
+`GatewayRun::resolve_input`. It validates the answers before writing a reply
+to the matching gateway request. A successful reply produces a linked
+`user.input.resolved` and returns the run to running or to its remaining
+input gate. Gateway withdrawals cancel the linked input and update the run status.
 Run settlement cancels any remaining input requests. An observation stream that
 disconnects after the run starts produces an inferred `run.failed` with the
 transport diagnostic. A read deadline allows the caller to retry. Other

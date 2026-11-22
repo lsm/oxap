@@ -42,6 +42,17 @@ def gate_frames(corpus, case):
     return opening
 
 
+def answered_frames(corpus):
+    for frame in frames(corpus / "interaction-gates/native.jsonl"):
+        if frame["direction"] == "harness-control":
+            continue
+        raw = json.loads(frame["raw"])
+        params = raw.get("params", {})
+        if params.get("session_id"):
+            params["session_id"] = "sess0001"
+        yield frame if frame["action"] == "expect-write" else {**frame, "raw": raw}
+
+
 def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
@@ -55,11 +66,19 @@ def gateway(corpus, case):
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
-    replay = gate_frames(corpus, case) if case in GATE_CHECKS else frames(corpus / case / "native.jsonl")
+    if case == "answered-gates":
+        replay = answered_frames(corpus)
+    elif case in GATE_CHECKS:
+        replay = gate_frames(corpus, case)
+    else:
+        replay = frames(corpus / case / "native.jsonl")
     for frame in replay:
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
-            assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
+            if frame["action"] == "expect-write":
+                assert sys.stdin.readline() == raw + "\n"
+            else:
+                assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
             send(frame["raw"])
         elif frame["action"] == "process-exit":
@@ -126,6 +145,8 @@ GATE_CHECKS = {
 
 
 def verify(binary, corpus, mode, case):
+    fixture = "interaction-gates" if case == "answered-gates" else case
+    expected_path = corpus / fixture / "expected-oap.json"
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
         root = Path(directory)
         module = root / "tui_gateway"
@@ -137,18 +158,25 @@ def verify(binary, corpus, mode, case):
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
         model = ["hermes-test"] if case == "malformed-frame" else []
+        if case == "answered-gates":
+            answers_file = root / "answers.json"
+            expected = json.loads(expected_path.read_text())
+            answers_file.write_text(json.dumps([
+                event["payload"]["answers"]
+                for event in expected if event["type"] == "user.input.resolved"
+            ]))
+            model = ["", str(answers_file)]
         result = subprocess.run(
             [binary, sys.executable, directory, directory, mode, *model],
             env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
             timeout=45, capture_output=True, text=True,
         )
-    if case not in GATE_CHECKS:
+    if case not in GATE_CHECKS and case != "answered-gates":
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
     result.check_returncode()
-    lines = result.stdout.splitlines()
-    expected_path = corpus / case / "expected-oap.json"
+    lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
@@ -161,8 +189,11 @@ def verify(binary, corpus, mode, case):
         if case == "process-exit":
             assert expected[-1]["payload"]["error"]["message"] == "gateway died"
             expected[-1]["payload"]["error"]["message"] = "EOF"
-        assert envelopes == [json.dumps(envelope, separators=(",", ":")) for envelope in expected]
+        assert envelopes == [json.dumps(envelope, separators=(",", ":"), ensure_ascii=False) for envelope in expected]
         assert shutdowns == 1
+        if case == "answered-gates":
+            replies = sum(frame["action"] == "expect-write" for frame in answered_frames(corpus))
+            print(f"BYTE-MATCHED GATE REPLIES: {replies}")
         print(f"BYTE-MATCHED ENVELOPES: {len(envelopes)}\nCLEAN SHUTDOWNS: {shutdowns}")
         return
     deltas = [json.loads(line[7:]) for line in lines if line.startswith("delta: ")]

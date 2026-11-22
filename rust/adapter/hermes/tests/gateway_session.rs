@@ -627,3 +627,98 @@ fn replay_frames<'a>(
     session.close().unwrap();
     (trace, observed)
 }
+
+#[test]
+fn run_rejects_invalid_answers_then_submits_a_clarification_batch_once() {
+    use oxap_adapter::runtime::Runtime;
+    use oxap_adapter_hermes::RunObservation;
+    use oxap_protocol::{
+        EnvelopeType, InputAnswer, RunStatus, RunStatusUpdatedPayload, UserInputRequestedPayload,
+        UserInputResolutionStatus, UserInputResolveRequest, UserInputResolvedPayload,
+    };
+
+    let request = r#"{"jsonrpc":"2.0","id":"gate","method":"clarify","params":{"session_id":"running","questions":[{"qid":"detail","question":"Why?"},{"qid":"items","question":"Which?","choices":["a","b&c"],"multi_select":true}]}}"#;
+    let response = r#"{"id":"gate","jsonrpc":"2.0","result":{"answers":{"detail":"because","items":"[\"a\",\"b\\u0026c\"]"}}}"#;
+    let complete = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"message.complete","session_id":"running","seq":3,"payload":{"status":"complete","text":"done"}}}"#;
+    let config = gateway(
+        EMPTY_CREATE,
+        &format!("printf '%s\\n' '{INFO}' '{CREATED}'"),
+        &format!(
+            "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{STARTED}' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\"}}}}' '{request}'\n\
+             IFS= read -r line\ntest \"$line\" = '{response}'\n\
+             printf '%s\\n' '{complete}'"
+        ),
+    );
+    let mut session = open(&config, "", "").unwrap();
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    let mut run = session
+        .start_run(
+            "hello\n<world>",
+            "session".into(),
+            "example",
+            Runtime::default(),
+            deadline,
+        )
+        .unwrap();
+    let next = |run: &mut oxap_adapter_hermes::GatewayRun<'_>| loop {
+        if let RunObservation::Event(event) = run.next_observation(deadline).unwrap().unwrap() {
+            break event;
+        }
+    };
+    assert_eq!(next(&mut run).envelope_type, EnvelopeType::RUN_STARTED);
+    let requested = next(&mut run);
+    assert_eq!(requested.envelope_type, EnvelopeType::USER_INPUT_REQUESTED);
+    let input: UserInputRequestedPayload = requested.decode_payload().unwrap();
+    let waiting: RunStatusUpdatedPayload = next(&mut run).decode_payload().unwrap();
+    assert_eq!(
+        waiting.pending_user_input_id,
+        Some(input.interaction_id.clone())
+    );
+
+    let answer = UserInputResolveRequest {
+        interaction_id: input.interaction_id,
+        requested_by: input.requested_by,
+        responded_by: input.responded_by,
+        session_id: input.session_id,
+        run_id: input.run_id,
+        answers: vec![
+            InputAnswer {
+                question_id: "items".into(),
+                selected_option_ids: vec!["a".into(), "b&c".into()],
+                ..InputAnswer::default()
+            },
+            InputAnswer {
+                question_id: "detail".into(),
+                text: "because".into(),
+                ..InputAnswer::default()
+            },
+        ],
+    };
+    let mut invalid = answer.clone();
+    invalid.responded_by = "someone-else".into();
+    assert_eq!(run.resolve_input(invalid), Err(Error::InvalidResolution));
+    let mut invalid = answer.clone();
+    invalid.answers[0].selected_option_ids = vec!["unoffered".into()];
+    assert_eq!(run.resolve_input(invalid), Err(Error::InvalidResolution));
+    let mut invalid = answer.clone();
+    invalid.answers.pop();
+    assert_eq!(run.resolve_input(invalid), Err(Error::InvalidResolution));
+    run.resolve_input(answer.clone()).unwrap();
+    assert_eq!(
+        run.resolve_input(answer.clone()),
+        Err(Error::InteractionNotFound)
+    );
+
+    let resolved = next(&mut run);
+    assert_eq!(resolved.envelope_type, EnvelopeType::USER_INPUT_RESOLVED);
+    assert_eq!(resolved.in_reply_to, Some(requested.id));
+    let resolved: UserInputResolvedPayload = resolved.decode_payload().unwrap();
+    assert_eq!(resolved.status, UserInputResolutionStatus::SUBMITTED);
+    assert_eq!(resolved.answers, answer.answers);
+    let running: RunStatusUpdatedPayload = next(&mut run).decode_payload().unwrap();
+    assert_eq!(running.status, RunStatus::RUNNING);
+    assert_eq!(next(&mut run).envelope_type, EnvelopeType::RUN_COMPLETED);
+    assert!(run.next_observation(deadline).unwrap().is_none());
+    session.close().unwrap();
+}

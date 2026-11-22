@@ -1,22 +1,24 @@
-use std::{collections::VecDeque, time::Instant};
+use std::{collections::VecDeque, sync::Arc, time::Instant};
 
-use oxap_adapter::{jsonrpc::RequestId, runtime::Runtime, Error};
+use oxap_adapter::{
+    gojson::go_marshal, index_input_answers, jsonrpc::RequestId, runtime::Runtime, Error,
+};
 use oxap_protocol::{
-    ActionCallPayload, ContentDeltaPayload, Envelope, EnvelopeId, EnvelopeType, InputOption,
-    InputQuestion, InputQuestionKind, InteractionId, Message, MessageContent, MessageId,
-    MessageRole, ProtocolError, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload,
-    RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
-    UserInputResolutionStatus, UserInputResolvedPayload,
+    ActionCallPayload, ContentDeltaPayload, Envelope, EnvelopeId, EnvelopeType, InputAnswer,
+    InputOption, InputQuestion, InputQuestionKind, InteractionId, Message, MessageContent,
+    MessageId, MessageRole, ProtocolError, RunCompletedPayload, RunFailedPayload, RunId,
+    RunStartedPayload, RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
+    UserInputResolutionStatus, UserInputResolveRequest, UserInputResolvedPayload,
 };
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 
 use crate::gateway_session::ObservationError;
 use crate::native::{
-    decode_server_request, decode_strict, request_session_id, InterruptResult,
-    RequestCancelPayload, ServerRequest, ToolCompletePayload, ToolStartPayload,
-    EVENT_REQUEST_CANCEL, EVENT_TOOL_COMPLETE, EVENT_TOOL_START, REQUEST_APPROVAL, REQUEST_CLARIFY,
-    REQUEST_SECRET, REQUEST_SUDO,
+    decode_server_request, decode_strict, request_session_id, ApprovalResult, ClarifyAnswersResult,
+    InterruptResult, RequestCancelPayload, ServerRequest, ToolCompletePayload, ToolStartPayload,
+    ValueResult, EVENT_REQUEST_CANCEL, EVENT_TOOL_COMPLETE, EVENT_TOOL_START, REQUEST_APPROVAL,
+    REQUEST_CLARIFY, REQUEST_SECRET, REQUEST_SUDO,
 };
 use crate::rpc::IncomingRequest;
 use crate::{GatewaySession, Observation, PromptObservation};
@@ -26,6 +28,9 @@ pub enum RunObservation {
     Event(Box<Envelope>),
     Other(Observation),
 }
+
+const REQUESTER: &str = "hermes.gateway";
+const RESPONDER: &str = "user";
 
 pub struct GatewayRun<'a> {
     session: &'a mut GatewaySession,
@@ -48,9 +53,10 @@ struct ToolCall {
 }
 
 struct Gate {
-    native_id: String,
+    request: Arc<IncomingRequest>,
     id: InteractionId,
     requested: EnvelopeId,
+    questions: Vec<InputQuestion>,
 }
 
 impl GatewaySession {
@@ -97,6 +103,29 @@ impl GatewaySession {
 }
 
 impl GatewayRun<'_> {
+    pub fn resolve_input(&mut self, resolution: UserInputResolveRequest) -> Result<(), Error> {
+        let index = self
+            .gates
+            .iter()
+            .position(|gate| gate.id == resolution.interaction_id)
+            .ok_or(Error::InteractionNotFound)?;
+        if resolution.session_id != self.session_id
+            || resolution.run_id != self.run_id
+            || resolution.requested_by.as_str() != REQUESTER
+            || resolution.responded_by.as_str() != RESPONDER
+        {
+            return Err(Error::InvalidResolution);
+        }
+        self.gates[index].respond(&resolution.answers)?;
+        let gate = self.gates.remove(index);
+        self.resolve_gate(
+            gate,
+            UserInputResolutionStatus::SUBMITTED,
+            resolution.answers,
+        )?;
+        self.queue_gate_status()
+    }
+
     pub fn interrupt(&self, deadline: Option<Instant>) -> Result<InterruptResult, Error> {
         if let Some(status) = &self.terminal {
             return Err(Error::RunAlreadyTerminal {
@@ -186,7 +215,7 @@ impl GatewayRun<'_> {
                     ) {
                         return Ok(Some(RunObservation::Other(Observation::Request(request))));
                     }
-                    self.open_gate(&request)?;
+                    self.open_gate(request)?;
                     continue;
                 }
             };
@@ -194,15 +223,15 @@ impl GatewayRun<'_> {
         }
     }
 
-    fn open_gate(&mut self, request: &IncomingRequest) -> Result<(), Error> {
+    fn open_gate(&mut self, request: Arc<IncomingRequest>) -> Result<(), Error> {
         let method = request.method.as_str();
-        let RequestId::String(native_id) = &request.id else {
+        if !matches!(request.id, RequestId::String(_)) {
             return self.queue_failure(
                 "hermes_external_activity",
                 &format!("{method} request with a non-string id"),
                 "",
             );
-        };
+        }
         let params = request
             .params
             .as_ref()
@@ -215,14 +244,14 @@ impl GatewayRun<'_> {
             );
             return self.queue_failure("hermes_external_activity", &message, "");
         }
-        let Ok(Some(request)) = decode_server_request(method, params) else {
+        let Ok(Some(decoded)) = decode_server_request(method, params) else {
             return self.queue_failure(
                 "hermes_invalid_event",
                 &format!("invalid {method} gate"),
                 "",
             );
         };
-        let (title, description, questions) = gate_questions(request);
+        let (title, description, questions) = gate_questions(decoded);
         if questions
             .iter()
             .any(|question| question.options.iter().any(|option| option.id.is_empty()))
@@ -238,22 +267,23 @@ impl GatewayRun<'_> {
             EnvelopeType::USER_INPUT_REQUESTED,
             &UserInputRequestedPayload {
                 interaction_id: id.clone(),
-                requested_by: "hermes.gateway".into(),
-                responded_by: "user".into(),
+                requested_by: REQUESTER.into(),
+                responded_by: RESPONDER.into(),
                 session_id: self.session_id.clone(),
                 run_id: self.run_id.clone(),
                 title: title.into(),
                 description,
-                questions,
+                questions: questions.clone(),
                 allow_cancel: true,
                 ..UserInputRequestedPayload::default()
             },
         )?;
         requested.turn_id = Some(id.clone());
         self.gates.push(Gate {
-            native_id: native_id.clone(),
+            request,
             id,
             requested: requested.id.clone(),
+            questions,
         });
         self.pending.push_back(requested);
         self.queue_gate_status()
@@ -263,7 +293,7 @@ impl GatewayRun<'_> {
         if let Some(index) = self
             .gates
             .iter()
-            .position(|gate| gate.native_id == native_id)
+            .position(|gate| matches!(&gate.request.id, RequestId::String(id) if id == native_id))
         {
             let gate = self.gates.remove(index);
             self.cancel_gate(gate)?;
@@ -351,16 +381,25 @@ impl GatewayRun<'_> {
     }
 
     fn cancel_gate(&mut self, gate: Gate) -> Result<(), Error> {
+        self.resolve_gate(gate, UserInputResolutionStatus::CANCELLED, Vec::new())
+    }
+
+    fn resolve_gate(
+        &mut self,
+        gate: Gate,
+        status: UserInputResolutionStatus,
+        answers: Vec<InputAnswer>,
+    ) -> Result<(), Error> {
         let mut resolved = self.emit(
             EnvelopeType::USER_INPUT_RESOLVED,
             &UserInputResolvedPayload {
                 interaction_id: gate.id.clone(),
-                requested_by: "hermes.gateway".into(),
-                responded_by: "user".into(),
+                requested_by: REQUESTER.into(),
+                responded_by: RESPONDER.into(),
                 session_id: self.session_id.clone(),
                 run_id: self.run_id.clone(),
-                status: UserInputResolutionStatus::CANCELLED,
-                ..UserInputResolvedPayload::default()
+                status,
+                answers,
             },
         )?;
         resolved.turn_id = Some(gate.id);
@@ -436,6 +475,41 @@ impl GatewayRun<'_> {
         event.run_id = Some(self.run_id.clone());
         event.capability_revision = Some(self.revision.to_owned());
         Ok(event)
+    }
+}
+
+impl Gate {
+    fn respond(&self, answers: &[InputAnswer]) -> Result<(), Error> {
+        if answers.len() != self.questions.len() {
+            return Err(Error::InvalidResolution);
+        }
+        let indexed = index_input_answers(&self.questions, answers)?;
+        let result = match self.request.method.as_str() {
+            REQUEST_APPROVAL => self.request.respond(&ApprovalResult {
+                choice: indexed["choice"].selected_option_ids[0].clone(),
+            }),
+            REQUEST_CLARIFY => {
+                let mut result = ClarifyAnswersResult::default();
+                for question in &self.questions {
+                    let answer = indexed[question.id.as_str()];
+                    let value = match question.kind.as_str() {
+                        "text" => answer.text.clone(),
+                        "multi_choice" => go_marshal(
+                            &serde_json::to_string(&answer.selected_option_ids)
+                                .map_err(Error::harness)?,
+                        ),
+                        _ => answer.selected_option_ids[0].clone(),
+                    };
+                    result.answers.insert(question.id.clone(), value);
+                }
+                self.request.respond(&result)
+            }
+            REQUEST_SUDO | REQUEST_SECRET => self.request.respond(&ValueResult {
+                value: answers[0].text.clone(),
+            }),
+            _ => unreachable!("only Hermes input requests create gates"),
+        };
+        result.map_err(Error::harness)
     }
 }
 
