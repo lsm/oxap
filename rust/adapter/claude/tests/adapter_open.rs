@@ -18,17 +18,21 @@ fn adapter() -> ClaudeAdapter {
 fn a_probe_describes_the_pinned_endpoint_the_features_and_the_process_memory_journal() {
     let adapter = adapter();
     let described = descriptor(&adapter);
+    let pin = oxap_harness::current("claude-code").unwrap();
     assert_eq!(
         described.capabilities.endpoint.id.as_str(),
         "claude-code.cli"
     );
     assert_eq!(described.capabilities.endpoint.name, "Claude Code Adapter");
-    assert_eq!(described.capabilities.endpoint.version, "v2.1.322");
+    assert_eq!(
+        described.capabilities.endpoint.version,
+        pin.endpoint_version
+    );
     assert_eq!(
         described.capabilities.endpoint.adapter,
         "claude-code-stream-json"
     );
-    assert_eq!(described.capability_revision, "claude-code-2.1.322-oap-v1");
+    assert_eq!(described.capability_revision, pin.capability_revision);
     assert_eq!(described.capabilities.protocol_versions, ["0.1"]);
     assert_eq!(
         described.capabilities.profiles,

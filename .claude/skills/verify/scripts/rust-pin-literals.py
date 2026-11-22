@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -7,7 +6,8 @@ from tempfile import TemporaryDirectory
 
 def check(binary):
     return subprocess.run(
-        [binary, "check"], capture_output=True, text=True, timeout=60
+        [binary, "check"], capture_output=True, text=True, timeout=60,
+        env={"NODE_ENV": "test"},
     )
 
 
@@ -41,12 +41,12 @@ def main():
             ):
                 raise SystemExit("Expected both Rust pin diagnostics.\n" + rejected.stderr)
         clean = check(binary)
-        print(f'Clean check exit {clean.returncode}, {clean.stdout.splitlines().count("PASS check")} PASS check')
-        if clean.returncode != 0 or "PASS check" not in clean.stdout.splitlines():
+        passes = clean.stdout.splitlines().count("PASS check")
+        print(f"Clean check exit {clean.returncode}, {passes} PASS check")
+        if clean.returncode != 0 or passes != 1:
             raise SystemExit(clean.stdout + clean.stderr)
     print("PASS: 2 checks")
 
 
 if __name__ == "__main__":
-    os.environ["NODE_ENV"] = "test"
     main()
