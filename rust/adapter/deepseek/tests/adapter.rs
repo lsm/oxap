@@ -15,6 +15,7 @@ fn config() -> Config {
         },
         provider: "p".into(),
         model: "m".into(),
+        native_session_id: Some(|id: &str| id.to_owned()),
         ..Config::default()
     }
 }

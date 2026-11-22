@@ -242,6 +242,7 @@ impl Case {
                 },
             ),
             journal_capacity: 64,
+            native_session_id: Some(|id: &str| id.to_owned()),
             ..Config::default()
         })
         .unwrap()

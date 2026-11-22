@@ -183,7 +183,7 @@
     {
       "harness": "deepseek-harness",
       "pin": "dsh-v0.2.2-rc.5",
-      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3",
+      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v4",
       "corpus": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5",
       "cells": [
         {
@@ -209,9 +209,9 @@
         },
         {
           "column": "reopen",
-          "claim": "reopen is declined before the runtime starts",
+          "claim": "reopen resumes the bound native session after initialize",
           "evidence": [
-            { "package": "go/adapter/deepseek", "test": "TestReopenIsDeclinedBeforeTheRuntimeStarts", "kind": "refusal" }
+            { "package": "go/adapter/deepseek", "test": "TestReopenResumesTheBoundNativeSessionAndReportsItRecovered", "kind": "positive" }
           ]
         },
         {

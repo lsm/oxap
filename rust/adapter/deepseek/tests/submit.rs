@@ -145,6 +145,7 @@ done"#
             provider: "deepseek".into(),
             model: "m".into(),
             runtime: Runtime::new(|| 42, |kind| format!("{kind}-minted")),
+            native_session_id: Some(|id: &str| id.to_owned()),
             ..Config::default()
         })
         .unwrap()

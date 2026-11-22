@@ -132,8 +132,10 @@ func exchangeWithChild(t *testing.T, fixture, backend string, scenario []string,
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	return out, turnEntropy.ReplaceAllString(requestEntropy.ReplaceAllString(strings.ReplaceAll(string(written), work, "@DIR@"), "${1}_@ENTROPY@"), "turn-@ENTROPY@-${1}")
+	return out, nativeSessionEntropy.ReplaceAllString(turnEntropy.ReplaceAllString(requestEntropy.ReplaceAllString(strings.ReplaceAll(string(written), work, "@DIR@"), "${1}_@ENTROPY@"), "turn-@ENTROPY@-${1}"), `"sessionId":"@ENTROPY@"`)
 }
+
+var nativeSessionEntropy = regexp.MustCompile(`"sessionId":"[0-9a-f]{32}"`)
 
 var requestEntropy = regexp.MustCompile(`\b(req_[0-9]+)_[0-9a-f]{8}\b`)
 

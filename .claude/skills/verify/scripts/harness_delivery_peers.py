@@ -174,16 +174,17 @@ def peer(kind):
         def event(event_kind, data, **fields):
             nonlocal count
             count += 1
-            notify("session.event", sessionId=SESSION, event={
+            notify("session.event", sessionId=native, event={
                 "seq": count, "time": count, "type": event_kind, "data": data, **fields})
 
         rpc(request("initialize"), serverInfo={"name": "deepseek-harness-sdk-runtime", "version": "0.0.1"})
         prompt = request("session/prompt")
+        native = prompt["params"]["sessionId"]
         user = {"id": "user-1", "role": "user", "source": {"kind": "user"},
                 "content": prompt["params"]["contentBlocks"]}
         event("agent/inbox/spliced", {"inserted": [user], "start": 0, "target": "next-turn"})
         rpc(prompt, messageId=user["id"])
-        notify("session.status", sessionId=SESSION, status="running")
+        notify("session.status", sessionId=native, status="running")
         event("turn/start", {"turn": 1})
         step = {"step": 1, "turn": 1}
         event("step/start", step)
@@ -204,7 +205,7 @@ def peer(kind):
         }}, surfaceOp="append")
         event("step/end", step)
         event("turn/end", {"reason": {"kind": "completed"}, "turn": 1})
-        notify("session.status", sessionId=SESSION, status="idle")
+        notify("session.status", sessionId=native, status="idle")
         Path("native-turn-ended").touch()
     else:
         raise ValueError(kind)

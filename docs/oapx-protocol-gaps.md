@@ -109,7 +109,8 @@ left behind (`drafts/hub.md:72`, `:1398`).
   (`zig/src/adapter/claude/adapter.zig:27`, `zig/src/adapter/codex/session.zig:1251`,
   `zig/src/adapter/acp/adapter.zig:103`, `zig/src/adapter/hermes/adapter.zig:36`,
   `zig/src/adapter/opencode/adapter.zig:38`, `zig/src/adapter/pi/adapter.zig:69`);
-- unavailable in DeepSeek (`zig/src/adapter/deepseek/adapter.zig:35`);
+- native in DeepSeek, through `session/resume` with the bound native id right
+  after `initialize` (`zig/src/adapter/deepseek/adapter.zig:38`);
 - emulated in oapx's own loop, but only with a history loader
   (`zig/src/adapter/oapx/adapter.zig:64`). Under `serve` it advertises the
   unsaved descriptor without reopen (`:35`, `:180`), for the reason in row 1.
@@ -118,8 +119,8 @@ left behind (`drafts/hub.md:72`, `:1398`).
 no session" because reattach is staged. That row is stale: reattach has
 landed.
 
-**Status.** Partial. Implemented for every pinned harness except DeepSeek;
-not available on oapx's own loop under `serve`.
+**Status.** Partial. Implemented for every pinned harness; not available on
+oapx's own loop under `serve`.
 
 **Spec revision.** No. The oapx gap closes with row 1's wiring.
 
@@ -332,7 +333,7 @@ Levels are the adapter's own feature table. "Model switch" is
 | OpenCode server | `zig/src/adapter/opencode/adapter.zig:146` | reopen native (`:38`); native list and read | native (`:21`) | native (`:20`) | none; models list degraded (`:24`) | model switch | P1 |
 | ACP (Devin) | `zig/src/adapter/acp/adapter.zig:160` | reopen native (`:103`); native list and read | degraded, observed only (`:116`) | native (`:119`) | in review (#1163); models list degraded (`:105`) | model switch (#1163); permissions answered at cancel (#1168) | P1 |
 | Pi | `zig/src/adapter/pi/adapter.zig:131` | reopen native (`:69`); native list and read | degraded (`:52`) | unavailable (`:51`) | none | permissions, model switch, models list | P2 |
-| DeepSeek's own harness | `zig/src/adapter/deepseek/adapter.zig:106` | no reopen (`:35`) | degraded (`:19`) | unavailable (`:18`) | none | reopen, cancel (`:23`), permissions, model switch | P3 (oapx's loop is the default for DeepSeek) |
+| DeepSeek's own harness | `zig/src/adapter/deepseek/adapter.zig:106` | native reopen through `session/resume` | degraded (`:19`) | unavailable (`:18`) | none | cancel (`:23`), permissions, model switch | P3 (oapx's loop is the default for DeepSeek) |
 | Claude Code / Agent SDK | `zig/src/adapter/claude/adapter.zig:162` | reopen native (`:27`); native list and read | degraded (`:43`) | native (`:46`) | none | model switch | P3 (HyperNeo keeps Claude on the Agent SDK, outside OAP) |
 
 ## HyperNeo's plan against this inventory

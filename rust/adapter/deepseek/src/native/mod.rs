@@ -24,6 +24,7 @@ pub use stream::{
 pub const SERVER_NAME: &str = "deepseek-harness-sdk-runtime";
 pub const METHOD_INITIALIZE: &str = "initialize";
 pub const METHOD_SESSION_PROMPT: &str = "session/prompt";
+pub const METHOD_SESSION_RESUME: &str = "session/resume";
 pub const METHOD_SHUTDOWN: &str = "shutdown";
 pub const NOTIFY_SESSION_EVENT: &str = "session.event";
 pub const NOTIFY_SESSION_STATUS: &str = "session.status";
@@ -133,6 +134,12 @@ pub struct ServerInfo {
 pub struct InitializeResult {
     #[serde(default, deserialize_with = "structure")]
     pub server_info: ServerInfo,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionResumeParams {
+    pub session_id: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

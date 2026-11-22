@@ -19,7 +19,7 @@ func TestEnvironmentAllowlistNilness(t *testing.T) {
 			captured = c
 			return nil, errors.New("capture complete")
 		})
-		implementation, err := New(Config{Executable: "/bin/true", WorkingDirectory: filepath.Join(t.TempDir()), Environment: env, Provider: "p", Model: "m", ProcessFactory: factory})
+		implementation, err := New(Config{NativeSessionID: sameNativeID, Executable: "/bin/true", WorkingDirectory: filepath.Join(t.TempDir()), Environment: env, Provider: "p", Model: "m", ProcessFactory: factory})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,7 +56,7 @@ func TestAnOpenStartsItsOwnRuntimeWithTheEffortAndACompactionPatch(t *testing.T)
 		}
 		return nil, errors.New("capture complete")
 	})
-	implementation, err := New(Config{Executable: "/bin/true", WorkingDirectory: t.TempDir(), Args: []string{"--profile", "sdk"}, Provider: "p", Model: "m", ProcessFactory: factory})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Executable: "/bin/true", WorkingDirectory: t.TempDir(), Args: []string{"--profile", "sdk"}, Provider: "p", Model: "m", ProcessFactory: factory})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestAnOpenStartsItsOwnRuntimeWithTheEffortAndACompactionPatch(t *testing.T)
 
 func TestASuppliedFactoryRefusesTheSettingTheOpenCarriedAndRunsAnAutoPolicy(t *testing.T) {
 	started := 0
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) {
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) {
 		started++
 		return nil, "", errors.New("factory reached")
 	})})
@@ -107,32 +107,9 @@ func TestASuppliedFactoryRefusesTheSettingTheOpenCarriedAndRunsAnAutoPolicy(t *t
 	}
 }
 
-func TestReopenIsDeclinedBeforeTheRuntimeStarts(t *testing.T) {
-	started := 0
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) {
-		started++
-		return nil, "", errors.New("a declined reopen must not start a runtime")
-	})})
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptor, err := implementation.Probe(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if support := descriptor.Capabilities.Features[protocol.FeatureOpenReopen]; support.Level != protocol.SupportUnavailable {
-		t.Fatalf("reopen advertised as %q, want unavailable", support.Level)
-	}
-	_, err = implementation.Open(context.Background(), base.OpenRequest{SessionID: "s", Reopen: true, NativeSessionID: "stored"})
-	var refusal *base.UnsupportedControlError
-	if !errors.As(err, &refusal) || refusal.Feature != protocol.FeatureOpenReopen || refusal.Reason != base.ControlUnadvertised || started != 0 {
-		t.Fatalf("refusal = %v, runtimes started = %d", err, started)
-	}
-}
-
 func TestCancelIsRefusedAsUnavailableAndWritesNothingNative(t *testing.T) {
 	client := newCorpusClient()
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return client, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return client, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}

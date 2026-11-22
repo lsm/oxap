@@ -165,7 +165,7 @@ func openTest(t *testing.T) (base.Session, *fakeClient) {
 func openWithJournal(t *testing.T, capacity int) (base.Session, *fakeClient) {
 	t.Helper()
 	f := newFake()
-	a, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return f, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: capacity})
+	a, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return f, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: capacity})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,7 +257,7 @@ func drain(t *testing.T, st base.EventStream) []protocol.Envelope {
 }
 
 func TestDescriptorOffersJournalReplayAndNoCancel(t *testing.T) {
-	a, _ := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return newFake(), "m", nil })})
+	a, _ := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return newFake(), "m", nil })})
 	d, err := a.Probe(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -1042,7 +1042,7 @@ func TestArgumentsCarryingANumberGoCannotHoldAreStillAdmitted(t *testing.T) {
 }
 
 func TestArgumentsTravelVerbatimSoATraceWithDuplicateKeysIsRefused(t *testing.T) {
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return newFake(), "deepseek-chat", nil })})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return newFake(), "deepseek-chat", nil })})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1086,7 +1086,7 @@ func TestArgumentsTravelVerbatimSoATraceWithDuplicateKeysIsRefused(t *testing.T)
 
 func descriptorFromProbe(t *testing.T) base.Descriptor {
 	t.Helper()
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return newFake(), "deepseek-chat", nil })})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return newFake(), "deepseek-chat", nil })})
 	if err != nil {
 		t.Fatal(err)
 	}

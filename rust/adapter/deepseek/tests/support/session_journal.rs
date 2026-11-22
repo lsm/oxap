@@ -40,6 +40,7 @@ cat >/dev/null"#
         provider: "deepseek".into(),
         model: "m".into(),
         journal_capacity,
+        native_session_id: Some(|id: &str| id.to_owned()),
         ..Config::default()
     })
     .unwrap()
