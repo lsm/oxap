@@ -1,6 +1,6 @@
 {
   "name": "@oxap/client",
-  "version": "0.1.0-alpha.41",
+  "version": "0.1.0-alpha.42",
   "description": "TypeScript client for the oxap serve and goap serve daemons: Open Agent Protocol agent-control-core over HTTP + SSE",
   "license": "CC0-1.0",
   "repository": {
