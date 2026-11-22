@@ -5663,12 +5663,80 @@ fn piBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; name one with \"executable\" in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
+    if (entry.model_endpoint) |endpoint| {
+        const model_id = entry.model["oapx/".len..];
+        const directory = try piRouteDirectory(surface, arena, entry, endpoint, model_id, environ);
+        const key = environ.get(endpoint.credential_env).?;
+        return .{
+            .executable = executable,
+            .args = try std.mem.concat(arena, []const u8, &.{ entry.args, &.{ "--provider", "oapx", "--model", model_id } }),
+            .environment = try customChildEnvironment(arena, entry, endpoint, key, adapter_config.pi_endpoint_variable, directory),
+            .stderr_redaction = .{ .value = key, .variable = endpoint.credential_env },
+            .working_directory = entry.working_directory,
+        };
+    }
     return .{
         .executable = executable,
         .args = entry.args,
         .environment = entry.environment,
         .working_directory = entry.working_directory,
     };
+}
+
+fn piRouteDirectory(
+    surface: ConfigSurface,
+    arena: std.mem.Allocator,
+    entry: adapter_config.AdapterEntry,
+    endpoint: adapter_config.ModelEndpoint,
+    model_id: []const u8,
+    environ: *const std.process.Environ.Map,
+) ![]const u8 {
+    const home = environ.get("HOME") orelse "";
+    if (!std.fs.path.isAbsolute(home)) {
+        try surface.refuse("{s} \"{s}\" needs an absolute HOME for Pi model_endpoint state", .{ surface.noun, entry.name });
+        return error.BackendRefused;
+    }
+    const rendered = try std.json.Stringify.valueAlloc(arena, .{
+        .providers = .{ .oapx = .{
+            .baseUrl = endpoint.base_url,
+            .api = endpoint.wire,
+            .apiKey = try std.fmt.allocPrint(arena, "${{{s}}}", .{endpoint.credential_env}),
+            .models = .{.{ .id = model_id }},
+        } },
+    }, .{});
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(rendered, &digest, .{});
+    const hash = std.fmt.bytesToHex(digest, .lower);
+    const directory = try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "pi", &hash });
+    const path = try std.fs.path.join(arena, &.{ directory, "models.json" });
+    writePiRoute(path, rendered) catch |err| {
+        try surface.refuse("{s} \"{s}\" could not write Pi model_endpoint models.json: {s}", .{ surface.noun, entry.name, @errorName(err) });
+        return error.BackendRefused;
+    };
+    return directory;
+}
+
+fn writePiRoute(path: []const u8, rendered: []const u8) !void {
+    const io = backendIo();
+    var file = try compat.fs.getCwd().createFileAtomic(io, path, .{ .make_path = true, .replace = true, .permissions = compat.fs.default_file_mode });
+    defer file.deinit(io);
+    try file.file.writeStreamingAll(io, rendered);
+    try file.replace(io);
+}
+
+fn customChildEnvironment(
+    arena: std.mem.Allocator,
+    entry: adapter_config.AdapterEntry,
+    endpoint: adapter_config.ModelEndpoint,
+    key: []const u8,
+    destination: []const u8,
+    value: []const u8,
+) ![]const []const u8 {
+    const environment = try arena.alloc([]const u8, entry.environment.len + 2);
+    @memcpy(environment[0..entry.environment.len], entry.environment);
+    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "{s}={s}", .{ destination, value });
+    environment[entry.environment.len + 1] = try std.fmt.allocPrint(arena, "{s}={s}", .{ endpoint.credential_env, key });
+    return environment;
 }
 
 fn acpBackendConfig(
@@ -5890,6 +5958,10 @@ fn opencodeBackendConfig(
     started: *?*opencode_server.Server,
 ) !opencode_adapter.Config {
     if (entry.endpoint.len > 0) {
+        if (entry.model_endpoint != null) {
+            try surface.refuse("{s} \"{s}\" names an endpoint and a model_endpoint; route the executable oxap spawns instead", .{ surface.noun, entry.name });
+            return error.BackendRefused;
+        }
         if (entry.executable.len > 0) {
             try surface.refuse("{s} \"{s}\" names an endpoint and an executable; an OpenCode endpoint is a server already running, so set one or the other", .{ surface.noun, entry.name });
             return error.BackendRefused;
@@ -5907,10 +5979,33 @@ fn opencodeBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; run oxap harness install opencode, or name one with \"executable\", or a running server with \"endpoint\", in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
+    var config: opencode_adapter.Config = .{ .endpoint = "", .agent = entry.agent, .username = opencode_server.username };
+    var environment = entry.environment;
+    if (entry.model_endpoint) |endpoint| {
+        const model_id = entry.model["oapx/".len..];
+        config.model = .{ .id = model_id, .provider_id = "oapx" };
+        const package = if (std.mem.eql(u8, endpoint.wire, "anthropic-messages"))
+            "@opencode/ai/providers/anthropic-compatible"
+        else if (std.mem.eql(u8, endpoint.wire, "openai-responses"))
+            "@opencode/ai/providers/openai-compatible/responses"
+        else
+            "@opencode/ai/providers/openai-compatible";
+        var models: std.json.ArrayHashMap(struct {}) = .{};
+        try models.map.put(arena, model_id, .{});
+        const overlay = try std.json.Stringify.valueAlloc(arena, .{
+            .providers = .{ .oapx = .{
+                .package = package,
+                .settings = .{ .baseURL = endpoint.base_url, .apiKey = try std.fmt.allocPrint(arena, "{{env:{s}}}", .{endpoint.credential_env}) },
+                .models = models,
+            } },
+        }, .{});
+        const key = environ.get(endpoint.credential_env).?;
+        environment = try customChildEnvironment(arena, entry, endpoint, key, adapter_config.opencode_endpoint_variables[1], overlay);
+    }
     var why: []const u8 = "";
     const server = opencode_server.Server.start(allocator, arena, .{
         .executable = executable,
-        .environment = entry.environment,
+        .environment = environment,
         .working_directory = entry.working_directory,
         .log_path = try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "opencode", try std.fmt.allocPrint(arena, "{s}.log", .{entry.name}) }),
     }, &why) catch |err| {
@@ -5919,7 +6014,9 @@ fn opencodeBackendConfig(
         return error.BackendRefused;
     };
     started.* = server;
-    return .{ .endpoint = server.endpoint, .agent = entry.agent, .username = opencode_server.username, .password = &server.password };
+    config.endpoint = server.endpoint;
+    config.password = &server.password;
+    return config;
 }
 
 fn opencodePassword(environment: []const []const u8) []const u8 {

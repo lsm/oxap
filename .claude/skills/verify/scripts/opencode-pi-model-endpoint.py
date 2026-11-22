@@ -38,7 +38,7 @@ def request(base, path, key, wire):
 class OpenCode(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     model = {"id": MODEL, "providerID": "oapx"}
-    session = "ses_fixture"
+    session = "ses_fake00000000000000"
 
     def reply(self, data):
         body = json.dumps(data).encode()
@@ -93,6 +93,39 @@ class OpenCode(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def pi_turn(base, path, key, wire):
+    def emit(event, **fields):
+        print(json.dumps({"type": event, **fields}), flush=True)
+
+    count = 0
+    for line in sys.stdin:
+        incoming = json.loads(line)
+        command = incoming["type"]
+        reply = {"id": incoming["id"], "command": command, "success": True}
+        if command == "get_state":
+            emit("response", **reply, data={
+                "thinkingLevel": "off", "steeringMode": "all", "followUpMode": "one-at-a-time",
+                "messageCount": count, "pendingMessageCount": 0, "sessionId": "native-session",
+                "isStreaming": False, "model": {"id": MODEL, "provider": "oapx"},
+            })
+            continue
+        assert command == "prompt"
+        request(base, path, key, wire)
+        emit("response", **reply)
+        assistant = {"role": "assistant", "content": [{"type": "text", "text": key}],
+                     "api": wire, "provider": "oapx", "model": MODEL, "stopReason": "stop",
+                     "usage": {"input": 1, "output": 1, "totalTokens": 2}, "timestamp": 1}
+        emit("agent_start")
+        emit("turn_start")
+        emit("message_start", message={**assistant, "content": []})
+        emit("message_update", assistantMessageEvent={"type": "text_delta", "contentIndex": 0, "delta": key}, usage={})
+        emit("message_end", message=assistant)
+        emit("turn_end", message=assistant, toolResults=[])
+        emit("agent_end", messages=[assistant], willRetry=False)
+        emit("agent_settled")
+        count = 2
+
+
 def child(kind, wire, base, fixture, args):
     package, path = WIRES[wire]
     if kind == "opencode":
@@ -114,6 +147,7 @@ def child(kind, wire, base, fixture, args):
     if kind == "pi":
         assert args[:5] == ["--no-session", "--provider", "oapx", "--model", MODEL]
         directory = Path(os.environ["PI_CODING_AGENT_DIR"])
+        assert directory.parent == Path.cwd().parent / "pi-home/.oxap/pi"
         rendered = (directory / "models.json").read_bytes()
         assert directory.name == hashlib.sha256(rendered).hexdigest()
         provider = json.loads(rendered)["providers"]["oapx"]
@@ -122,12 +156,16 @@ def child(kind, wire, base, fixture, args):
         assert [model["id"] for model in provider["models"]] == [MODEL]
         key = os.environ[VARIABLE]
         assert key.encode() not in rendered
+        assert all(key not in arg for arg in args)
         os.write(2, b"native stderr: " + key.encode() + b"\n")
+        pi_turn(base, path, key, wire)
+        return
     elif kind == "copilot":
         assert os.environ["COPILOT_PROVIDER_BASE_URL"] == base
         key = os.environ["COPILOT_PROVIDER_API_KEY"]
     else:
-        config = Path(args[0]).read_text()
+        assert args[:2] == ["serve", "acp"]
+        config = Path(args[2]).read_text()
         assert f"base_url: {base}" in config
         assert "api_type: openai_chatcompletions" in config
         assert f"token_key: {VARIABLE}" in config
@@ -138,20 +176,51 @@ def child(kind, wire, base, fixture, args):
     os.execv("/bin/sh", ["/bin/sh", fixture])
 
 
+def verify_refusals(command, config, entry, env, kind, sentinel):
+    route = entry["model_endpoint"]
+    routes = [
+        ({"model_endpoint": {k: v for k, v in route.items() if k != "wire"}}, "wire"),
+        ({"model_endpoint": {**route, "wire": "invalid"}}, "wire"),
+        ({"model": ""}, "oapx/<model-id>"),
+        ({"model": "oapx/"}, "oapx/<model-id>"),
+        ({"model": "other/gateway-model"}, "oapx/<model-id>"),
+        ({"environment": [VARIABLE]}, VARIABLE),
+    ]
+    if kind == "opencode":
+        routes.extend([
+            ({"environment": ["OPENCODE_CONFIG"]}, "OPENCODE_CONFIG"),
+            ({"environment": ["OPENCODE_CONFIG_CONTENT"]}, "OPENCODE_CONFIG_CONTENT"),
+            ({"endpoint": "http://127.0.0.1:1"}, "names an endpoint and a model_endpoint"),
+        ])
+    else:
+        routes.extend([
+            ({"environment": ["PI_CODING_AGENT_DIR"]}, "PI_CODING_AGENT_DIR"),
+            ({"args": ["--model", "wrong"]}, "--model"),
+            ({"args": ["--provider=wrong"]}, "--provider"),
+        ])
+    for override, diagnostic in routes:
+        config.write_text(json.dumps({"adapters": {"routed": {**entry, **override}}}))
+        refused = subprocess.run(command, env=env, input=b"", capture_output=True, timeout=10)
+        assert sentinel.encode() not in refused.stdout + refused.stderr
+        assert refused.returncode != 0 and b'"routed"' in refused.stderr
+        assert diagnostic.encode() in refused.stderr, f"{kind} refusal lacks {diagnostic}"
+    print(f"{kind}: {len(routes)} named startup refusals with a nonzero exit")
+
+
 def verify(binary, goap, directory, kind, wire, base, sentinel):
     fixture = PARITY / kind
     config = directory / "hub.json"
     child_file = directory / "child.sh"
     launcher = directory / "launcher"
-    home = directory / "home"
-    home.mkdir()
-    if kind != "opencode":
+    home = directory.parent / "pi-home" if kind == "pi" else directory / "home"
+    home.mkdir(exist_ok=True)
+    if kind in ("copilot", "acp"):
         script = (fixture / "child.sh").read_text()
-        if kind == "pi":
-            script = script.replace('"delta":"hel"', '"delta":"\'"$' + VARIABLE + '"\'"', 1)
         if kind == "acp":
             lines = script.splitlines(keepends=True)
-            script = "".join(line for index, line in enumerate(lines) if index not in range(6, 10))
+            script = "".join(line for line in lines if not any(
+                token in line for token in ("tool_call", "session/request_permission")))
+            script = script.replace("take\ntake\n", "take\n")
         child_file.write_text(script)
     argv = [sys.executable, str(Path(__file__).resolve()), "--child", kind, wire, base, str(child_file)]
     launcher.write_text("#!/bin/sh\nexec " + shlex.join(argv) + ' "$@"\n')
@@ -171,14 +240,14 @@ def verify(binary, goap, directory, kind, wire, base, sentinel):
         yaml.write_text(f"providers:\n  fixture:\n    base_url: {base}\n    api_type: openai_chatcompletions\n"
                         f"    token_key: {VARIABLE}\nmodels:\n  gateway:\n    provider: fixture\n"
                         f"    model: {MODEL}\nagents:\n  root:\n    model: gateway\n")
-        entry["args"] = [str(yaml)]
+        entry["args"] = ["serve", "acp", str(yaml)]
         entry["environment"].extend([VARIABLE, "LIST_ME=from-adapter"])
         env[VARIABLE] = sentinel
     config.write_text(json.dumps({"adapters": {"routed": entry}}))
     command = [str(binary), "serve", "--stdio", "--no-save-oapx-sessions", "--config", str(config)]
     if kind == "copilot":
         command = [str(goap), "hub", "--stdio", "--config", str(config)]
-    frames = [json.loads(line) for line in (fixture / "scenario.jsonl").read_text().splitlines()]
+    frames = [json.loads(line) for line in (fixture / "scenario.jsonl").read_bytes().split(b"\n") if line]
     opening, submit = frames[3 if kind == "acp" else 2], next(
         f for f in frames if f["type"] == "session.message.submit.request")
     if kind == "acp":
@@ -193,9 +262,14 @@ def verify(binary, goap, directory, kind, wire, base, sentinel):
             observed += exchange(hub, [{"id": 2, "op": "events", "session_id": "s1"}],
                                  lambda line: line.get("id") == 2)
             observed += exchange(hub, [{"id": 3, "op": "submit", "session_id": "s1", "request": submit}],
-                                 lambda line: b"run.completed" in json.dumps(line).encode())
-            hub.stdin.close()
-            assert hub.wait(timeout=10) == 0, f"hub exit={hub.returncode}"
+                                 lambda line: (line.get("id") == 3 and not line.get("ok")) or
+                                 any(kind in json.dumps(line) for kind in ("run.completed", "run.failed")))
+            assert b"run.completed" in observed, f"{kind}: routed turn did not complete"
+            observed += exchange(hub, [{"id": 4, "op": "close", "session_id": "s1"}],
+                                 lambda line: line.get("id") == 4)
+            tail, _ = hub.communicate(timeout=10)
+            observed += tail
+            assert hub.returncode == 0, f"hub exit={hub.returncode}"
         except AssertionError:
             stderr.seek(0)
             if b"has no custom endpoint translation" in stderr.read():
@@ -213,6 +287,8 @@ def verify(binary, goap, directory, kind, wire, base, sentinel):
         if kind == "pi":
             assert f"native stderr: {VARIABLE}".encode() in logs
     print(f"{kind} {wire}: hub exit=0 and one completed routed turn")
+    if kind in ("opencode", "pi") and wire == "openai-completions":
+        verify_refusals(command, config, entry, env, kind, sentinel)
 
 
 def main():
@@ -230,14 +306,21 @@ def main():
         worker.start()
         expected = []
         try:
-            for kind in ("opencode", "pi", "copilot", "acp"):
-                for wire in WIRES if kind in ("opencode", "pi") else ("openai-completions",):
-                    path = f"/{kind}/" + WIRES[wire][1]
-                    expected.append((path, sentinel, None) if wire == "anthropic-messages" else
-                                    (path, None, "Bearer " + sentinel))
-                    with tempfile.TemporaryDirectory(prefix="oxap-route-") as directory:
-                        verify(args.binary.resolve(), args.goap.resolve(), Path(directory).resolve(), kind, wire,
+            with tempfile.TemporaryDirectory(prefix="oxap-route-") as directory:
+                root = Path(directory).resolve()
+                for kind in ("opencode", "pi", "copilot", "acp"):
+                    for wire in WIRES if kind in ("opencode", "pi") else ("openai-completions",):
+                        path = f"/{kind}/" + WIRES[wire][1]
+                        expected.append((path, sentinel, None) if wire == "anthropic-messages" else
+                                        (path, None, "Bearer " + sentinel))
+                        case = root / f"{kind}-{wire}"
+                        case.mkdir()
+                        verify(args.binary.resolve(), args.goap.resolve(), case, kind, wire,
                                f"http://127.0.0.1:{server.server_port}/{kind}/", sentinel)
+                pi_files = list((root / "pi-home/.oxap/pi").glob("*/models.json"))
+                assert len(pi_files) == len(WIRES), "Pi wires shared a generated file"
+                assert all(sentinel.encode() not in p.read_bytes() for p in pi_files)
+                print(f"Pi: {len(pi_files)} distinct generated files under one state directory")
         finally:
             server.shutdown()
             worker.join()
