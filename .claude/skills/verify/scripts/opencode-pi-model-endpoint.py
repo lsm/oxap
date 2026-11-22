@@ -197,12 +197,15 @@ def verify_refusals(command, config, entry, env, kind, sentinel):
             ({"environment": ["PI_CODING_AGENT_DIR"]}, "PI_CODING_AGENT_DIR"),
             ({"args": ["--model", "wrong"]}, "--model"),
             ({"args": ["--provider=wrong"]}, "--provider"),
+            ({"args": ["--api-key", "argv-marker"]}, "--api-key"),
+            ({"args": ["--api-key=argv-marker"]}, "--api-key"),
         ])
     for override, diagnostic in routes:
         config.write_text(json.dumps({"adapters": {"routed": {**entry, **override}}}))
         refused = subprocess.run(command, env=env, input=b"", capture_output=True, timeout=10)
         assert sentinel.encode() not in refused.stdout + refused.stderr
-        assert refused.returncode != 0 and b'"routed"' in refused.stderr
+        assert b"argv-marker" not in refused.stdout + refused.stderr
+        assert refused.returncode != 0 and b'"routed"' in refused.stderr, f"{kind} did not refuse {diagnostic}"
         assert diagnostic.encode() in refused.stderr, f"{kind} refusal lacks {diagnostic}"
     print(f"{kind}: {len(routes)} named startup refusals with a nonzero exit")
 
