@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model.as_str(),
             Some(answers),
         ),
-        [python, source, state, mode, model] if mode == "--run" => {
+        [python, source, state, mode, model] if matches!(mode.as_str(), "--run" | "--reopen") => {
             (python, source, state, mode.as_str(), model.as_str(), None)
         }
         [python, source, state, mode]
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut session = GatewaySession::create(
         &config,
-        model,
+        if mode == "--reopen" { "" } else { model },
         &ReasoningLevel::default(),
         Some(Instant::now() + Duration::from_secs(30)),
     )?;
@@ -145,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(event) => println!("prompt started at native sequence {}", event.seq),
             Err(error) => start_error = Some(error),
         }
-    } else if !mode.is_empty() {
+    } else if !mode.is_empty() && mode != "--reopen" {
         let deadline = Some(Instant::now() + Duration::from_secs(30));
         session.submit_prompt("Hello from the Rust Hermes adapter.", deadline)?;
         println!("prompt status: streaming");

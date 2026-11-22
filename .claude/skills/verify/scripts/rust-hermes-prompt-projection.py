@@ -53,6 +53,9 @@ def answered_frames(corpus):
         yield frame if frame["action"] == "expect-write" else {**frame, "raw": raw}
 
 
+REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
+
+
 def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
@@ -60,7 +63,7 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
-    if case != "malformed-frame":
+    if case != "malformed-frame" and case not in REOPEN_CASES:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
@@ -76,7 +79,12 @@ def gateway(corpus, case):
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
             if frame["action"] == "expect-write":
-                assert sys.stdin.readline() == raw + "\n"
+                line = sys.stdin.readline()
+                if line != raw + "\n":
+                    method = json.loads(line).get("method") if line else "EOF"
+                    mismatch = f"expected the recorded write, got {method}"
+                    Path("replay-mismatch").write_text(mismatch)
+                    raise AssertionError(mismatch)
             else:
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
@@ -84,6 +92,8 @@ def gateway(corpus, case):
         elif frame["action"] == "process-exit":
             return
     assert sys.stdin.read() == ""
+    if case in REOPEN_CASES:
+        Path("replay-complete").touch()
 
 
 def verify_unanswered_gates(envelopes, corpus):
@@ -147,6 +157,10 @@ GATE_CHECKS = {
 def verify(binary, corpus, mode, case):
     fixture = "interaction-gates" if case == "answered-gates" else case
     expected_path = corpus / fixture / "expected-oap.json"
+    if case in REOPEN_CASES:
+        native = frames(corpus / case / "native.jsonl")
+        request = next(json.loads(frame["raw"]) for frame in native if frame["action"] == "expect-write")
+        stored_id = request["params"]["session_id"]
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
         root = Path(directory)
         module = root / "tui_gateway"
@@ -166,18 +180,39 @@ def verify(binary, corpus, mode, case):
                 for event in expected if event["type"] == "user.input.resolved"
             ]))
             model = ["", str(answers_file)]
+        if case in REOPEN_CASES:
+            model = [stored_id]
         result = subprocess.run(
             [binary, sys.executable, directory, directory, mode, *model],
             env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
             timeout=45, capture_output=True, text=True,
         )
-    if case not in GATE_CHECKS and case != "answered-gates":
+        replay_complete = (root / "replay-complete").exists()
+        mismatch = root / "replay-mismatch"
+        if mismatch.exists():
+            print(mismatch.read_text(), file=sys.stderr)
+    if case not in GATE_CHECKS and case != "answered-gates" and case not in REOPEN_CASES:
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
     result.check_returncode()
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
+    if case in REOPEN_CASES:
+        expected = expected_path.read_text()
+        prefix = "state: " if case == "session-reopen" else "refusal: "
+        observations = [line.removeprefix(prefix) for line in lines if line.startswith(prefix)]
+        assert observations == [json.dumps(json.loads(expected), separators=(",", ":"))]
+        if case == "session-reopen":
+            reply = next(json.loads(frame["raw"]) for frame in native if frame["action"] == "reply")
+            assert f"runtime session ID: {reply['result']['session_id']}" in lines
+            assert f"stored session ID: {stored_id}" in lines
+            assert shutdowns == 1
+        else:
+            assert not any(line.startswith(("state: ", "runtime session ID: ")) for line in lines)
+        assert replay_complete
+        print(f"BYTE-MATCHED SESSION RESUMES: 1\nMATCHED OUTCOME: {prefix.strip(': ')}\nGATEWAY EOF: 1")
+        return
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
         if case in GATE_CHECKS:
