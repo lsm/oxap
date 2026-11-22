@@ -2,10 +2,37 @@ use std::collections::BTreeMap;
 
 use oxap_adapter::gojson::{go_quote, raw, strings, structures, zero};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::{decode_strict, go_lossy, Raw};
 
 pub const INVALID: &str = "hermes native: invalid pinned message";
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct PromptSubmitResult {
+    #[serde(deserialize_with = "zero")]
+    pub status: String,
+    #[serde(rename = "survivor_user_row_ids", deserialize_with = "zero")]
+    _survivor_user_row_ids: Vec<Option<i64>>,
+    #[serde(rename = "survivor_row_id_map", deserialize_with = "zero")]
+    _survivor_row_id_map: BTreeMap<String, Value>,
+    #[serde(rename = "voice_stopped", deserialize_with = "zero")]
+    _voice_stopped: bool,
+    #[serde(rename = "turn_isolation", deserialize_with = "zero")]
+    _turn_isolation: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct InterruptResult {
+    #[serde(deserialize_with = "zero")]
+    pub status: String,
+    #[serde(deserialize_with = "zero")]
+    pub interrupted: bool,
+    #[serde(deserialize_with = "zero")]
+    pub turn_isolation: bool,
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct ApprovalRequestParams {

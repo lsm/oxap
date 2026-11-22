@@ -1,12 +1,15 @@
 use std::time::Instant;
 
 use crossbeam_channel::{bounded, select_biased, Receiver, Sender};
-use oxap_adapter::gojson::zero;
+use oxap_adapter::gojson::{go_quote, zero};
 use oxap_adapter::{Error, UnsupportedControl, CONTROL_UNSATISFIABLE};
 use oxap_protocol::{ReasoningLevel, FEATURE_SESSION_REASONING};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::native::{decode_strict, METHOD_CONFIG_SET, METHOD_SESSION_CREATE};
+use crate::native::{
+    decode_strict, InterruptResult, PromptSubmitResult, METHOD_CONFIG_SET, METHOD_PROMPT_SUBMIT,
+    METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, SUBMIT_STREAMING,
+};
 use crate::process::{Process, ProcessConfig};
 use crate::rpc::{Inbound, RpcClient};
 
@@ -45,6 +48,17 @@ struct ConfigSetResult {
     _key: String,
     #[serde(rename = "value", deserialize_with = "zero")]
     _value: String,
+}
+
+#[derive(Serialize)]
+struct PromptSubmitParams<'a> {
+    session_id: &'a str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct SessionParams<'a> {
+    session_id: &'a str,
 }
 
 pub struct GatewaySession {
@@ -126,6 +140,36 @@ impl GatewaySession {
 
     pub fn inbound(&self) -> &Receiver<Inbound> {
         &self.inbound
+    }
+
+    pub fn submit_prompt(&self, text: &str, deadline: Option<Instant>) -> Result<(), Error> {
+        let result: PromptSubmitResult = call(
+            self.client(),
+            METHOD_PROMPT_SUBMIT,
+            &PromptSubmitParams {
+                session_id: self.runtime_id(),
+                text,
+            },
+            deadline,
+        )?;
+        if result.status != SUBMIT_STREAMING {
+            return Err(Error::harness(format!(
+                "hermes adapter: invalid native protocol observation: prompt.submit returned status {}",
+                go_quote(&result.status)
+            )));
+        }
+        Ok(())
+    }
+
+    pub fn interrupt(&self, deadline: Option<Instant>) -> Result<InterruptResult, Error> {
+        call(
+            self.client(),
+            METHOD_SESSION_INTERRUPT,
+            &SessionParams {
+                session_id: self.runtime_id(),
+            },
+            deadline,
+        )
     }
 
     pub fn close(&self) -> Result<(), Error> {
