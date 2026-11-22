@@ -64,6 +64,21 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
+    if case == "shared-open":
+        send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
+        assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {
+            "model": "configured", "reasoning_effort": "none",
+        }}
+        send({"jsonrpc": "2.0", "id": 1, "result": {
+            "session_id": "runtime", "stored_session_id": "stored",
+        }})
+        assert read() == {"jsonrpc": "2.0", "id": 2, "method": "config.set", "params": {
+            "session_id": "runtime", "key": "reasoning", "value": "none",
+        }}
+        send({"jsonrpc": "2.0", "id": 2, "result": {}})
+        assert sys.stdin.read() == ""
+        Path("replay-complete").touch()
+        return
     if case == "reopen-ready-timeout":
         assert sys.stdin.read() == ""
         return
@@ -226,7 +241,8 @@ def verify(binary, corpus, mode, case):
         assert observations == [json.dumps(json.loads(expected), separators=(",", ":"))]
         if case == "session-reopen":
             reply = next(json.loads(frame["raw"]) for frame in native if frame["action"] == "reply")
-            assert f"runtime session ID: {reply['result']['session_id']}" in lines
+            if mode != "--shared-reopen":
+                assert f"runtime session ID: {reply['result']['session_id']}" in lines
             assert f"stored session ID: {stored_id}" in lines
             assert shutdowns == 1
         else:
@@ -239,6 +255,16 @@ def verify(binary, corpus, mode, case):
             ), detail
         assert replay_complete
         print(f"BYTE-MATCHED SESSION RESUMES: 1\nMATCHED OUTCOME: {prefix.strip(': ')}\nGATEWAY EOF: 1")
+        return
+    if mode == "--shared-open":
+        states = [json.loads(line[7:]) for line in lines if line.startswith("state: ")]
+        assert states == [{
+            "session_id": "session", "status": "idle", "current_model_id": "configured",
+            "reasoning_level": "off",
+        }]
+        assert "stored session ID: stored" in lines
+        assert shutdowns == 1 and replay_complete
+        print("MATCHED SHARED CREATED STATE: 1\nGATEWAY EOF: 1")
         return
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
