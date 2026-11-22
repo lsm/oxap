@@ -28,12 +28,11 @@ class Case:
     arguments: dict | None = None
     stop: str = "end_turn"
     registries: tuple[str, ...] = ("zig", "go")
-    reasoning_gap: str = ""
     result: object = None
 
 
 CASES = {
-    "acp": Case(tool="Read file", registries=("zig", "go", "rust"), reasoning_gap="agent_thought_chunk"),
+    "acp": Case(tool="Read file", registries=("zig", "go", "rust")),
     "claude": Case(tool="Read", stop="completed", result=TOOL_RESULT["text"]),
     "codex": Case(tool="codex.command", arguments={"command": "printf fixture", "cwd": "/"},
                   result={"command": "printf fixture", "cwd": "/", "exitCode": 0,
@@ -286,7 +285,7 @@ def exchange(hub, root, kind, slow, evidence):
     return events
 
 
-def check(kind, case, events, strict):
+def check(kind, case, events):
     streamed = []
     deltas = []
     calls = []
@@ -332,9 +331,6 @@ def check(kind, case, events, strict):
         assert completed["result"] == (case.result if case.result is not None else TOOL_RESULT), completed
     else:
         assert not calls, calls
-    gap = case.reasoning_gap and not strict
-    if gap:
-        expected_stream = expected_stream[1:]
     assert streamed == expected_stream, (
         f"{kind} stream received {[(part, len(value)) for part, value in streamed]}; "
         f"expected {[(part, len(value)) for part, value in expected_stream]}"
@@ -342,7 +338,7 @@ def check(kind, case, events, strict):
     return len(events), len(calls)
 
 
-def verify(kind, case, binary, slow, output, runtime, strict):
+def verify(kind, case, binary, slow, output, runtime):
     if kind == "oapx" and sys.platform == "darwin":
         raise AssertionError("the built-in adapter's model catalog can import from the macOS Keychain; run this case on Linux")
     label = f"{runtime}-{kind}" + ("-slow" if slow else "")
@@ -369,9 +365,8 @@ def verify(kind, case, binary, slow, output, runtime, strict):
                     peer_stderr = root / "peer.stderr"
                     if peer_stderr.exists():
                         stderr.write(peer_stderr.read_bytes())
-        event_count, call_count = check(kind, case, events, strict)
-        gap = f", known missing reasoning={case.reasoning_gap}" if case.reasoning_gap else ""
-        print(f"{label}: hub exit=0, events={event_count}, tool events={call_count}, completed=1{gap}", flush=True)
+        event_count, call_count = check(kind, case, events)
+        print(f"{label}: hub exit=0, events={event_count}, tool events={call_count}, completed=1", flush=True)
 
 
 def main():
@@ -382,7 +377,6 @@ def main():
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--case", choices=CASES, action="append")
     parser.add_argument("--runtime", choices=("zig", "go", "rust"), action="append")
-    parser.add_argument("--strict-reasoning", action="store_true")
     args = parser.parse_args()
     check_registries()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -397,7 +391,7 @@ def main():
             for slow in (False, True) if kind == "deepseek" else (False,):
                 count += 1
                 try:
-                    verify(kind, case, binaries[runtime], slow, args.output_dir, runtime, args.strict_reasoning)
+                    verify(kind, case, binaries[runtime], slow, args.output_dir, runtime)
                 except (AssertionError, KeyError, OSError, subprocess.TimeoutExpired) as error:
                     failures += 1
                     print(f"{runtime}-{kind} (slow={slow}): {error}", file=sys.stderr, flush=True)
