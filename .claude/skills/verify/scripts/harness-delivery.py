@@ -39,7 +39,7 @@ CASES = {
                   result={"command": "printf fixture", "cwd": "/", "exitCode": 0,
                           "output": TOOL_RESULT["text"]}, registries=("zig", "go", "rust"),
                   reasoning_gap="item/reasoning/summaryTextDelta"),
-    "copilot": Case(registries=("go", "rust"), reasoning_gap="assistant.reasoning_delta"),
+    "copilot": Case(registries=("go", "rust")),
     "deepseek": Case(stop="completed", result=[{"type": "text", **TOOL_RESULT}],
                      registries=("zig", "go", "rust")),
     "hermes": Case(stop="completed"),
