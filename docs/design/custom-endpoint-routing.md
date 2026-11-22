@@ -184,15 +184,31 @@ Per kind, `oapx` appends after the entry's own `environment`:
   Hermes login, settings and extensions do not load for a routed entry, the
   same trade-off as Pi's hub-owned directory. The wire is Responses, the
   overlay's transport, once the URL re-classification refusal below has
-  run. The journey's hermes case runs a stub that speaks Responses and
-  asserts the requests it receives are Responses-shaped (the responses
-  path, not chat completions) and carry the resolved key, beside a decoy
-  home seeded with a conflicting `config.yaml` (`provider`,
-  `model.base_url`, `model.api_mode` pointing at a decoy stub), a decoy
-  `.env` carrying decoy `OPENAI_*` values, and a pooled `openai-api`
-  credential: every request must still arrive at the real stub and the
-  decoy must receive none. The redaction assertions are the existing
-  journey's.
+  run. One shadow source survives the fresh home: the pool seeds itself
+  from the *environment* — for every registry key variable it also reads
+  the numbered siblings `VAR_2`, `VAR_3`, … (`_seed_from_env`,
+  `_env_key_var_candidates`), and each seeded `openai-api` row carries the
+  environment's `OPENAI_BASE_URL`, so a numbered `OPENAI_API_KEY_2` sibling
+  in the child environment adds a second row the pool's rotating selection
+  can pick — another account's key presented to the routed endpoint. The
+  hub's environment allowlist keeps an unlisted ambient sibling out of the
+  child, so the one path in is the entry's own `environment` list, and
+  listing a numbered sibling is refused below. The sweep of the other
+  environment-seeded rungs comes back clean for this route: other
+  providers' pools seed from their own variables but their ladder rungs
+  never run for an explicit `openai-api` selection, the OpenRouter
+  fallback rung is unreachable because an explicitly selected provider
+  resolves or raises rather than falling through, and `.env` — which
+  `get_env_prefer_dotenv` prefers over the process environment — does not
+  exist in the hub-owned home. The journey's hermes case runs a stub that
+  speaks Responses and asserts the requests it receives are
+  Responses-shaped (the responses path, not chat completions) and carry
+  the resolved key, beside a decoy home seeded with a conflicting
+  `config.yaml` (`provider`, `model.base_url`, `model.api_mode` pointing
+  at a decoy stub), a decoy `.env` carrying decoy `OPENAI_*` values, and
+  a pooled `openai-api` credential: every request must still arrive at
+  the real stub and the decoy must receive none. The redaction assertions
+  are the existing journey's.
 
 For Copilot and ACP the surface above is not extended — their adapters are
 Go-only and the member stays `oapx`'s — but both are covered by forwarding by
@@ -260,6 +276,14 @@ Each names the entry, at startup:
   re-classifying URL would silently speak a wire the entry does not declare;
   refused rather than re-declared. The journey's refusal case asserts the
   message names the entry.
+- A `hermes` entry whose `environment` lists a numbered sibling
+  `OPENAI_API_KEY_<n>` (`_2` on: Hermes's pool seeder reads those even in a
+  fresh home, and each seeded row carries the routed base URL while
+  selection rotates, so a sibling would send another account's key to the
+  routed endpoint — pinned v0.23.3 `agent/credential_pool.py`
+  `_env_key_var_candidates`, `_seed_from_env`). `credential_env` naming a
+  numbered sibling stays allowed: the value then arrives only under
+  `OPENAI_API_KEY`. The journey's refusal case covers this list entry too.
 
 Scope: `zig/src/adapter/config.zig` (admit the member and its object's fields
 on the six kinds), `zig/src/tools/makai.zig` (the per-kind translation and
