@@ -421,6 +421,15 @@ fn started_prompt_projects_deltas_and_settlement() {
 
 #[test]
 fn run_replays_streaming_provenance_byte_for_byte() {
+    replay_run("streaming-provenance", &["thinking.delta", "message.interim"]);
+}
+
+#[test]
+fn run_replays_tool_lifecycle_byte_for_byte() {
+    replay_run("tool-lifecycle", &[]);
+}
+
+fn replay_run(case: &str, expected_observations: &[&str]) {
     use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
 
     use oxap_adapter::{gojson::go_marshal, runtime::Runtime};
@@ -436,9 +445,9 @@ fn run_replays_streaming_provenance_byte_for_byte() {
 
     let corpus = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../fixtures/adapters/hermes-v0.23.3/streaming-provenance/"
+        "/../../../fixtures/adapters/hermes-v0.23.3/"
     );
-    let native = std::fs::read_to_string(format!("{corpus}native.jsonl")).unwrap();
+    let native = std::fs::read_to_string(format!("{corpus}{case}/native.jsonl")).unwrap();
     let mut script = String::new();
     for frame in native.lines() {
         let frame: Frame = serde_json::from_str(frame).unwrap();
@@ -491,8 +500,8 @@ fn run_replays_streaming_provenance_byte_for_byte() {
         run.interrupt(deadline),
         Err(Error::RunAlreadyTerminal { .. })
     ));
-    let expected = std::fs::read_to_string(format!("{corpus}expected-oap.json")).unwrap();
+    let expected = std::fs::read_to_string(format!("{corpus}{case}/expected-oap.json")).unwrap();
     assert_eq!(format!("[{}]", trace.join(",")), go_marshal(&expected));
-    assert_eq!(observed, ["thinking.delta", "message.interim"]);
+    assert_eq!(observed, expected_observations);
     session.close().unwrap();
 }

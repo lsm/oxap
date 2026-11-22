@@ -10,7 +10,7 @@ def frames(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def gateway(corpus):
+def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
 
@@ -22,7 +22,7 @@ def gateway(corpus):
     send({"jsonrpc": "2.0", "id": 1, "result": {
         "session_id": "sess0001", "stored_session_id": "stored",
     }})
-    for frame in frames(corpus / "streaming-provenance/native.jsonl"):
+    for frame in frames(corpus / case / "native.jsonl"):
         if frame["direction"] == "host-to-gateway":
             assert read() == frame["raw"]
         elif frame["direction"] == "gateway-to-host":
@@ -30,7 +30,7 @@ def gateway(corpus):
     assert sys.stdin.read() == ""
 
 
-def verify(binary, corpus, mode):
+def verify(binary, corpus, mode, case):
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
         root = Path(directory)
         module = root / "tui_gateway"
@@ -39,7 +39,7 @@ def verify(binary, corpus, mode):
         (module / "entry.py").write_text(
             f"import runpy\n"
             f"from pathlib import Path\n"
-            f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}))\n"
+            f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
         result = subprocess.run(
             [binary, sys.executable, directory, directory, mode],
@@ -51,7 +51,7 @@ def verify(binary, corpus, mode):
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
     result.check_returncode()
     lines = result.stdout.splitlines()
-    expected_path = corpus / "streaming-provenance/expected-oap.json"
+    expected_path = corpus / case / "expected-oap.json"
     shutdowns = lines.count("gateway exited cleanly")
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
@@ -75,5 +75,6 @@ def verify(binary, corpus, mode):
 
 
 if __name__ == "__main__":
-    mode = sys.argv[2] if len(sys.argv) == 3 else "--project"
-    verify(str(Path(sys.argv[1]).resolve()), Path("fixtures/adapters/hermes-v0.23.3").resolve(), mode)
+    mode = sys.argv[2] if len(sys.argv) > 2 else "--project"
+    case = sys.argv[3] if len(sys.argv) > 3 else "streaming-provenance"
+    verify(str(Path(sys.argv[1]).resolve()), Path("fixtures/adapters/hermes-v0.23.3").resolve(), mode, case)
