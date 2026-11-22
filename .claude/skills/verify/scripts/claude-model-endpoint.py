@@ -207,7 +207,14 @@ def verify(binary, root, endpoint, key, auth):
         assert key.encode() not in result.stderr + result.stdout, "sentinel escaped in a startup refusal"
         assert result.returncode != 0 and b'"routed"' in result.stderr, "expected a named startup refusal"
         assert diagnostic.encode() in result.stderr, f"refusal lacks {diagnostic}"
-    print(f"{auth}: {len(refused)} named startup refusals with nonzero exit")
+    registry.write_text(json.dumps({"adapters": {"routed": entry}}))
+    short_key = key[:-1]
+    result = subprocess.run(command, env={**environment, VARIABLE: short_key},
+                            input=b"", capture_output=True, timeout=10)
+    assert short_key.encode() not in result.stderr + result.stdout, "short sentinel escaped"
+    assert result.returncode != 0 and b'"routed"' in result.stderr, "expected a named short-key refusal"
+    assert VARIABLE.encode() in result.stderr and b"at least 16 bytes" in result.stderr, "expected a length diagnostic"
+    print(f"{auth}: {len(refused) + 1} named startup refusals with nonzero exit")
 
 
 def main():
@@ -220,7 +227,7 @@ def main():
         return
     if extra or args.binary is None:
         parser.error("--binary is required")
-    key = uuid.uuid4().hex
+    key = uuid.uuid4().hex[:16]
     with http.server.HTTPServer(("127.0.0.1", 0), Endpoint) as server:
         server.observed = []
         worker = threading.Thread(target=server.serve_forever)
