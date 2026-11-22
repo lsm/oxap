@@ -125,3 +125,15 @@ Expect three matched envelopes and one clean shutdown per case. The last
 envelope is an inferred `run.failed` with `hermes_process_exit` and the
 transport diagnostic. The process-exit fixture supplies a synthetic error
 message. The replay expects `EOF`, the diagnostic from the real stdio closure.
+
+Replay the four reverse requests from the interaction corpus in one run:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run unanswered-gates
+```
+
+Expect four input requests with the corpus prompts and options, each followed
+by its waiting status. The synthetic gateway settles without answers. The
+consumer checks four linked cancellations before completion, 14 sequenced
+envelopes and one clean shutdown.
