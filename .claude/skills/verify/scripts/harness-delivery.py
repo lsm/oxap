@@ -296,9 +296,8 @@ def check(kind, case, events, strict):
             deltas.append(event["sequence"])
             part = payload["part"]
             part_kind = part["type"]
-            text = part.get("text", part.get("reasoning", part.get("thinking")))
+            text = part[part_kind]
             assert text, part
-            part_kind = "reasoning" if part_kind == "thinking" else part_kind
             if streamed and streamed[-1][0] == part_kind:
                 streamed[-1] = (part_kind, streamed[-1][1] + text)
             else:
