@@ -7,10 +7,11 @@ python3 .claude/skills/verify/scripts/copilot-harness-corpus.py --output-dir /tm
 ```
 
 Zig's production native decoder and reducer replay every manifest case against
-fixed expected OAP: text, queued runs sharing one busy period, accumulated usage,
-tool success/denial, session errors, foreign sessions and unknown events. Reasoning
-is explicitly observed without a published projection. Malformed JSON-RPC and
-malformed event bodies must be rejected by the native codec, with no OAP events.
+fixed expected OAP: text and reasoning deltas, queued runs sharing one busy period,
+accumulated usage, tool success/denial, session errors, foreign sessions and unknown
+events. The full reasoning message is observed without producing a duplicate.
+The native codec must reject malformed JSON-RPC and malformed event bodies
+without emitting OAP events.
 The script wraps each event sequence with its checked-in admission exchange and
 runs the public Go and oapx validators. Require exit 0 and `PASS`; inspect
 `zig-replay.txt`, the full trace and both validator outputs. The replay also
