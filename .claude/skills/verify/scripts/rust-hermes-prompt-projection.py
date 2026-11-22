@@ -42,6 +42,17 @@ def gate_frames(corpus, case):
     return opening
 
 
+def answered_frames(corpus):
+    for frame in frames(corpus / "interaction-gates/native.jsonl"):
+        if frame["direction"] == "harness-control":
+            continue
+        raw = json.loads(frame["raw"])
+        params = raw.get("params", {})
+        if params.get("session_id"):
+            params["session_id"] = "sess0001"
+        yield {**frame, "raw": raw}
+
+
 def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
@@ -55,7 +66,12 @@ def gateway(corpus, case):
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
-    replay = gate_frames(corpus, case) if case in GATE_CHECKS else frames(corpus / case / "native.jsonl")
+    if case == "answered-gates":
+        replay = answered_frames(corpus)
+    elif case in GATE_CHECKS:
+        replay = gate_frames(corpus, case)
+    else:
+        replay = frames(corpus / case / "native.jsonl")
     for frame in replay:
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
@@ -142,13 +158,14 @@ def verify(binary, corpus, mode, case):
             env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
             timeout=45, capture_output=True, text=True,
         )
-    if case not in GATE_CHECKS:
+    if case not in GATE_CHECKS and case != "answered-gates":
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
     result.check_returncode()
     lines = result.stdout.splitlines()
-    expected_path = corpus / case / "expected-oap.json"
+    fixture = "interaction-gates" if case == "answered-gates" else case
+    expected_path = corpus / fixture / "expected-oap.json"
     shutdowns = lines.count("gateway exited cleanly")
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
