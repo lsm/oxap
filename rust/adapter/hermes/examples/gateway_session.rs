@@ -24,7 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model.as_str(),
             Some(answers),
         ),
-        [python, source, state, mode, model] if matches!(mode.as_str(), "--run" | "--reopen") => {
+        [python, source, state, mode, model]
+            if matches!(mode.as_str(), "--run" | "--reopen" | "--reopen-deadline") =>
+        {
             (python, source, state, mode.as_str(), model.as_str(), None)
         }
         [python, source, state, mode]
@@ -66,8 +68,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]),
         ..ProcessConfig::default()
     };
-    let deadline = Some(Instant::now() + Duration::from_secs(30));
-    if mode == "--reopen" {
+    let timeout = if mode == "--reopen-deadline" {
+        Duration::from_secs(1)
+    } else {
+        Duration::from_secs(30)
+    };
+    let deadline = Some(Instant::now() + timeout);
+    if matches!(mode, "--reopen" | "--reopen-deadline") {
         match GatewaySession::reopen(&config, model, "session".into(), "", deadline) {
             Ok((session, state)) => {
                 println!("runtime session ID: {}", session.runtime_id());

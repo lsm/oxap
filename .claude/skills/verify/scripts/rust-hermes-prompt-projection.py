@@ -54,6 +54,7 @@ def answered_frames(corpus):
 
 
 REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
+REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 
 
 def gateway(corpus, case):
@@ -63,6 +64,16 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
+    if case == "reopen-ready-timeout":
+        assert sys.stdin.read() == ""
+        return
+    if case == "reopen-resume-timeout":
+        ready, request, _ = frames(corpus / "session-reopen/native.jsonl")
+        send(ready["raw"])
+        assert sys.stdin.readline() == request["raw"] + "\n"
+        Path("resume-received").touch()
+        assert sys.stdin.read() == ""
+        return
     if case != "malformed-frame" and case not in REOPEN_CASES:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {}}
@@ -156,9 +167,11 @@ GATE_CHECKS = {
 
 def verify(binary, corpus, mode, case):
     fixture = "interaction-gates" if case == "answered-gates" else case
+    if case in REOPEN_TIMEOUT_CASES:
+        fixture = "session-reopen"
     expected_path = corpus / fixture / "expected-oap.json"
-    if case in REOPEN_CASES:
-        native = frames(corpus / case / "native.jsonl")
+    if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES:
+        native = frames(corpus / fixture / "native.jsonl")
         request = next(json.loads(frame["raw"]) for frame in native if frame["action"] == "expect-write")
         stored_id = request["params"]["session_id"]
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
@@ -180,7 +193,7 @@ def verify(binary, corpus, mode, case):
                 for event in expected if event["type"] == "user.input.resolved"
             ]))
             model = ["", str(answers_file)]
-        if case in REOPEN_CASES:
+        if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES:
             model = [stored_id]
         result = subprocess.run(
             [binary, sys.executable, directory, directory, mode, *model],
@@ -188,6 +201,7 @@ def verify(binary, corpus, mode, case):
             timeout=45, capture_output=True, text=True,
         )
         replay_complete = (root / "replay-complete").exists()
+        resume_received = (root / "resume-received").exists()
         mismatch = root / "replay-mismatch"
         if mismatch.exists():
             print(mismatch.read_text(), file=sys.stderr)
@@ -195,6 +209,13 @@ def verify(binary, corpus, mode, case):
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
+    if case in REOPEN_TIMEOUT_CASES:
+        assert result.returncode == 1
+        assert result.stderr.strip() == "Error: DeadlineExceeded"
+        assert not result.stdout
+        assert resume_received == (case == "reopen-resume-timeout")
+        print(f"MATCHED DEADLINE EXPIRY: {case}")
+        return
     result.check_returncode()
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
