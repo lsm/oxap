@@ -474,6 +474,63 @@ fn run_settles_open_tools_before_run_settlement() {
 }
 
 #[test]
+fn run_settles_open_tools_on_disconnect_after_read_deadline() {
+    use oxap_adapter::runtime::Runtime;
+    use oxap_adapter_hermes::RunObservation;
+    use oxap_protocol::{EnvelopeType, RunFailedPayload};
+
+    let config = gateway(
+        EMPTY_CREATE,
+        &format!("printf '%s\\n' '{INFO}' '{CREATED}'"),
+        &format!(
+            "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\"}}}}' '{STARTED}'\n\
+             printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{{\"type\":\"tool.start\",\"session_id\":\"running\",\"seq\":3,\"payload\":{{\"tool_id\":\"tool-1\",\"name\":\"search\"}}}}}}'\n\
+             exit 0"
+        ),
+    );
+    let mut session = open(&config, "", "").unwrap();
+    let deadline = Some(Instant::now() + Duration::from_secs(5));
+    let mut run = session
+        .start_run(
+            "hello\n<world>",
+            "session".into(),
+            "example",
+            Runtime::default(),
+            deadline,
+        )
+        .unwrap();
+    let Some(RunObservation::Event(started)) = run.next_observation(deadline).unwrap() else {
+        panic!("expected a run start");
+    };
+    assert_eq!(started.envelope_type, EnvelopeType::RUN_STARTED);
+    let error = run.next_observation(Some(Instant::now())).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "hermes adapter: observation deadline exceeded"
+    );
+    let mut envelopes = Vec::new();
+    while let Some(observation) = run.next_observation(deadline).unwrap() {
+        if let RunObservation::Event(event) = observation {
+            envelopes.push(event);
+        }
+    }
+    let [requested, started, failed, terminal] = envelopes.as_slice() else {
+        panic!("expected four envelopes after the read deadline, got {envelopes:?}");
+    };
+    assert_eq!(requested.envelope_type, EnvelopeType::ACTION_CALL_REQUESTED);
+    assert_eq!(started.envelope_type, EnvelopeType::ACTION_CALL_STARTED);
+    assert_eq!(failed.envelope_type, EnvelopeType::ACTION_CALL_FAILED);
+    assert_eq!(failed.in_reply_to.as_ref(), Some(&started.id));
+    assert_eq!(terminal.envelope_type, EnvelopeType::RUN_FAILED);
+    let payload: RunFailedPayload = terminal.decode_payload().unwrap();
+    assert_eq!(payload.error.code, "hermes_process_exit");
+    assert_eq!(payload.error.message, "EOF");
+    assert_eq!(payload.settled_by, "inferred");
+    session.close().unwrap();
+}
+
+#[test]
 fn run_refuses_duplicate_starts_and_unmatched_completions() {
     use oxap_protocol::{EnvelopeType, RunFailedPayload};
 
