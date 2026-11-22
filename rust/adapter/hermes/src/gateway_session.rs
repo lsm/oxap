@@ -1,17 +1,17 @@
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
-use crossbeam_channel::{bounded, select_biased, Receiver, Sender};
+use crossbeam_channel::{bounded, select_biased, Receiver, RecvTimeoutError, Sender};
 use oxap_adapter::gojson::{go_quote, zero};
 use oxap_adapter::{Error, UnsupportedControl, CONTROL_UNSATISFIABLE};
 use oxap_protocol::{ReasoningLevel, FEATURE_SESSION_REASONING};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::native::{
-    decode_strict, InterruptResult, PromptSubmitResult, METHOD_CONFIG_SET, METHOD_PROMPT_SUBMIT,
-    METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, SUBMIT_STREAMING,
+    decode_strict, Event, InterruptResult, PromptSubmitResult, METHOD_CONFIG_SET,
+    METHOD_PROMPT_SUBMIT, METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, SUBMIT_STREAMING,
 };
 use crate::process::{Process, ProcessConfig};
-use crate::rpc::{Inbound, RpcClient};
+use crate::rpc::{decode_event, Inbound, IncomingRequest, RpcClient};
 
 const RELAY_CAPACITY: usize = 256;
 
@@ -61,11 +61,19 @@ struct SessionParams<'a> {
     session_id: &'a str,
 }
 
+#[derive(Debug)]
+pub enum Observation {
+    Event(Event),
+    Request(Arc<IncomingRequest>),
+}
+
 pub struct GatewaySession {
     _stop_relay: Sender<()>,
     process: Process,
     inbound: Receiver<Inbound>,
     created: SessionCreateResult,
+    last_seq: i64,
+    observation_error: Option<Error>,
 }
 
 impl GatewaySession {
@@ -123,6 +131,8 @@ impl GatewaySession {
             process,
             inbound,
             created,
+            last_seq: 0,
+            observation_error: None,
         })
     }
 
@@ -140,6 +150,61 @@ impl GatewaySession {
 
     pub fn inbound(&self) -> &Receiver<Inbound> {
         &self.inbound
+    }
+
+    pub fn next_observation(&mut self, deadline: Option<Instant>) -> Result<Observation, Error> {
+        if let Some(error) = &self.observation_error {
+            return Err(error.clone());
+        }
+        loop {
+            let inbound = match deadline {
+                Some(deadline) if Instant::now() >= deadline => Err(RecvTimeoutError::Timeout),
+                Some(deadline) => self.inbound.recv_deadline(deadline),
+                None => self
+                    .inbound
+                    .recv()
+                    .map_err(|_| RecvTimeoutError::Disconnected),
+            };
+            match inbound {
+                Ok(Inbound::Notification(notification)) => {
+                    let event = decode_event(&notification.method, notification.params.as_deref())
+                        .map_err(Error::harness)?;
+                    if event.session_id.is_empty() {
+                        continue;
+                    }
+                    self.accept_event(&event)?;
+                    return Ok(Observation::Event(event));
+                }
+                Ok(Inbound::Request(request)) => return Ok(Observation::Request(request)),
+                Ok(Inbound::Barrier(ack)) => drop(ack),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(Error::harness(
+                        "hermes adapter: observation deadline exceeded",
+                    ));
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Error::harness(self.client().err().unwrap_or_else(|| {
+                        "hermes adapter: observation stream closed".into()
+                    })));
+                }
+            }
+        }
+    }
+
+    fn accept_event(&mut self, event: &Event) -> Result<(), Error> {
+        let reason = if event.session_id != self.runtime_id() {
+            format!("event for foreign session {}", go_quote(&event.session_id))
+        } else if event.seq - 1 != self.last_seq {
+            format!("non-contiguous seq {} after {}", event.seq, self.last_seq)
+        } else {
+            self.last_seq = event.seq;
+            return Ok(());
+        };
+        let error = Error::harness(format!(
+            "hermes adapter: invalid native protocol observation: {reason}"
+        ));
+        self.observation_error = Some(error.clone());
+        Err(error)
     }
 
     pub fn submit_prompt(&self, text: &str, deadline: Option<Instant>) -> Result<(), Error> {

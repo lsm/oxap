@@ -196,7 +196,8 @@ fn ordered_observations_keep_early_session_events_and_interleaved_requests() {
     use oxap_adapter_hermes::Observation;
 
     let global = r#"{"jsonrpc":"2.0","method":"event","params":{"type":"notice"}}"#;
-    let request = r#"{"jsonrpc":"2.0","id":"check","method":"approval","params":{"session_id":"running"}}"#;
+    let request =
+        r#"{"jsonrpc":"2.0","id":"check","method":"approval","params":{"session_id":"running"}}"#;
     let config = gateway(
         EMPTY_CREATE,
         &format!("printf '%s\\n' '{INFO}' '{global}' '{CREATED}'"),
@@ -208,6 +209,13 @@ fn ordered_observations_keep_early_session_events_and_interleaved_requests() {
     let mut session = open(&config, "", "").unwrap();
     let deadline = Some(Instant::now() + Duration::from_secs(5));
     session.submit_prompt("hello\n<world>", deadline).unwrap();
+    assert_eq!(
+        session
+            .next_observation(Some(Instant::now()))
+            .unwrap_err()
+            .to_string(),
+        "hermes adapter: observation deadline exceeded"
+    );
     let Observation::Event(info) = session.next_observation(deadline).unwrap() else {
         panic!("expected session.info");
     };

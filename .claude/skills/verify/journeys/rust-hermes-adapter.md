@@ -42,21 +42,25 @@ strict response ids: one test must fail for each.
 control. It checks create, reasoning, submit and interrupt writes byte for byte.
 It also checks observations arriving before their replies and refusals for
 missing identities, reasoning, malformed replies and non-streaming admissions.
-Run it on the test host or in CI.
+The ordered reader checks early session events, interleaved requests, deadlines,
+foreign session IDs, and gaps and duplicates in native sequence numbers. Run
+the suite on the test host or in CI.
 
 For the native session smoke, use the selected catalog release's source and a
 Python interpreter with its dependencies already installed. The example runs
 the adapter against the actual stdio gateway with an isolated home and no
-provider keys. With `--prompt`, it prints two identities, then
-`prompt status: streaming`, `interrupt status: interrupted` and a clean exit.
-The smoke observes native RPC responses without requiring a model response.
+provider keys. With `--observe`, it prints two identities, then
+`prompt status: streaming`, contiguous native session observations starting
+at 1 and ending at `message.complete`, and a clean exit. Without a configured
+provider, the gateway can emit `error` and settle before opening a turn.
+Run with `--prompt` to check streaming admission and interruption.
 
 ```sh
 cargo build --locked --manifest-path rust/Cargo.toml -p oxap-adapter-hermes --example gateway_session
 (
   state=$(mktemp -d)
   trap 'rm -rf -- "$state"' EXIT
-  rust/target/debug/examples/gateway_session "$OAP_HERMES_BIN" "$OAP_HERMES_ROOT" "$state" --prompt
+  rust/target/debug/examples/gateway_session "$OAP_HERMES_BIN" "$OAP_HERMES_ROOT" "$state" --observe
   status=$?
   printf 'EXIT: %s\n' "$status"
   exit "$status"

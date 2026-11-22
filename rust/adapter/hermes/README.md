@@ -10,6 +10,10 @@ level is passed to creation and checked by a session-scoped `config.set`.
 The session relays observations in order, including those sent during startup.
 On that same session, `submit_prompt` accepts the gateway's streaming
 admission, and `interrupt` returns its native interruption response.
+`next_observation` reads typed session events and interleaved gateway requests.
+It skips session-less events and stops the stream on a foreign session ID or a
+non-contiguous sequence. Use either `next_observation` or the raw `inbound`
+receiver from session creation onward, since both read the same queue.
 
 The wire layer holds the gateway's event envelope, the payloads of its run events,
 and its server requests (approval, clarify, sudo, secret) with Go's
