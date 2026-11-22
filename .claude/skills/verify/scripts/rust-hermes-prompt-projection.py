@@ -10,24 +10,32 @@ def frames(path):
     return [json.loads(line) for line in path.read_text().splitlines()]
 
 
-def gate_frames(corpus):
+def gate_frames(corpus, case):
     opening = []
     for frame in frames(corpus / "streaming-provenance/native.jsonl"):
         opening.append(frame)
         if frame["action"] == "wait-submit":
             break
-    for frame in frames(corpus / "interaction-gates/native.jsonl"):
+    withdraw = case == "withdrawn-gate"
+    fixture = "interaction-expire" if withdraw else "interaction-gates"
+    next_seq = 2
+    for frame in frames(corpus / fixture / "native.jsonl"):
         if frame["direction"] != "gateway-to-host":
             continue
         raw = frame["raw"]
         if isinstance(raw, str):
             raw = json.loads(raw)
-        if raw.get("method") in {"approval", "clarify", "sudo", "secret"}:
-            raw["params"]["session_id"] = "sess0001"
-            opening.append({**frame, "raw": raw})
+        params = raw.get("params", {})
+        if withdraw and params.get("type") == "request.cancel":
+            params["seq"] = next_seq
+            next_seq += 1
+        elif raw.get("method") not in {"approval", "clarify", "sudo", "secret"}:
+            continue
+        params["session_id"] = "sess0001"
+        opening.append({**frame, "raw": raw})
     opening.append({"direction": "gateway-to-host", "raw": {
         "jsonrpc": "2.0", "method": "event", "params": {
-            "type": "message.complete", "session_id": "sess0001", "seq": 2,
+            "type": "message.complete", "session_id": "sess0001", "seq": next_seq,
             "payload": {"status": "complete", "text": "done"},
         },
     }})
@@ -47,7 +55,7 @@ def gateway(corpus, case):
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
-    replay = gate_frames(corpus) if case == "unanswered-gates" else frames(corpus / case / "native.jsonl")
+    replay = gate_frames(corpus, case) if case in GATE_CHECKS else frames(corpus / case / "native.jsonl")
     for frame in replay:
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
@@ -90,6 +98,33 @@ def verify_unanswered_gates(envelopes, corpus):
     print(f"GATES: {len(turns)}\nCANCELLED GATES: {len(turns)}\nSEQUENCED ENVELOPES: {len(events)}")
 
 
+def verify_withdrawn_gate(envelopes, _corpus):
+    events = [json.loads(envelope) for envelope in envelopes]
+    types = [event["type"] for event in events]
+    print(f"EVENT TYPES: {', '.join(types)}")
+    assert types == [
+        "run.started", "user.input.requested", "run.status.updated",
+        "user.input.resolved", "run.status.updated", "run.completed",
+    ]
+    assert [event["sequence"] for event in events] == list(range(1, 7))
+    _, request, waiting, resolved, running, _ = events
+    turn = request["turn_id"]
+    assert waiting["payload"]["status"] == "waiting_for_input"
+    assert waiting["payload"]["pending_user_input_id"] == turn
+    assert resolved["turn_id"] == resolved["payload"]["interaction_id"] == turn
+    assert resolved["in_reply_to"] == request["id"]
+    assert resolved["payload"]["status"] == "cancelled"
+    assert running["payload"]["status"] == "running"
+    assert "pending_user_input_id" not in running["payload"]
+    print("WITHDRAWN GATES: 1\nSEQUENCED ENVELOPES: 6")
+
+
+GATE_CHECKS = {
+    "unanswered-gates": verify_unanswered_gates,
+    "withdrawn-gate": verify_withdrawn_gate,
+}
+
+
 def verify(binary, corpus, mode, case):
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
         root = Path(directory)
@@ -107,7 +142,7 @@ def verify(binary, corpus, mode, case):
             env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
             timeout=45, capture_output=True, text=True,
         )
-    if case != "unanswered-gates":
+    if case not in GATE_CHECKS:
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
@@ -117,8 +152,8 @@ def verify(binary, corpus, mode, case):
     shutdowns = lines.count("gateway exited cleanly")
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
-        if case == "unanswered-gates":
-            verify_unanswered_gates(envelopes, corpus)
+        if case in GATE_CHECKS:
+            GATE_CHECKS[case](envelopes, corpus)
             assert shutdowns == 1
             print(f"CLEAN SHUTDOWNS: {shutdowns}")
             return

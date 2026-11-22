@@ -137,3 +137,13 @@ Expect four input requests with the corpus prompts and options, each followed
 by its waiting status. The synthetic gateway settles without answers. The
 consumer checks four linked cancellations before completion, 14 sequenced
 envelopes and one clean shutdown.
+
+Replay the clarify request and its withdrawal from `interaction-expire`:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run withdrawn-gate
+```
+
+Expect one linked cancellation and a return to running before completion,
+with six sequenced envelopes and one clean shutdown.
