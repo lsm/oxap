@@ -93,6 +93,18 @@ jobs:
           cache: true
       - name: Build the oapx binary
         run: zig build --build-file zig/build.zig install --prefix /tmp/oapx-go-sdk
+      - name: Verify turn delivery for every registered harness
+        run: |
+          go build -o "$RUNNER_TEMP/goap" ./go/cmd/goap
+          python3 -B .claude/skills/verify/scripts/harness-delivery.py \
+            --oxap /tmp/oapx-go-sdk/bin/oxap --goap "$RUNNER_TEMP/goap" \
+            --output-dir "$RUNNER_TEMP/harness-delivery"
+      - name: Upload harness delivery wire traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-delivery
+          path: ${{ runner.temp }}/harness-delivery/
       - name: Run the SDK tests
         env:
           OAP_SDK_BINARY_PATH: /tmp/oapx-go-sdk/bin/oxap
