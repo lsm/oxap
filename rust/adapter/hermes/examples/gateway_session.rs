@@ -1,10 +1,12 @@
 #[cfg(unix)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use std::sync::atomic::{AtomicI64, AtomicU8, Ordering};
     use std::time::{Duration, Instant};
 
+    use oxap_adapter::{gojson::go_marshal, runtime::Runtime};
     use oxap_adapter_hermes::{
         native::EVENT_MESSAGE_COMPLETE, process::ProcessConfig, GatewaySession, Observation,
-        PromptObservation,
+        PromptObservation, RunObservation,
     };
     use oxap_protocol::ReasoningLevel;
 
@@ -14,14 +16,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [python, source, state, mode]
             if matches!(
                 mode.as_str(),
-                "--prompt" | "--observe" | "--start" | "--project"
+                "--prompt" | "--observe" | "--start" | "--project" | "--run"
             ) =>
         {
             (python, source, state, mode.as_str())
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run]"
                     .into(),
             );
         }
@@ -53,7 +55,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("runtime session ID: {}", session.runtime_id());
     println!("stored session ID: {}", session.stored_id());
     let mut start_error = None;
-    if mode == "--project" {
+    if mode == "--run" {
+        let now = AtomicI64::new(2);
+        let next = AtomicU8::new(b'a');
+        let runtime = Runtime::new(
+            move || now.fetch_add(1, Ordering::Relaxed),
+            move |kind| {
+                format!(
+                    "{kind}-{}",
+                    char::from(next.fetch_add(1, Ordering::Relaxed))
+                )
+            },
+        );
+        let deadline = Some(Instant::now() + Duration::from_secs(30));
+        let mut run =
+            session.start_run("hello", "session".into(), "hermes-test", runtime, deadline)?;
+        while let Some(observation) = run.next_observation(deadline)? {
+            match observation {
+                RunObservation::Event(event) => {
+                    println!("envelope: {}", go_marshal(&serde_json::to_string(&event)?));
+                }
+                RunObservation::Other(Observation::Event(_)) => {}
+                RunObservation::Other(Observation::Request(request)) => {
+                    return Err(format!("unexpected gateway request: {}", request.method).into());
+                }
+            }
+        }
+    } else if mode == "--project" {
         let deadline = Some(Instant::now() + Duration::from_secs(30));
         let start = session.start_prompt("hello", deadline)?;
         println!("prompt started at native sequence {}", start.seq);

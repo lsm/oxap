@@ -487,6 +487,10 @@ fn run_replays_streaming_provenance_byte_for_byte() {
         }
     }
     assert!(run.next_observation(deadline).unwrap().is_none());
+    assert!(matches!(
+        run.interrupt(deadline),
+        Err(Error::RunAlreadyTerminal { .. })
+    ));
     let expected = std::fs::read_to_string(format!("{corpus}expected-oap.json")).unwrap();
     assert_eq!(format!("[{}]", trace.join(",")), go_marshal(&expected));
     assert_eq!(observed, ["thinking.delta", "message.interim"]);
