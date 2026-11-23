@@ -54,13 +54,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | "--shared-open"
                     | "--shared-settings"
                     | "--native-list"
+                    | "--native-list-reuse"
             ) =>
         {
             (python, source, state, mode.as_str(), "", None)
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>|--shared-settings|--shared-settings-reopen <stored-id>|--native-list]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>|--shared-settings|--shared-settings-reopen <stored-id>|--native-list|--native-list-reuse]"
                     .into(),
             );
         }
@@ -91,6 +92,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if mode == "--native-list" {
         return native_list(config);
+    }
+    if mode == "--native-list-reuse" {
+        return native_list_reuse(config, state);
     }
     if matches!(mode, "--shared-settings" | "--shared-settings-reopen") {
         return shared_settings(
@@ -333,7 +337,65 @@ fn native_list(
             },
         ]
     );
+    block_on(adapter.close_listing_gateway())?;
     println!("NATIVE SESSIONS: {}\ngateway exited cleanly", listed.len());
+    Ok(())
+}
+
+#[cfg(unix)]
+fn native_list_reuse(
+    config: oxap_adapter_hermes::process::ProcessConfig,
+    state_dir: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Adapter, Error, NativeListRequest};
+    use std::{
+        path::Path,
+        task::{Context, Poll, Waker},
+        time::{Duration, Instant},
+    };
+
+    let adapter = oxap_adapter_hermes::Adapter::new(config.clone(), "configured".into());
+    let lister = adapter.native_lister().ok_or("missing native lister")?;
+    let list = || {
+        lister.native_list(NativeListRequest {
+            limit: 1,
+            ..NativeListRequest::default()
+        })
+    };
+    assert_eq!(block_on(list())?[0].native_id, "stored-1");
+    assert!(
+        matches!(block_on(list()), Err(Error::Harness(detail)) if detail.contains("list refused")),
+        "second listing must reach the retained gateway"
+    );
+    let mut held = list();
+    assert!(matches!(
+        held.as_mut().poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    let state_dir = Path::new(state_dir);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !state_dir.join("listing-held").exists() {
+        assert!(Instant::now() < deadline, "retained listing did not start");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(block_on(list())?[0].native_id, "stored-2");
+    assert!(state_dir.join("listing-eof-2").exists());
+    std::fs::write(state_dir.join("release-listing"), "")?;
+    assert_eq!(block_on(held)?[0].native_id, "stored-1");
+    assert_eq!(block_on(list())?[0].native_id, "stored-3");
+    drop(adapter);
+    assert!(state_dir.join("listing-eof-3").exists());
+    let fresh = oxap_adapter_hermes::Adapter::new(config, "configured".into());
+    let lister = fresh.native_lister().ok_or("missing native lister")?;
+    assert!(matches!(
+        block_on(lister.native_list(NativeListRequest {
+            limit: 1,
+            ..NativeListRequest::default()
+        })),
+        Err(Error::Harness(_))
+    ));
+    println!("REUSED, ISOLATED, AND RETRIED LISTING");
     Ok(())
 }
 
