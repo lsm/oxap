@@ -24,3 +24,10 @@ as `emulated` through the pre-tool-use hook and native permission gate. The
 Rust adapter reports `unavailable` and refuses `tool_choice` at submit until
 it can enforce choices through those controls. Served parity for this feature
 requires the Rust enforcement path.
+
+Go accepts a matching `user_message_uuid` or `user_message_uuids` marker as
+admission evidence on child and injected observations. Rust requires evidence
+from the main turn because a matching marker alone does not distinguish
+main-turn activity from child or injected activity. The Rust process replay
+exercises both combinations with synthetic frames. The pinned corpus leaves
+both combinations unverified.

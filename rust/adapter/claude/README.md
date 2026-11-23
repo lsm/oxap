@@ -106,6 +106,7 @@ The stream begins with `run.started`, then the reducer applies buffered
 observations in arrival order. Explicitly foreign markers, child echoes, and
 injected output do not join the turn. This stage projects admission and native
 metadata updates. Deltas and terminal events follow in later slices. Transport
-loss before corroboration fails the pending submit. Hosts can set a deadline
-by dropping that future and closing the retired session. Per-run tool
+loss before the run is installed fails the pending submit, even if the reader
+has already seen a matching marker. Hosts can set a deadline by dropping
+that future and closing the retired session. Per-run tool
 selection is unavailable until permission handling can enforce it.

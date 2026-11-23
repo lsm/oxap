@@ -158,24 +158,20 @@ impl SessionData {
         start.capability_revision = Some(pin().capability_revision.clone());
         let events = Subscriber::new(DEFAULT_QUEUE_CAPACITY);
         events.offer(start, false);
-        if self.session.status == SessionStatus::CLOSED {
-            events.close();
-        } else {
-            self.session.status = SessionStatus::RUNNING;
-            self.session.updated_at_ms = now;
-            self.session.active_run_id = Some(run_id.clone());
-            self.session.active_runs = vec![ActiveRun {
-                run_id: run_id.clone(),
-                status: RunStatus::RUNNING,
-                relationship: "primary".into(),
-                as_of_sequence: Some(1),
-                ..Default::default()
-            }];
-            self.active = Some(ActiveTurn {
-                uuid: turn.uuid,
-                events: events.clone(),
-            });
-        }
+        self.session.status = SessionStatus::RUNNING;
+        self.session.updated_at_ms = now;
+        self.session.active_run_id = Some(run_id.clone());
+        self.session.active_runs = vec![ActiveRun {
+            run_id: run_id.clone(),
+            status: RunStatus::RUNNING,
+            relationship: "primary".into(),
+            as_of_sequence: Some(1),
+            ..Default::default()
+        }];
+        self.active = Some(ActiveTurn {
+            uuid: turn.uuid,
+            events: events.clone(),
+        });
         for observation in turn.buffered {
             self.apply(observation);
         }
@@ -248,13 +244,7 @@ impl OpenedSession {
                 if let Some(turn) = state.active.take() {
                     turn.events.close();
                 }
-                if state
-                    .pending
-                    .as_ref()
-                    .is_some_and(|turn| turn.corroborated.is_some())
-                {
-                    state.pending.take();
-                }
+                state.pending.take();
             })
             .map_err(Error::harness)?;
         Ok(session)
