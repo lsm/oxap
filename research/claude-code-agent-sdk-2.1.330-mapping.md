@@ -16,3 +16,11 @@ The npm artifacts and extracted files have SHA-256 values:
 - TypeScript SDK package `6ecbc493eda07c20536c97b7529a6873034ad50faafd8eb2bddba4201825950f`; declarations `ad7946cc7112e3178f5290de97f77716ddcf7b671655e9ff00d30c7c2a5a1184`.
 
 The old SDK package's recorded digest was reproduced before comparing declarations. The new SDK adds optional initialization, result and system fields and an `external-event` origin subtype. An isolated Linux process check using the 2.1.330 release binary and the candidate Go endpoint initialized OAP and opened a session without credentials. It did not execute a prompt; model execution and the new wire variants remain unverified.
+
+## Rust port divergence
+
+Under the catalog's shared Claude revision, Go exposes `run.tool_selection`
+as `emulated` through the pre-tool-use hook and native permission gate. The
+Rust adapter reports `unavailable` and refuses `tool_choice` at submit until
+it can enforce choices through those controls. Served parity for this feature
+requires the Rust enforcement path.

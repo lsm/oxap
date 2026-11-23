@@ -42,13 +42,24 @@ struct PendingTurn {
     admission: oneshot::Sender<Admission>,
 }
 
+struct AbandonPending<'a> {
+    state: &'a Mutex<SessionData>,
+    uuid: &'a str,
+}
+
+impl Drop for AbandonPending<'_> {
+    fn drop(&mut self) {
+        self.state.lock().unwrap().release_pending(self.uuid, true);
+    }
+}
+
 impl SessionData {
-    fn reject_write(&mut self, uuid: &str, retire: bool) {
+    fn release_pending(&mut self, uuid: &str, retire: bool) {
         if self.pending.as_ref().is_some_and(|turn| turn.uuid == uuid) {
             self.pending.take();
-        }
-        if retire {
-            self.session.status = SessionStatus::CLOSED;
+            if retire {
+                self.session.status = SessionStatus::CLOSED;
+            }
         }
     }
 }
@@ -146,6 +157,10 @@ impl OpenedSession {
             });
         }
 
+        let _abandon = AbandonPending {
+            state: &self.state,
+            uuid: &uuid,
+        };
         let (written, write_result) = oneshot::channel();
         let client = self.process.client.clone();
         let state = self.state.clone();
@@ -156,12 +171,12 @@ impl OpenedSession {
                 state
                     .lock()
                     .unwrap()
-                    .reject_write(&turn_uuid, *error != ClientError::WriteQueue);
+                    .release_pending(&turn_uuid, *error != ClientError::WriteQueue);
             }
             let _ = written.send(result.map_err(Error::harness));
         });
         if let Err(error) = worker {
-            self.state.lock().unwrap().reject_write(&uuid, false);
+            self.state.lock().unwrap().release_pending(&uuid, false);
             return Err(Error::harness(error));
         }
         write_result.await.map_err(|_| Error::SessionClosed)??;

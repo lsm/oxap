@@ -220,7 +220,7 @@ fn a_probe_describes_the_pinned_endpoint_the_features_and_the_process_memory_jou
 }
 
 #[test]
-fn the_described_features_are_exactly_the_keys_go_advertises() {
+fn the_descriptor_uses_go_feature_keys_and_reports_rust_support() {
     let adapter = adapter();
     let described = descriptor(&adapter);
     let mut keys = described

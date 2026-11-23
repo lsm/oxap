@@ -103,5 +103,6 @@ expansion. By default the user frame is marked client-composed. Before writing
 the frame the session reserves one pending turn, which blocks another submit
 or close. Sending a frame does not admit a run. This port stage fails a pending
 submit on transport loss and leaves native admission and event publication to
-later slices. Per-run tool selection is unavailable until permission handling
-can enforce it.
+later slices. Hosts can set their own admission deadline. On timeout, drop
+the submit future and close the retired session. Per-run tool selection is
+unavailable until permission handling can enforce it.
