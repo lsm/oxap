@@ -144,7 +144,7 @@ fail. Decode a line with `serde_json` directly instead of through
 `source::members`: the lone-surrogate raw-member test must fail.
 
 `tests/rpc_corpus.rs` decodes every frame the pinned corpus in
-`fixtures/adapters/claude-code-2.1.322` records, and compares each host write it
+`fixtures/adapters/claude-code-2.1.330` records, and compares each host write it
 holds against `tests/fixtures/go-rpc-writes.jsonl`, which Go's own
 `MarshalJSON` produced for those frames. Regenerate it with a throwaway Go test
 in `go/adapter/claude/internal/rpc` that walks the corpus and writes
