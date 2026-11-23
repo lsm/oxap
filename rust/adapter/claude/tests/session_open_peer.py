@@ -65,5 +65,19 @@ if mode in {"settings", "settings-refusal"}:
         {"type": "control_response", "response": {"subtype": "success", "response": {}}},
         mode == "settings-refusal",
     )
+if mode == "submit-text":
+    frame = json.loads(sys.stdin.readline())
+    assert frame["uuid"].startswith("turn-")
+    expected = frames[2]["raw"]
+    expected["uuid"] = frame["uuid"]
+    assert frame == expected, frame
+    Path("turn-observed").touch()
+    deadline = time.monotonic() + 10
+    while not Path("release-turn").exists():
+        assert not select.select([sys.stdin], [], [], 0.02)[0], "extra native input"
+        assert time.monotonic() < deadline, "submit did not release peer"
+    assert not select.select([sys.stdin], [], [], 0)[0], "extra native input"
+    Path("no-extra-turn").touch()
+    sys.exit(0)
 assert not sys.stdin.readline()
 Path("eof").touch()

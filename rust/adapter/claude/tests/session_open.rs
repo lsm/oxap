@@ -4,14 +4,18 @@ use std::{
     fs,
     os::unix::fs::PermissionsExt,
     path::Path,
+    task::{Context, Poll},
     thread,
     time::{Duration, Instant},
 };
 
 use futures::executor::block_on;
-use oxap_adapter::{Adapter as _, Error, OpenRequest};
+use oxap_adapter::{Adapter as _, Error, OpenRequest, SubmitRequest};
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
-use oxap_protocol::{ReasoningLevel, ToolsListRequest, FEATURE_TOOLS_LIST};
+use oxap_protocol::{
+    Message, MessageContent, MessageRole, MessageSubmitRequest, ReasoningLevel, ToolsListRequest,
+    FEATURE_TOOLS_LIST,
+};
 use serde_json::{json, Value};
 
 fn fixture(mode: &str) -> (Adapter, tempfile::TempDir, Vec<Value>) {
@@ -143,6 +147,60 @@ fn configured_provider_reaches_the_cli_peer() {
     block_on(session.close()).unwrap();
     assert!(directory.path().join("eof").is_file());
     println!("PASS Rust provider launch: route, ordered headers, initialize, and EOF");
+}
+
+fn text_submit(text: &str) -> SubmitRequest {
+    SubmitRequest {
+        request: MessageSubmitRequest {
+            session_id: "session".into(),
+            messages: vec![Message {
+                role: MessageRole::USER,
+                content: MessageContent::from_text(text),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn writes_one_native_turn_without_admitting_on_write() {
+    let (adapter, directory, _) = fixture("submit-text");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+
+    let mut submission = session.submit(text_submit("hello"));
+    let mut context = Context::from_waker(futures::task::noop_waker_ref());
+    match submission.as_mut().poll(&mut context) {
+        Poll::Pending => {}
+        Poll::Ready(Err(error)) => panic!("native submit refused: {error}"),
+        Poll::Ready(Ok(_)) => panic!("write alone must not admit a run"),
+    }
+    let observed = directory.path().join("turn-observed");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !observed.is_file() {
+        assert!(Instant::now() < deadline, "no turn reached native stdin");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(matches!(
+        block_on(session.submit(text_submit("again"))),
+        Err(Error::RunActive)
+    ));
+    assert!(matches!(block_on(session.close()), Err(Error::RunActive)));
+    let state = block_on(session.state()).unwrap();
+    assert!(state.active_run_id.is_none());
+    assert!(state.active_runs.is_empty());
+    fs::write(directory.path().join("release-turn"), []).unwrap();
+    assert!(matches!(block_on(submission), Err(Error::SessionClosed)));
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("no-extra-turn").is_file());
+    println!(
+        "PASS text submit: corpus turn reached stdin once, overlap refused, no premature admission"
+    );
 }
 
 #[test]
