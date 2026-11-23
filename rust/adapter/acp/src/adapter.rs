@@ -45,6 +45,18 @@ impl Adapter {
         if config.journal_capacity == 0 {
             config.journal_capacity = 256;
         }
+        for capability in ["subagents", "plan"] {
+            if config
+                .process
+                .client_capabilities
+                .get(capability)
+                .is_some_and(|value| value.get().trim() != "null")
+            {
+                return Err(Error::Harness(format!(
+                    "acp adapter: client capability {capability} is not supported"
+                )));
+            }
+        }
         if config.process.path.is_empty() {
             return Err(Error::Harness("acp adapter: executable is required".into()));
         }

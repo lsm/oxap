@@ -1,0 +1,71 @@
+{
+  "advertised_capabilities": {
+    "action.tool_sources.attach": "native",
+    "protocol.initialize": "emulated",
+    "run.streaming": "native",
+    "session.open": "native"
+  },
+  "environment": [
+    "MCP_TOKEN=operator-secret"
+  ],
+  "expected_mcp_servers": [
+    {
+      "args": [
+        "--root",
+        "/workspace"
+      ],
+      "command": "/usr/local/bin/mcp-filesystem",
+      "env": [
+        {
+          "name": "MCP_TOKEN",
+          "value": "operator-secret"
+        },
+        {
+          "name": "MCP_MODE",
+          "value": "readonly"
+        }
+      ],
+      "name": "filesystem"
+    }
+  ],
+  "expected_oap": "expected-oap.json",
+  "id": "open-with-tool-sources",
+  "identity_map": {
+    "NAME=value in environment": "session/new mcpServers[].env literal pair",
+    "ToolSourceAttachment.command/args": "session/new mcpServers[].command/args",
+    "ToolSourceAttachment.id": "session/new mcpServers[].name",
+    "bare NAME in environment": "resolved against the adapter's own environment allowlist; dropped when the operator never exposed it",
+    "native-session": "session",
+    "prompt-request-3": "run-c"
+  },
+  "mapping": "mapping.json",
+  "native": "native.jsonl",
+  "omissions": "omissions.json",
+  "provenance": {
+    "commit": "94824f11ec78f7a6699323a9342e47fa5edf2530",
+    "release": "v1.21.2",
+    "repository": "https://github.com/agentclientprotocol/agent-client-protocol",
+    "schema_release": "1.34.1",
+    "schema_tree_sha256": "1c1d43cbec9a6e8e642628489529e0705773750848e98a6327cc6e8dfa5d54ca"
+  },
+  "tool_sources": [
+    {
+      "args": [
+        "--root",
+        "/workspace"
+      ],
+      "command": "/usr/local/bin/mcp-filesystem",
+      "display_name": "Filesystem",
+      "endpoint": "stdio:filesystem-tools",
+      "environment": [
+        "MCP_TOKEN",
+        "NEVER_EXPOSED",
+        "MCP_MODE=readonly"
+      ],
+      "id": "filesystem",
+      "kind": "process",
+      "protocol": "mcp"
+    }
+  ],
+  "version": 1
+}

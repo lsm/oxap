@@ -22,6 +22,7 @@ import (
 	"github.com/lsm/oxap/go/adapter/acp/internal/rpc"
 	"github.com/lsm/oxap/go/adapter/adaptertest"
 	"github.com/lsm/oxap/go/protocol"
+	"github.com/lsm/oxap/harnesses"
 )
 
 var (
@@ -163,9 +164,22 @@ func (c *corpusClient) Close() error {
 }
 
 func TestACPEvidenceCorpus(t *testing.T) {
-	root := acpCorpusRoot(t)
+	runACPEvidenceCorpus(t, acpCorpusRoot(t), pin)
+}
+
+func TestACPEvidenceFloor(t *testing.T) {
+	floor := harnesses.Versioned("acp", "floor")
+	root := filepath.Join(filepath.Dir(acpCorpusRoot(t)), filepath.Base(floor.Corpus))
+	runACPEvidenceCorpus(t, root, floor)
+}
+
+func runACPEvidenceCorpus(t *testing.T, root string, version harnesses.Pin) {
+	source := version.Source("agent-client-protocol")
+	schemaVersion := strings.TrimPrefix(version.Component("agent-client-protocol-schema").Version, "schema-v")
+	specDigest := version.Artifact("agent-client-protocol", "any", "source-tree").SHA256
+	schemaDigest := version.Artifact("agent-client-protocol-schema", "any", "source-tree").SHA256
 	manifest := acpLoadJSON[acpCorpusManifest](t, filepath.Join(root, "manifest.json"))
-	if manifest.Version != 1 || manifest.Adapter != "acp-v1-stdio" || manifest.ACPVersion != ACPVersion || manifest.ACPRelease != acpRelease || manifest.SchemaRelease != SchemaVersion || manifest.Commit != acpCommitSHA256 || manifest.SpecTreeSHA256 != acpSpecTreeSHA256 || manifest.SchemaTreeSHA256 != acpSchemaTreeSHA256 {
+	if manifest.Version != 1 || manifest.Adapter != "acp-v1-stdio" || manifest.ACPVersion != ACPVersion || manifest.ACPRelease != source.Tag || manifest.SchemaRelease != schemaVersion || manifest.Commit != source.Commit || manifest.SpecTreeSHA256 != specDigest || manifest.SchemaTreeSHA256 != schemaDigest {
 		t.Fatalf("corpus provenance pin mismatch: %+v", manifest)
 	}
 	seenIDs, seenPaths, covered := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -182,7 +196,7 @@ func TestACPEvidenceCorpus(t *testing.T) {
 				covered[fixture] = true
 			}
 			seenIDs[entry.ID], seenPaths[entry.Path] = true, true
-			runACPCorpusCase(t, root, entry)
+			runACPCorpusCase(t, root, entry, version)
 		})
 	}
 	for fixture := range acpEvidenceFixtures {
@@ -193,10 +207,13 @@ func TestACPEvidenceCorpus(t *testing.T) {
 	assertACPCorpusInventory(t, root, manifest)
 }
 
-func runACPCorpusCase(t *testing.T, root string, entry acpCorpusManifestCase) {
+func runACPCorpusCase(t *testing.T, root string, entry acpCorpusManifestCase, version harnesses.Pin) {
+	source := version.Source("agent-client-protocol")
+	schemaVersion := strings.TrimPrefix(version.Component("agent-client-protocol-schema").Version, "schema-v")
+	schemaDigest := version.Artifact("agent-client-protocol-schema", "any", "source-tree").SHA256
 	dir := filepath.Join(root, entry.Path)
 	definition := acpLoadJSON[acpCorpusCase](t, filepath.Join(dir, "case.json"))
-	if definition.Version != 1 || definition.ID != entry.ID || definition.Provenance.Repository != "https://github.com/agentclientprotocol/agent-client-protocol" || definition.Provenance.Release != acpRelease || definition.Provenance.Commit != acpCommitSHA256 || definition.Provenance.SchemaRelease != SchemaVersion || definition.Provenance.SchemaSHA256 != acpSchemaTreeSHA256 || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
+	if definition.Version != 1 || definition.ID != entry.ID || definition.Provenance.Repository != "https://github.com/agentclientprotocol/agent-client-protocol" || definition.Provenance.Release != source.Tag || definition.Provenance.Commit != source.Commit || definition.Provenance.SchemaRelease != schemaVersion || definition.Provenance.SchemaSHA256 != schemaDigest || len(definition.Capabilities) == 0 || len(definition.IdentityMap) == 0 {
 		t.Fatalf("invalid case metadata: %+v", definition)
 	}
 	paths := acpPaths(t, dir, definition)
