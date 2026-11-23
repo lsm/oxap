@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crossbeam_channel::{never, unbounded, Sender};
 use futures_channel::{mpsc, oneshot};
 use oxap_adapter::{
     refuse_unadvertised_controls, refuse_unadvertised_settings, refuse_unadvertised_tool_sources,
@@ -12,13 +13,13 @@ use oxap_adapter::{
 };
 use oxap_protocol::{
     ActiveRun, CapabilityDescriptor, ContentPartType, EndpointDescriptor, Envelope, EnvelopeType,
-    FeatureSupport, MessageRole, MessageSubmitRequest, MessageSubmitResponse,
+    FeatureSupport, MessageRole, MessageSubmitRequest, MessageSubmitResponse, ParticipantId,
     RequestedDeliveryMode, RunCancelResponse, RunId, RunStatus, SessionState, SessionStatus,
     SupportLevel, FEATURE_OPEN_REOPEN, PROFILE, VERSION,
 };
 
 use crate::{
-    gateway_session::{interrupt, PromptStartError},
+    gateway_session::{interrupt, InputCommand, ObservationError, PromptStartError},
     native::METHOD_SESSION_INTERRUPT,
     process::{Process, ProcessConfig},
     GatewayRun, GatewaySession, Observation, RunObservation,
@@ -51,6 +52,9 @@ impl Adapter {
             ("session.message.delivery.auto", SupportLevel::DEGRADED),
             ("run.streaming", SupportLevel::NATIVE),
             ("run.cancel", SupportLevel::DEGRADED),
+            ("run.status", SupportLevel::EMULATED),
+            ("user_input", SupportLevel::NATIVE),
+            ("action.tools", SupportLevel::DEGRADED),
         ]
         .into_iter()
         .map(|(feature, level)| {
@@ -78,6 +82,7 @@ impl Adapter {
             },
             capability_revision: pin.capability_revision.clone(),
             max_active_runs_per_session: 1,
+            interactive_gates: true,
             cancellation_target: "session".into(),
             cancellation_implementation: METHOD_SESSION_INTERRUPT.into(),
             ..Descriptor::default()
@@ -131,12 +136,18 @@ impl AdapterContract for Adapter {
             Ok(Box::new(OpenedSession {
                 stored_id: gateway.stored_id().to_owned(),
                 runtime_id: gateway.runtime_id().to_owned(),
+                responder: if request.participant.id.as_str().is_empty() {
+                    "user".into()
+                } else {
+                    request.participant.id
+                },
                 process: gateway.process.clone(),
                 control: Arc::new(Mutex::new(())),
                 slot: Arc::new(Mutex::new(SessionSlot {
                     gateway: Some(gateway),
                     state,
                     cancel_accepted: false,
+                    input: None,
                 })),
                 runtime: self.runtime.clone(),
             }) as Box<dyn Session>)
@@ -150,6 +161,7 @@ struct OpenedSession {
     slot: Arc<Mutex<SessionSlot>>,
     stored_id: String,
     runtime_id: String,
+    responder: ParticipantId,
     runtime: Runtime,
 }
 
@@ -157,16 +169,21 @@ struct SessionSlot {
     gateway: Option<GatewaySession>,
     state: SessionState,
     cancel_accepted: bool,
+    input: Option<Sender<InputCommand>>,
 }
 
 impl SessionSlot {
-    fn settle(&mut self, gateway: Option<GatewaySession>, runtime: &Runtime) {
+    fn settle(&mut self, mut gateway: Option<GatewaySession>, runtime: &Runtime) {
         if self.state.status == SessionStatus::CLOSED {
             return;
         }
         self.state.active_run_id = None;
         self.state.active_runs.clear();
         self.cancel_accepted = false;
+        self.input = None;
+        if let Some(gateway) = &mut gateway {
+            gateway.input = never();
+        }
         self.state.updated_at_ms = runtime.now_ms();
         self.state.status = if gateway.is_some() {
             SessionStatus::IDLE
@@ -189,6 +206,35 @@ impl SessionSlot {
             accepted: true,
             status: RunStatus::CANCELLING,
         })
+    }
+
+    fn project_input(&mut self, event: &Envelope) {
+        if self.state.status == SessionStatus::CLOSED {
+            return;
+        }
+        let (Some(turn), Some(active)) = (&event.turn_id, self.state.active_runs.first_mut())
+        else {
+            return;
+        };
+        if event.envelope_type == EnvelopeType::USER_INPUT_REQUESTED {
+            active.pending_interactions.push(turn.clone());
+        } else if event.envelope_type == EnvelopeType::USER_INPUT_RESOLVED {
+            active
+                .pending_interactions
+                .retain(|pending| pending != turn);
+        } else {
+            return;
+        }
+        (self.state.status, active.status) = if active.pending_interactions.is_empty() {
+            (SessionStatus::RUNNING, RunStatus::RUNNING)
+        } else {
+            (
+                SessionStatus::WAITING_FOR_INPUT,
+                RunStatus::WAITING_FOR_INPUT,
+            )
+        };
+        active.as_of_sequence = event.sequence;
+        self.state.updated_at_ms = event.timestamp_ms.unwrap_or(self.state.updated_at_ms);
     }
 }
 
@@ -259,8 +305,11 @@ impl Session for OpenedSession {
             let slot = self.slot.clone();
             let control = self.control.clone();
             let runtime = self.runtime.clone();
+            let responder = self.responder.clone();
             let (reply, admission) = oneshot::channel();
             std::thread::spawn(move || {
+                let (input, commands) = unbounded();
+                gateway.input = commands;
                 let started = {
                     let _control = lock(&control);
                     gateway.start_run_classified(
@@ -281,6 +330,7 @@ impl Session for OpenedSession {
                         return;
                     }
                 };
+                run.responder = responder;
                 let response = run.admission(&state.current_model_id);
                 state.status = SessionStatus::RUNNING;
                 state.active_run_id = response.run_id.clone();
@@ -301,11 +351,12 @@ impl Session for OpenedSession {
                         return;
                     }
                     slot.state = state;
+                    slot.input = Some(input);
                 }
                 let (events, stream) = mpsc::unbounded();
                 let stream: EventStream = Box::pin(stream);
                 let _ = reply.send(Ok((response, stream)));
-                let terminal = forward_run(&events, &mut run);
+                let terminal = forward_run(&events, &mut run, &slot);
                 let gateway = gateway.observed_settlement.then_some(gateway);
                 lock(&slot).settle(gateway, &runtime);
                 if let Ok(Some(event)) = terminal {
@@ -316,8 +367,23 @@ impl Session for OpenedSession {
         })
     }
 
-    fn resolve(&self, _: InteractionResolution) -> BoxFuture<'_, ()> {
-        self.while_open(Err(Error::InteractionNotFound))
+    fn resolve(&self, resolution: InteractionResolution) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let (reply, result) = oneshot::channel();
+            self.open_slot()?
+                .input
+                .as_ref()
+                .ok_or(Error::InteractionNotFound)?
+                .send(InputCommand { resolution, reply })
+                .map_err(|_| Error::InteractionNotFound)?;
+            match result.await {
+                Ok(result) => result,
+                Err(_) => {
+                    drop(self.open_slot()?);
+                    Err(Error::InteractionNotFound)
+                }
+            }
+        })
     }
 
     fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {
@@ -372,16 +438,24 @@ impl Session for OpenedSession {
 fn forward_run(
     events: &mpsc::UnboundedSender<Result<Envelope, Error>>,
     run: &mut GatewayRun<'_>,
+    slot: &Mutex<SessionSlot>,
 ) -> Result<Option<Envelope>, Error> {
+    let mut resolved: Option<oneshot::Sender<Result<(), Error>>> = None;
     loop {
-        match run.observe(None, false) {
+        match run.observe(None) {
             Ok(Some(RunObservation::Event(event))) => {
                 if event.envelope_type == EnvelopeType::RUN_COMPLETED
                     || event.envelope_type == EnvelopeType::RUN_FAILED
                 {
                     return Ok(Some(*event));
                 }
+                if event.turn_id.is_some() {
+                    lock(slot).project_input(&event);
+                }
                 let _ = events.unbounded_send(Ok(*event));
+                if let Some(reply) = resolved.take() {
+                    let _ = reply.send(Ok(()));
+                }
             }
             Ok(Some(RunObservation::Other(Observation::Event(_)))) => {}
             Ok(Some(RunObservation::Other(Observation::Request(_)))) => {
@@ -392,7 +466,21 @@ fn forward_run(
                 )?;
             }
             Ok(None) => return Ok(None),
-            Err(error) => run.queue_failure("hermes_invalid_event", &error.to_string(), "")?,
+            Err(ObservationError::Input(command)) => {
+                let result = if lock(slot).state.status == SessionStatus::CLOSED {
+                    Err(Error::SessionClosed)
+                } else {
+                    run.resolve_shared(command.resolution)
+                };
+                if result.is_ok() {
+                    resolved = Some(command.reply);
+                } else {
+                    let _ = command.reply.send(result);
+                }
+            }
+            Err(error) => {
+                run.queue_failure("hermes_invalid_event", &Error::from(error).to_string(), "")?
+            }
         }
     }
 }

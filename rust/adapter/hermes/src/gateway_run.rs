@@ -2,13 +2,14 @@ use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 use oxap_adapter::{
     gojson::go_marshal, index_input_answers, jsonrpc::RequestId, runtime::Runtime, Error,
+    InteractionResolution,
 };
 use oxap_protocol::{
     ActionCallPayload, Admission, ContentDeltaPayload, EffectiveDeliveryMode, Envelope, EnvelopeId,
     EnvelopeType, InputAnswer, InputOption, InputQuestion, InputQuestionKind, InteractionId,
-    Message, MessageContent, MessageId, MessageRole, MessageSubmitResponse, ProtocolError,
-    RequestedDeliveryMode, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload,
-    RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
+    Message, MessageContent, MessageId, MessageRole, MessageSubmitResponse, ParticipantId,
+    ProtocolError, RequestedDeliveryMode, RunCompletedPayload, RunFailedPayload, RunId,
+    RunStartedPayload, RunStatus, RunStatusUpdatedPayload, SessionId, UserInputRequestedPayload,
     UserInputResolutionStatus, UserInputResolveRequest, UserInputResolvedPayload,
 };
 use serde::Serialize;
@@ -31,14 +32,13 @@ pub enum RunObservation {
 }
 
 const REQUESTER: &str = "hermes.gateway";
-const RESPONDER: &str = "user";
-
 pub struct GatewayRun<'a> {
     session: &'a mut GatewaySession,
     runtime: Runtime,
     session_id: SessionId,
     run_id: RunId,
     message_id: MessageId,
+    pub(crate) responder: ParticipantId,
     revision: &'static str,
     sequence: u64,
     pending: VecDeque<Envelope>,
@@ -92,6 +92,7 @@ impl GatewaySession {
             runtime,
             session_id,
             message_id,
+            responder: "user".into(),
             revision,
             sequence: 0,
             pending: VecDeque::new(),
@@ -142,7 +143,7 @@ impl GatewayRun<'_> {
         if resolution.session_id != self.session_id
             || resolution.run_id != self.run_id
             || resolution.requested_by.as_str() != REQUESTER
-            || resolution.responded_by.as_str() != RESPONDER
+            || resolution.responded_by != self.responder
         {
             return Err(Error::InvalidResolution);
         }
@@ -154,6 +155,38 @@ impl GatewayRun<'_> {
             resolution.answers,
         )?;
         self.queue_gate_status()
+    }
+
+    pub(crate) fn resolve_shared(
+        &mut self,
+        resolution: InteractionResolution,
+    ) -> Result<(), Error> {
+        let mut input = resolution.input.ok_or(Error::InteractionNotFound)?;
+        if !self
+            .gates
+            .iter()
+            .any(|gate| gate.id == input.interaction_id)
+        {
+            return Err(Error::InteractionNotFound);
+        }
+        if !resolution.run_id.as_str().is_empty() && resolution.run_id != self.run_id {
+            return Err(Error::InvalidResolution);
+        }
+        if input.session_id.as_str().is_empty() {
+            input.session_id = self.session_id.clone();
+        }
+        if input.run_id.as_str().is_empty() {
+            input.run_id = self.run_id.clone();
+        }
+        if input.requested_by.as_str().is_empty() {
+            input.requested_by = REQUESTER.into();
+        }
+        if !resolution.responded_by.as_str().is_empty() {
+            input.responded_by = resolution.responded_by;
+        } else if input.responded_by.as_str().is_empty() {
+            input.responded_by = self.responder.clone();
+        }
+        self.resolve_input(input)
     }
 
     pub fn interrupt(&self, deadline: Option<Instant>) -> Result<InterruptResult, Error> {
@@ -170,14 +203,13 @@ impl GatewayRun<'_> {
         &mut self,
         deadline: Option<Instant>,
     ) -> Result<Option<RunObservation>, Error> {
-        self.observe(deadline, true)
+        self.observe(deadline).map_err(Into::into)
     }
 
     pub(crate) fn observe(
         &mut self,
         deadline: Option<Instant>,
-        interactive: bool,
-    ) -> Result<Option<RunObservation>, Error> {
+    ) -> Result<Option<RunObservation>, ObservationError> {
         loop {
             if let Some(event) = self.pending.pop_front() {
                 return Ok(Some(RunObservation::Event(Box::new(event))));
@@ -191,7 +223,7 @@ impl GatewayRun<'_> {
                     self.queue_failure("hermes_process_exit", &reason, "inferred")?;
                     continue;
                 }
-                Err(ObservationError::Other(error)) => return Err(error),
+                Err(error) => return Err(error),
             };
             let event = match observation {
                 PromptObservation::Delta(part) => self.emit(
@@ -247,12 +279,10 @@ impl GatewayRun<'_> {
                     continue;
                 }
                 PromptObservation::Other(Observation::Request(request)) => {
-                    if !interactive
-                        || !matches!(
-                            request.method.as_str(),
-                            REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
-                        )
-                    {
+                    if !matches!(
+                        request.method.as_str(),
+                        REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
+                    ) {
                         return Ok(Some(RunObservation::Other(Observation::Request(request))));
                     }
                     self.open_gate(request)?;
@@ -308,7 +338,7 @@ impl GatewayRun<'_> {
             &UserInputRequestedPayload {
                 interaction_id: id.clone(),
                 requested_by: REQUESTER.into(),
-                responded_by: RESPONDER.into(),
+                responded_by: self.responder.clone(),
                 session_id: self.session_id.clone(),
                 run_id: self.run_id.clone(),
                 title: title.into(),
@@ -435,7 +465,7 @@ impl GatewayRun<'_> {
             &UserInputResolvedPayload {
                 interaction_id: gate.id.clone(),
                 requested_by: REQUESTER.into(),
-                responded_by: RESPONDER.into(),
+                responded_by: self.responder.clone(),
                 session_id: self.session_id.clone(),
                 run_id: self.run_id.clone(),
                 status,

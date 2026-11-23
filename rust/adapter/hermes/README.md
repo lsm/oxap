@@ -13,7 +13,10 @@ idle again after a turn settles or the gateway expressly refuses admission.
 Cancel an admitted run through the shared session. The response acknowledges
 the interrupt request. Native settlement determines the terminal event, and
 retrying an accepted cancel during the same run returns its receipt again.
-Use the gateway API below for input answers and reasoning settings.
+Native approval, clarification, sudo and secret requests move the shared
+session to waiting for input. Answer them through the shared session using
+the declared participant. Tool lifecycle events stay on the same run stream.
+Use the gateway API below for reasoning settings.
 
 On Unix, `GatewaySession::create` starts the gateway, creates a native
 session, and keeps its runtime and stored identities. A requested reasoning

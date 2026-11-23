@@ -16,14 +16,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let (python, source, state, mode, model, answers_file) = match args.as_slice() {
         [python, source, state] => (python, source, state, "", "", None),
-        [python, source, state, mode, model, answers] if mode == "--run" => (
-            python,
-            source,
-            state,
-            mode.as_str(),
-            model.as_str(),
-            Some(answers),
-        ),
+        [python, source, state, mode, model, answers]
+            if matches!(mode.as_str(), "--run" | "--shared-input") =>
+        {
+            (
+                python,
+                source,
+                state,
+                mode.as_str(),
+                model.as_str(),
+                Some(answers),
+            )
+        }
         [python, source, state, mode, model]
             if matches!(
                 mode.as_str(),
@@ -47,7 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>]"
                     .into(),
             );
         }
@@ -79,8 +83,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if matches!(mode, "--shared-open" | "--shared-reopen") {
         return shared_session(config, (mode == "--shared-reopen").then_some(model));
     }
-    if matches!(mode, "--shared-submit" | "--shared-cancel") {
-        return shared_submit(config, state, model, mode == "--shared-cancel");
+    if matches!(
+        mode,
+        "--shared-submit" | "--shared-cancel" | "--shared-input"
+    ) {
+        return shared_submit(config, state, model, mode, answers);
     }
     let timeout = if mode == "--reopen-deadline" {
         Duration::from_secs(1)
@@ -282,7 +289,8 @@ fn shared_submit(
     config: oxap_adapter_hermes::process::ProcessConfig,
     state_dir: &str,
     model: &str,
-    cancel: bool,
+    mode: &str,
+    answers: Option<std::vec::IntoIter<Vec<oxap_protocol::InputAnswer>>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::future::poll_fn;
     use std::path::Path;
@@ -296,14 +304,21 @@ fn shared_submit(
     };
 
     let adapter = oxap_adapter_hermes::Adapter::new(config, model.to_owned());
-    let session = block_on(adapter.open(OpenRequest {
-        session_id: "session".into(),
-        participant: Participant {
-            id: "user".into(),
-            ..Participant::default()
-        },
-        ..OpenRequest::default()
-    }))?;
+    let session = block_on(
+        adapter.open(OpenRequest {
+            session_id: "session".into(),
+            participant: Participant {
+                id: if mode == "--shared-input" {
+                    "operator"
+                } else {
+                    "user"
+                }
+                .into(),
+                ..Participant::default()
+            },
+            ..OpenRequest::default()
+        }),
+    )?;
     let request = SubmitRequest {
         envelope_id: "caller-submit".into(),
         request: MessageSubmitRequest {
@@ -317,7 +332,10 @@ fn shared_submit(
             ..MessageSubmitRequest::default()
         },
     };
-    if cancel {
+    if let Some(answers) = answers {
+        return shared_input(session.as_ref(), request, answers);
+    }
+    if mode == "--shared-cancel" {
         return shared_cancel(session.as_ref(), request, std::path::Path::new(state_dir));
     }
     let mut unsupported = request.clone();
@@ -405,6 +423,82 @@ fn shared_submit(
     }
     block_on(session.close())?;
     println!("gateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_input(
+    session: &dyn oxap_adapter::Session,
+    request: oxap_adapter::SubmitRequest,
+    mut answers: impl Iterator<Item = Vec<oxap_protocol::InputAnswer>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::future::poll_fn;
+
+    use futures_executor::block_on;
+    use oxap_adapter::{Error, InteractionResolution};
+    use oxap_protocol::{
+        EnvelopeType, RunStatus, SessionStatus, UserInputRequestedPayload, UserInputResolveRequest,
+    };
+
+    let (_, mut stream) = block_on(session.submit(request))?;
+    let mut gates = 0;
+    while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
+        let event = event?;
+        println!("envelope: {}", serde_json::to_string(&event)?);
+        assert_ne!(
+            event.envelope_type,
+            EnvelopeType::RUN_FAILED,
+            "shared gate failed the run"
+        );
+        if event.envelope_type != EnvelopeType::USER_INPUT_REQUESTED {
+            continue;
+        }
+        let input: UserInputRequestedPayload = event.decode_payload()?;
+        assert_eq!(input.responded_by.as_str(), "operator");
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::WAITING_FOR_INPUT);
+        assert_eq!(state.active_runs[0].status, RunStatus::WAITING_FOR_INPUT);
+        assert_eq!(
+            state.active_runs[0].pending_interactions.as_slice(),
+            std::slice::from_ref(&input.interaction_id)
+        );
+        let resolution = InteractionResolution {
+            run_id: input.run_id,
+            responded_by: input.responded_by,
+            input: Some(UserInputResolveRequest {
+                interaction_id: input.interaction_id.clone(),
+                answers: answers.next().ok_or("missing replay answers")?,
+                ..UserInputResolveRequest::default()
+            }),
+            ..InteractionResolution::default()
+        };
+        let mut foreign = resolution.clone();
+        foreign.responded_by = "foreign".into();
+        assert!(matches!(
+            block_on(session.resolve(foreign)),
+            Err(Error::InvalidResolution)
+        ));
+        let mut invalid = resolution.clone();
+        invalid.input.as_mut().unwrap().answers.clear();
+        assert!(matches!(
+            block_on(session.resolve(invalid)),
+            Err(Error::InvalidResolution)
+        ));
+        block_on(session.resolve(resolution.clone()))?;
+        assert!(!block_on(session.state())?
+            .active_runs
+            .iter()
+            .any(|run| run.pending_interactions.contains(&input.interaction_id)));
+        assert!(matches!(
+            block_on(session.resolve(resolution)),
+            Err(Error::InteractionNotFound)
+        ));
+        gates += 1;
+    }
+    assert_eq!(gates, 4);
+    assert_eq!(block_on(session.state())?.status, SessionStatus::IDLE);
+    block_on(session.close())?;
+    println!("SHARED INPUTS: {gates}\ngateway exited cleanly");
     Ok(())
 }
 

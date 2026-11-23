@@ -152,14 +152,14 @@ def gateway(corpus, case):
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create",
                           "params": {"model": "hermes-test"}
-                          if shared_submit or case in SHARED_CANCEL_CASES else {}}
+                          if shared_submit or case == "shared-input" or case in SHARED_CANCEL_CASES else {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
     if case in SHARED_CANCEL_CASES:
         shared_cancel_gateway(corpus, read, send, case == "shared-cancel-race")
         return
-    if case == "answered-gates":
+    if case in {"answered-gates", "shared-input"}:
         replay = answered_frames(corpus)
     elif case in GATE_CHECKS:
         replay = gate_frames(corpus, case)
@@ -203,7 +203,7 @@ def gateway(corpus, case):
         elif frame["action"] == "process-exit":
             return
     assert sys.stdin.read() == ""
-    if case in REOPEN_CASES or shared_submit:
+    if case in REOPEN_CASES or shared_submit or case == "shared-input":
         Path("replay-complete").touch()
 
 
@@ -266,7 +266,7 @@ GATE_CHECKS = {
 
 
 def verify(binary, corpus, mode, case):
-    fixture = "interaction-gates" if case == "answered-gates" else case
+    fixture = "interaction-gates" if case in {"answered-gates", "shared-input"} else case
     if case == "shared-submit":
         fixture = "streaming-provenance"
     if case in REOPEN_TIMEOUT_CASES:
@@ -289,19 +289,26 @@ def verify(binary, corpus, mode, case):
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
         model = ["hermes-test"] if case in {"malformed-frame", "shared-submit"} | SHARED_CANCEL_CASES else []
-        if case == "answered-gates":
+        if case in {"answered-gates", "shared-input"}:
             answers_file = root / "answers.json"
             expected = json.loads(expected_path.read_text())
             answers_file.write_text(json.dumps([
                 event["payload"]["answers"]
                 for event in expected if event["type"] == "user.input.resolved"
             ]))
-            model = ["", str(answers_file)]
+            model = ["hermes-test" if case == "shared-input" else "", str(answers_file)]
         if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES:
             model = [stored_id]
+        command = [binary, sys.executable, directory, directory, mode]
+        environment = {"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"}
+        if case == "shared-input":
+            usage = subprocess.run(command + model[:1], env=environment, timeout=5,
+                                   capture_output=True, text=True)
+            print(f"MISSING ANSWERS EXIT: {usage.returncode}")
+            assert usage.returncode == 1 and not usage.stdout
+            assert "--shared-input <model> <answers-file>" in usage.stderr, usage.stderr
         result = subprocess.run(
-            [binary, sys.executable, directory, directory, mode, *model],
-            env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
+            command + model, env=environment,
             timeout=45, capture_output=True, text=True,
         )
         replay_complete = (root / "replay-complete").exists()
@@ -311,7 +318,7 @@ def verify(binary, corpus, mode, case):
             print(mismatch.read_text(), file=sys.stderr)
     if mode == "--shared-submit":
         print("\n".join(line for line in result.stdout.splitlines() if not line.startswith("envelope: ")))
-    elif case not in GATE_CHECKS and case != "answered-gates" and case not in REOPEN_CASES:
+    elif case not in GATE_CHECKS and case not in {"answered-gates", "shared-input"} and case not in REOPEN_CASES:
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
@@ -325,6 +332,37 @@ def verify(binary, corpus, mode, case):
     result.check_returncode()
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
+    if case == "shared-input":
+        actual = [json.loads(line[10:]) for line in lines if line.startswith("envelope: ")]
+        expected = json.loads(expected_path.read_text())
+        assert len(actual) == len(expected) == 31
+        identities = {"user": "operator"}
+        for observed, fixture in zip(actual, expected):
+            identities[fixture["id"]] = observed["id"]
+            identities[fixture["run_id"]] = observed["run_id"]
+            for key in ("turn_id", "tool_call_id"):
+                if key in fixture:
+                    identities[fixture[key]] = observed[key]
+        for observed, fixture in zip(actual, expected):
+            for path, key in (("payload", "message_id"), ("final_response", "id")):
+                raw = fixture["payload"] if path == "payload" else fixture["payload"].get(path, {})
+                found = observed["payload"] if path == "payload" else observed["payload"].get(path, {})
+                if key in raw:
+                    identities[raw[key]] = found[key]
+        assert len(set(identities.values())) == len(identities)
+
+        def normalized(value, ids):
+            if isinstance(value, dict):
+                return {k: normalized(v, ids) for k, v in value.items() if not k.endswith("_ms")}
+            if isinstance(value, list):
+                return [normalized(item, ids) for item in value]
+            return ids.get(value, value)
+
+        assert normalized(expected, identities) == normalized(actual, {})
+        assert replay_complete and shutdowns == 1
+        replies = sum(frame["action"] == "expect-write" for frame in answered_frames(corpus))
+        print(f"BYTE-MATCHED GATE REPLIES: {replies}\nMATCHED SHARED ENVELOPES: {len(actual)}\nGATEWAY EOF: 1")
+        return
     if case in SHARED_CANCEL_CASES:
         assert replay_complete and shutdowns == 1
         return
