@@ -13,10 +13,10 @@ use futures::{executor::block_on, FutureExt, StreamExt};
 use oxap_adapter::{Adapter as _, Error, OpenRequest, SubmitRequest};
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
-    ContentPart, ContentPartType, Message, MessageContent, MessageRole, MessageSubmitRequest,
-    ReasoningLevel, RequestedDeliveryMode, ToolsListRequest, FEATURE_DELIVERY_BTW,
-    FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION,
-    FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
+    ContentPart, ContentPartType, Envelope, Message, MessageContent, MessageRole,
+    MessageSubmitRequest, ReasoningLevel, RequestedDeliveryMode, ToolsListRequest,
+    FEATURE_DELIVERY_BTW, FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_INSTRUCTIONS,
+    FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
 };
 use serde_json::{json, Value};
 
@@ -35,6 +35,8 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         .join(&pin().corpus);
     let corpus = corpus.join(match mode {
         "catalog" => "tools-catalog-sources/native.jsonl",
+        "run-streaming" | "run-buffered" => "streaming-provenance/native.jsonl",
+        "run-settlement" => "settlement-statuses/native.jsonl",
         mode if mode.starts_with("admission-") => "admission-corroboration/native.jsonl",
         _ => "initialize-lifecycle/native.jsonl",
     });
@@ -47,7 +49,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         executable: Some(peer.display().to_string()),
         tools: ToolPosture::Unrestricted,
         model: Some(
-            if mode.starts_with("admission-") {
+            if mode.starts_with("admission-") || mode.starts_with("run-") {
                 "claude-test"
             } else {
                 "configured-model"
@@ -324,6 +326,100 @@ fn claude_admission_refuses_a_closed_session_after_corroboration() {
     );
     block_on(session.close()).unwrap();
     println!("PASS admission-disconnect: the reader drained the echo, then EOF refused the pending submit");
+}
+
+#[test]
+fn claude_run_replays_streaming_and_settlement() {
+    for (mode, case) in [
+        ("run-streaming", "streaming-provenance"),
+        ("run-buffered", "streaming-provenance"),
+        ("run-settlement", "settlement-statuses"),
+    ] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let expected: Vec<Value> = serde_json::from_str(
+            &fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../..")
+                    .join(&pin().corpus)
+                    .join(case)
+                    .join("expected-oap.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let runs: Vec<_> = expected
+            .split_inclusive(|event| {
+                matches!(event["type"].as_str(), Some("run.completed" | "run.failed"))
+            })
+            .collect();
+        for (index, (expected, frame)) in runs
+            .iter()
+            .zip(frames.iter().filter(|frame| frame["action"] == "submit"))
+            .enumerate()
+        {
+            let text = frame["raw"]["message"]["content"].as_str().unwrap();
+            let (admission, stream) = block_on(session.submit(text_submit(text))).unwrap();
+            fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+            let actual: Vec<_> = block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .collect::<Result<Vec<Envelope>, _>>()
+                .unwrap();
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(|event| event.envelope_type.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .map(|event| event["type"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                "{mode} run {index}"
+            );
+            for (event, expected) in actual.iter().zip(*expected) {
+                let mut event = serde_json::to_value(event).unwrap();
+                assert_eq!(event["run_id"], admission.run_id.as_ref().unwrap().as_str());
+                assert_eq!(event["payload"]["run_id"], event["run_id"]);
+                let message = &event["payload"]["message_id"];
+                if !message.is_null() {
+                    assert_eq!(message, admission.message_ids[0].as_str());
+                    event["payload"]["message_id"] = expected["payload"]["message_id"].clone();
+                }
+                let final_id = &event["payload"]["final_response"]["id"];
+                if !final_id.is_null() {
+                    assert_eq!(final_id, admission.message_ids[0].as_str());
+                    event["payload"]["final_response"]["id"] =
+                        expected["payload"]["final_response"]["id"].clone();
+                }
+                assert!(event["timestamp_ms"].as_i64().unwrap() > 0);
+                event["timestamp_ms"] = expected["timestamp_ms"].clone();
+                event["id"] = expected["id"].clone();
+                event["run_id"] = expected["run_id"].clone();
+                event["payload"]["run_id"] = expected["payload"]["run_id"].clone();
+                if event["type"] == "run.started" {
+                    assert!(event["payload"]["started_at_ms"].as_i64().unwrap() > 0);
+                    event["payload"]["started_at_ms"] =
+                        expected["payload"]["started_at_ms"].clone();
+                }
+                assert_eq!(&event, expected, "{mode} run {index}");
+            }
+            let idle = block_on(session.state()).unwrap();
+            assert_eq!(idle.status.as_str(), "idle");
+            assert!(idle.active_run_id.is_none());
+            assert!(idle.active_runs.is_empty());
+        }
+        block_on(session.close()).unwrap();
+        assert!(directory.path().join("eof").is_file());
+        println!(
+            "PASS {mode}: {} runs and {} corpus envelopes",
+            runs.len(),
+            expected.len()
+        );
+    }
 }
 
 fn wait_for_turn(directory: &Path) {
