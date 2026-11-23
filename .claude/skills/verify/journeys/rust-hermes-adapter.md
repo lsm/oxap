@@ -256,3 +256,22 @@ nothing. Native interrupted settlement projects as `hermes_interrupted`.
 The second lets completion win and withholds the interrupt reply while the
 caller submits the next prompt. That prompt reaches Hermes after the reply.
 Stale run IDs and closed sessions refuse cancellation without a native write.
+
+Replay the shared session journal over stdio:
+
+```sh
+example="${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session"
+replay=.claude/skills/verify/scripts/rust-hermes-prompt-projection.py
+for case in shared-resume shared-resume-tiny shared-resume-exit; do
+  python3 "$replay" "$example" --shared-resume "$case" || exit $?
+done
+python3 "$replay" "$example" --shared-submit shared-resume-window
+```
+
+The recovery corpus drives a live replay through settlement and a completed
+suffix. Compare the serialized envelopes with the original submit stream.
+Check an unknown native ID, future and terminal cursors, and explicit close.
+Repeat with one retained envelope and with an inferred failure after gateway
+exit. The burst case checks the default 256-envelope window, the gap before
+that window, and exact replay of the retained suffix. The gateway expects
+only prompt writes and reaches EOF without a native replay call.

@@ -304,7 +304,20 @@ fn shared_submit(
         RequestedDeliveryMode, SessionStatus,
     };
 
-    let adapter = oxap_adapter_hermes::Adapter::new(config, model.to_owned());
+    let state_dir = Path::new(state_dir);
+    let mut adapter = oxap_adapter_hermes::Adapter::new(config, model.to_owned());
+    if mode == "--shared-resume" {
+        let capacity = if state_dir.join("shared-resume-tiny").exists() {
+            1
+        } else {
+            256
+        };
+        if capacity == 1 {
+            adapter = adapter.with_journal_capacity(capacity);
+        }
+        let descriptor = block_on(adapter.probe())?;
+        assert_eq!(descriptor.journal.capacity, capacity);
+    }
     let session = block_on(
         adapter.open(OpenRequest {
             session_id: "session".into(),
@@ -337,10 +350,10 @@ fn shared_submit(
         return shared_input(session.as_ref(), request, answers);
     }
     if mode == "--shared-cancel" {
-        return shared_cancel(session.as_ref(), request, std::path::Path::new(state_dir));
+        return shared_cancel(session.as_ref(), request, state_dir);
     }
     if mode == "--shared-resume" {
-        return shared_resume(session.as_ref(), request, std::path::Path::new(state_dir));
+        return shared_resume(session.as_ref(), request, state_dir);
     }
     let mut unsupported = request.clone();
     unsupported.request.model_id = Some("other".into());
@@ -348,7 +361,6 @@ fn shared_submit(
         block_on(session.submit(unsupported)),
         Err(Error::UnsupportedControl(_))
     ));
-    let state_dir = Path::new(state_dir);
     let mut pending = session.submit(request.clone());
     assert!(matches!(
         pending
@@ -488,7 +500,22 @@ fn shared_resume(
     assert_eq!(replay_wires(follow)?, original);
     println!("LIVE REPLAY ENVELOPES: {}", original.len());
     let (ended, suffix) = resume(1)?;
-    assert_eq!(ended.state.status, SessionStatus::IDLE);
+    if state_dir.join("shared-resume-exit").exists() {
+        assert_eq!(ended.state.status, SessionStatus::ERROR);
+        let terminal: serde_json::Value = serde_json::from_str(&original[1])?;
+        assert_eq!(terminal["type"], "run.failed");
+        assert_eq!(terminal["payload"]["error"]["code"], "hermes_process_exit");
+        println!("REPLAY AFTER GATEWAY EXIT: 1");
+    } else {
+        assert_eq!(ended.state.status, SessionStatus::IDLE);
+    }
+    if state_dir.join("shared-resume-tiny").exists() {
+        let Err(Error::ReplayGap(gap)) = resume(0) else {
+            return Err("expected a gap in the one-entry journal".into());
+        };
+        assert_eq!((gap.oldest_available, gap.latest_available), (2, 2));
+        println!("REPLAY WINDOW: 1");
+    }
     assert_eq!((ended.replayed_from, ended.replayed_through), (2, 2));
     assert_eq!(replay_wires(suffix)?, original[1..]);
     let (at_end, empty) = resume(2)?;

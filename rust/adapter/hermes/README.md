@@ -18,6 +18,12 @@ session to waiting for input. Answer them through the shared session using
 the declared participant. Tool lifecycle events stay on the same run stream.
 Use the gateway API below for reasoning settings.
 
+The shared session keeps a 256-envelope journal in memory by default. Use
+`Adapter::with_journal_capacity` to choose another capacity. Resume a known
+run from its last seen sequence to replay the retained suffix and follow a
+live run. An evicted cursor returns the available bounds. A gateway exit
+preserves the journal until the shared session closes.
+
 On Unix, `GatewaySession::create` starts the gateway, creates a native
 session, and keeps its runtime and stored identities. A requested reasoning
 level is passed to creation and checked by a session-scoped `config.set`.

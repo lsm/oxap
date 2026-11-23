@@ -117,6 +117,12 @@ impl GatewaySession {
 }
 
 impl GatewayRun<'_> {
+    pub(crate) fn take_started(&mut self) -> Envelope {
+        self.pending
+            .pop_front()
+            .expect("admitted Hermes run starts with run.started")
+    }
+
     pub(crate) fn admission(&self, model_id: &str) -> MessageSubmitResponse {
         MessageSubmitResponse {
             session_id: self.session_id.clone(),
