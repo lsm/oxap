@@ -167,6 +167,7 @@ python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
   "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --shared-input shared-input
 ```
 
+Omitting the answers file must exit 1 and show the shared-input usage.
 Expect four byte-matched native replies, 31 corpus-matched envelopes after
 normalizing generated identities, the caller's participant ID and clocks,
 and one clean gateway EOF. The caller checks waiting state before answering,
