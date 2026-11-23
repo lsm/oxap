@@ -234,7 +234,7 @@ fn verify_submit(mode: &str, request: SubmitRequest, expand_prompts: bool) {
 }
 
 #[test]
-fn admits_the_corpus_turn_only_after_corroboration() {
+fn claude_admission_waits_for_corroboration() {
     for mode in ["admission-single", "admission-list", "admission-compacting"] {
         let (adapter, directory, frames) = fixture(mode);
         let session = block_on(adapter.open(OpenRequest {
@@ -296,6 +296,34 @@ fn admits_the_corpus_turn_only_after_corroboration() {
         println!("PASS {mode}: only corroborated turn admitted, run.started first, buffered metadata replayed");
     }
     println!("3/3 Claude admission peer cases passed");
+}
+
+#[test]
+fn claude_admission_refuses_a_closed_session_after_corroboration() {
+    let (adapter, directory, _) = fixture("admission-disconnect");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let mut submission = session.submit(text_submit("hello"));
+    let mut context = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(submission.as_mut().poll(&mut context).is_pending());
+    wait_for_turn(directory.path());
+    fs::write(directory.path().join("release-turn"), []).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(block_on(session.state()), Err(Error::SessionClosed)) {
+        assert!(Instant::now() < deadline, "transport did not close");
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(directory.path().join("echo-drained").is_file());
+    assert!(
+        matches!(block_on(submission), Err(Error::SessionClosed)),
+        "a closed session must not admit a run"
+    );
+    block_on(session.close()).unwrap();
+    println!("PASS admission-disconnect: the reader drained the echo, then EOF refused the pending submit");
 }
 
 fn wait_for_turn(directory: &Path) {

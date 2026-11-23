@@ -91,6 +91,11 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
             raw["session_id"] = binding
             print(json.dumps(raw), flush=True)
 
+        def barrier():
+            print(json.dumps({"type": "control_request", "request_id": "barrier",
+                              "request": {"subtype": "barrier"}}), flush=True)
+            assert json.loads(sys.stdin.readline())["response"]["request_id"] == "barrier"
+
         observe(dict(init, model="earlier-buffered-model"))
         for observed in frames[3:6]:
             native = observed["raw"]
@@ -104,9 +109,7 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
         observe(dict(echo, user_message_uuid=frame["uuid"], user_message_uuids=[], parent_tool_use_id="child"))
         observe(dict(frames[8]["raw"], user_message_uuid=frame["uuid"], user_message_uuids=[],
                      origin={"kind": "task-notification"}))
-        print(json.dumps({"type": "control_request", "request_id": "barrier",
-                          "request": {"subtype": "barrier"}}), flush=True)
-        assert json.loads(sys.stdin.readline())["response"]["request_id"] == "barrier"
+        barrier()
 
     Path("turn-observed").touch()
     if mode == "submit-abandon":
@@ -122,9 +125,13 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
         if mode == "admission-compacting":
             observe({"type": "system", "subtype": "status", "status": "compacting"})
         else:
-            single = mode == "admission-single"
+            single = mode != "admission-list"
             observe(dict(echo, user_message_uuid=frame["uuid"] if single else "",
                          user_message_uuids=[] if single else [frame["uuid"]]))
+        if mode == "admission-disconnect":
+            barrier()
+            Path("echo-drained").touch()
+            sys.exit(0)
         ready = select.select([sys.stdin], [], [], 3)[0]
         if ready:
             assert not sys.stdin.readline(), "extra native input"
