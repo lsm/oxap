@@ -101,8 +101,12 @@ Session submission accepts one user message with automatic delivery. Text
 parts are joined with newlines. `Config::expand_prompts` permits native prompt
 expansion. By default the user frame is marked client-composed. Before writing
 the frame the session reserves one pending turn, which blocks another submit
-or close. Sending a frame does not admit a run. This port stage fails a pending
-submit on transport loss and leaves native admission and event publication to
-later slices. Hosts can set their own admission deadline. On timeout, drop
-the submit future and close the retired session. Per-run tool selection is
-unavailable until permission handling can enforce it.
+or close. A matching native turn marker or compacting status admits the run.
+The stream begins with `run.started`, then the reducer applies buffered
+observations in arrival order. Explicitly foreign markers, child echoes, and
+injected output do not join the turn. This stage projects admission and native
+metadata updates. Deltas and terminal events follow in later slices. Transport
+loss before the run is installed fails the pending submit, even if the reader
+has already seen a matching marker. Hosts can set a deadline by dropping
+that future and closing the retired session. Per-run tool
+selection is unavailable until permission handling can enforce it.
