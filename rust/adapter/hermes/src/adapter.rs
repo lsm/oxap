@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crossbeam_channel::{never, unbounded, Sender};
+use crossbeam_channel::{bounded, never, unbounded, Receiver, Select, Sender, TryRecvError};
 use futures_channel::{mpsc, oneshot};
 use oxap_adapter::{
     journal::Journal, refuse_unadvertised_controls, refuse_unadvertised_live_settings,
@@ -79,6 +79,7 @@ impl Adapter {
             ("run.status", SupportLevel::EMULATED),
             ("run.resume", SupportLevel::DEGRADED),
             ("run.replay", SupportLevel::DEGRADED),
+            ("run.reconciliation", SupportLevel::DEGRADED),
             ("user_input", SupportLevel::NATIVE),
             ("action.tools", SupportLevel::DEGRADED),
         ]
@@ -196,7 +197,8 @@ impl AdapterContract for Adapter {
             }
             state.reasoning_level = request.reasoning_level;
             state.updated_at_ms = self.runtime.now_ms();
-            Ok(Box::new(OpenedSession {
+            let (wake_idle, wake) = bounded(1);
+            let session = OpenedSession {
                 stored_id: gateway.stored_id().to_owned(),
                 runtime_id: gateway.runtime_id().to_owned(),
                 responder: if request.participant.id.as_str().is_empty() {
@@ -206,6 +208,7 @@ impl AdapterContract for Adapter {
                 },
                 process: gateway.process.clone(),
                 control: Arc::new(Mutex::new(())),
+                wake_idle,
                 slot: Arc::new(Mutex::new(SessionSlot {
                     gateway: Some(gateway),
                     state,
@@ -214,7 +217,13 @@ impl AdapterContract for Adapter {
                     journal: Journal::new(self.journal_capacity),
                 })),
                 runtime: self.runtime.clone(),
-            }) as Box<dyn Session>)
+            };
+            let slot = session.slot.clone();
+            std::thread::Builder::new()
+                .name("hermes-idle-observer".into())
+                .spawn(move || observe_idle(&slot, &wake))
+                .map_err(Error::harness)?;
+            Ok(Box::new(session) as Box<dyn Session>)
         })
     }
 
@@ -234,6 +243,7 @@ impl NativeLister for Adapter {
 struct OpenedSession {
     process: Arc<Process>,
     control: Arc<Mutex<()>>,
+    wake_idle: Sender<()>,
     slot: Arc<Mutex<SessionSlot>>,
     stored_id: String,
     runtime_id: String,
@@ -250,8 +260,27 @@ struct SessionSlot {
 }
 
 impl SessionSlot {
-    fn require_idle(&self, session_id: &SessionId) -> Result<(), Error> {
-        if self.state.status == SessionStatus::CLOSED || self.state.status == SessionStatus::ERROR {
+    fn reconcile_idle(&mut self) {
+        if self.state.status == SessionStatus::IDLE
+            && self
+                .gateway
+                .as_mut()
+                .is_some_and(|gateway| gateway.drain_idle().is_err())
+        {
+            self.gateway = None;
+        }
+    }
+
+    fn idle_gateway_lost(&self) -> bool {
+        self.state.status == SessionStatus::IDLE && self.gateway.is_none()
+    }
+
+    fn require_idle(&mut self, session_id: &SessionId) -> Result<(), Error> {
+        self.reconcile_idle();
+        if self.state.status == SessionStatus::CLOSED
+            || self.state.status == SessionStatus::ERROR
+            || self.idle_gateway_lost()
+        {
             Err(Error::SessionClosed)
         } else if *session_id != self.state.session_id {
             Err(Error::RunNotFound)
@@ -262,7 +291,12 @@ impl SessionSlot {
         }
     }
 
-    fn settle(&mut self, mut gateway: Option<GatewaySession>, runtime: &Runtime) {
+    fn settle(
+        &mut self,
+        mut gateway: Option<GatewaySession>,
+        runtime: &Runtime,
+        wake_idle: &Sender<()>,
+    ) {
         if self.state.status == SessionStatus::CLOSED {
             return;
         }
@@ -280,6 +314,8 @@ impl SessionSlot {
             SessionStatus::ERROR
         };
         self.gateway = gateway;
+        self.reconcile_idle();
+        let _ = wake_idle.try_send(());
     }
 
     fn cancel_receipt(&self, run_id: &RunId) -> Result<RunCancelResponse, Error> {
@@ -331,6 +367,31 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
+fn observe_idle(slot: &Mutex<SessionSlot>, wake: &Receiver<()>) {
+    loop {
+        let inbound = {
+            let mut slot = lock(slot);
+            slot.reconcile_idle();
+            if slot.state.status == SessionStatus::CLOSED
+                || slot.state.status == SessionStatus::ERROR
+                || slot.idle_gateway_lost()
+            {
+                return;
+            }
+            slot.gateway
+                .as_ref()
+                .map_or_else(never, |gateway| gateway.inbound().clone())
+        };
+        let mut ready = Select::new();
+        let wake_index = ready.recv(wake);
+        ready.recv(&inbound);
+        if ready.ready() == wake_index && matches!(wake.try_recv(), Err(TryRecvError::Disconnected))
+        {
+            return;
+        }
+    }
+}
+
 impl OpenedSession {
     fn open_slot(&self) -> Result<MutexGuard<'_, SessionSlot>, Error> {
         let slot = lock(&self.slot);
@@ -342,6 +403,7 @@ impl OpenedSession {
 
     fn shutdown(&self) -> Result<(), Error> {
         lock(&self.slot).state.status = SessionStatus::CLOSED;
+        let _ = self.wake_idle.try_send(());
         self.process.close().map_err(Error::harness)
     }
 }
@@ -354,7 +416,14 @@ impl Drop for OpenedSession {
 
 impl Session for OpenedSession {
     fn state(&self) -> BoxFuture<'_, SessionState> {
-        Box::pin(async { Ok(self.open_slot()?.state.clone()) })
+        Box::pin(async {
+            let mut slot = self.open_slot()?;
+            slot.reconcile_idle();
+            if slot.idle_gateway_lost() {
+                return Err(Error::SessionClosed);
+            }
+            Ok(slot.state.clone())
+        })
     }
 
     fn native_session_id(&self) -> Option<String> {
@@ -377,6 +446,7 @@ impl Session for OpenedSession {
             let control = self.control.clone();
             let runtime = self.runtime.clone();
             let responder = self.responder.clone();
+            let wake_idle = self.wake_idle.clone();
             let (reply, admission) = oneshot::channel();
             std::thread::spawn(move || {
                 let ordering = lock(&control);
@@ -410,7 +480,7 @@ impl Session for OpenedSession {
                     Err(error) => {
                         let reusable = matches!(error, PromptStartError::Refused(_))
                             && gateway.client().err().is_none();
-                        lock(&slot).settle(reusable.then_some(gateway), &runtime);
+                        lock(&slot).settle(reusable.then_some(gateway), &runtime, &wake_idle);
                         let _ = reply.send(Err(error.into()));
                         return;
                     }
@@ -453,7 +523,7 @@ impl Session for OpenedSession {
                         slot.journal.close();
                     }
                     let reusable = terminal.is_some() && gateway.observed_settlement;
-                    slot.settle(reusable.then_some(gateway), &runtime);
+                    slot.settle(reusable.then_some(gateway), &runtime, &wake_idle);
                 }
                 if let Some(event) = terminal {
                     let _ = events.unbounded_send(Ok(event));

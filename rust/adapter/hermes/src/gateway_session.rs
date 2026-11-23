@@ -1,8 +1,11 @@
 use std::{collections::VecDeque, sync::Arc, time::Instant};
 
-use crossbeam_channel::{at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{
+    at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender, TryRecvError,
+};
 use futures_channel::oneshot;
 use oxap_adapter::gojson::{go_quote, zero};
+use oxap_adapter::jsonrpc::RequestId;
 use oxap_adapter::{Error, InteractionResolution, UnsupportedControl, CONTROL_UNSATISFIABLE};
 use oxap_protocol::{
     ReasoningLevel, RecoveryMetadata, SessionId, SessionState, SessionStatus, FEATURE_OPEN_REOPEN,
@@ -13,8 +16,10 @@ use serde_json::value::RawValue;
 
 use crate::native::{
     decode_strict, Event, InterruptResult, MessageCompletePayload, PromptSubmitResult,
-    SessionInfoPayload, EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_START, METHOD_CONFIG_SET,
-    METHOD_PROMPT_SUBMIT, METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT, METHOD_SESSION_RESUME,
+    SessionInfoPayload, EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_DELTA, EVENT_MESSAGE_START,
+    EVENT_REASONING_DELTA, EVENT_THINKING_DELTA, EVENT_TOOL_COMPLETE, EVENT_TOOL_START,
+    METHOD_CONFIG_SET, METHOD_PROMPT_SUBMIT, METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT,
+    METHOD_SESSION_RESUME, REQUEST_APPROVAL, REQUEST_CLARIFY, REQUEST_SECRET, REQUEST_SUDO,
     SUBMIT_STREAMING,
 };
 use crate::process::{Process, ProcessConfig};
@@ -294,17 +299,11 @@ impl GatewaySession {
                 },
             };
             match inbound {
-                Ok(Inbound::Notification(notification)) => {
-                    let event = decode_event(&notification.method, notification.params.as_deref())
-                        .map_err(Error::harness)?;
-                    if event.session_id.is_empty() {
-                        continue;
+                Ok(message) => {
+                    if let Some(observation) = self.observe(message)? {
+                        return Ok(observation);
                     }
-                    self.accept_event(&event)?;
-                    return Ok(Observation::Event(event));
                 }
-                Ok(Inbound::Request(request)) => return Ok(Observation::Request(request)),
-                Ok(Inbound::Barrier(ack)) => drop(ack),
                 Err(RecvTimeoutError::Timeout) => return Err(observation_timeout().into()),
                 Err(RecvTimeoutError::Disconnected) => {
                     return Err(ObservationError::Transport(
@@ -313,6 +312,62 @@ impl GatewaySession {
                             .unwrap_or_else(|| "hermes adapter: observation stream closed".into()),
                     ));
                 }
+            }
+        }
+    }
+
+    fn observe(&mut self, inbound: Inbound) -> Result<Option<Observation>, Error> {
+        match inbound {
+            Inbound::Notification(notification) => {
+                let event = decode_event(&notification.method, notification.params.as_deref())
+                    .map_err(Error::harness)?;
+                if event.session_id.is_empty() {
+                    return Ok(None);
+                }
+                self.accept_event(&event)?;
+                Ok(Some(Observation::Event(event)))
+            }
+            Inbound::Request(request) => Ok(Some(Observation::Request(request))),
+            Inbound::Barrier(_) => Ok(None),
+        }
+    }
+
+    pub(crate) fn drain_idle(&mut self) -> Result<(), Error> {
+        loop {
+            let observation = match self.inbound.try_recv() {
+                Ok(message) => self.observe(message)?,
+                Err(TryRecvError::Empty) => return Ok(()),
+                Err(TryRecvError::Disconnected) => return Err(Error::SessionClosed),
+            };
+            match observation {
+                Some(Observation::Event(event))
+                    if matches!(
+                        event.kind.as_str(),
+                        EVENT_MESSAGE_START
+                            | EVENT_MESSAGE_DELTA
+                            | EVENT_MESSAGE_COMPLETE
+                            | EVENT_REASONING_DELTA
+                            | EVENT_THINKING_DELTA
+                            | EVENT_TOOL_START
+                            | EVENT_TOOL_COMPLETE
+                    ) =>
+                {
+                    return Err(Error::SessionClosed);
+                }
+                Some(Observation::Request(request)) => {
+                    if !matches!(request.id, RequestId::String(_))
+                        || matches!(
+                            request.method.as_str(),
+                            REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
+                        )
+                    {
+                        return Err(Error::SessionClosed);
+                    }
+                    request
+                        .respond_error(-32601, "method not found")
+                        .map_err(Error::harness)?;
+                }
+                _ => {}
             }
         }
     }
