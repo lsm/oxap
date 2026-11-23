@@ -76,7 +76,7 @@ startup, refusing the entry (naming it) on every failure:
 Scope: `zig/src/adapter/config.zig` (admit the member on a third type and
 reword its refusal), `zig/src/tools/makai.zig`
 (`deepseekBackendConfig` gains the routed-environment branch), tests beside
-the claude routing tests, and a `drafts/hub.md` paragraph in the same PR. Go
+the claude routing tests, and a `drafts/agent-service.md` paragraph in the same PR. Go
 and Rust change nothing.
 
 ### What HyperNeo changes (its own repo)

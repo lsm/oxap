@@ -109,11 +109,16 @@ jobs:
         with:
           name: harness-delivery
           path: ${{ runner.temp }}/harness-delivery/
+      - name: Prepare configured SDK launch verification
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/go-sdk-launch" /tmp/oapx-go-sdk/bin/oxap
       - name: Run the SDK tests
         env:
-          OAP_SDK_BINARY_PATH: /tmp/oapx-go-sdk/bin/oxap
+          OAP_SDK_BINARY_PATH: ${{ runner.temp }}/go-sdk-launch/oxap
           NODE_ENV: test
-        run: go test -race ./go/sdk/...
+        run: go test -race -v ./go/sdk/...
+      - name: Verify SDK config cleanup
+        if: always()
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py check "$RUNNER_TEMP/go-sdk-launch"
       - name: Tests leave no credential store in the checkout
         if: always()
         run: ./scripts/check-no-test-litter.sh

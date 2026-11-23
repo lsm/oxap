@@ -18,6 +18,9 @@ sections that are genuinely new are **Concurrency**, **The credential
 channel**, and the parts of **Ordering** that follow from a connection carrying
 more than one inference.
 
+Start this binding with `oxap serve --config server.json` and
+`provider.stdio: raw`. The file may also select a raw Agent binding.
+
 ## What this binding is for
 
 A caller that wants one vocabulary over many inference vendors, talking to a

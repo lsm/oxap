@@ -16,7 +16,7 @@ decision of its own (L105–110), and neither validator judges it.
 
 No 0012 or 0026 row exists. 0012 retires persistence, and the transcript surface
 it staged is ruled by Decision 0051. 0026 is hub wire behaviour, pinned by the
-hub tests and [`drafts/hub.md`](../hub.md).
+hub tests and [`drafts/agent-service.md`](../hub.md).
 
 ### [0010] An optional member on the three terminals
 

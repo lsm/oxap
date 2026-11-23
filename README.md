@@ -623,14 +623,15 @@ adapter's pin — which makes it the first native adapter to exercise the
 degraded opt-in end to end. The reference adapter serves the fixed catalog its
 model gate already enforces.
 
-### Local daemon (`oxap serve`)
+### Agent Service
 
-`oxap serve` is the product's multi-session daemon; `hub` is its old name and
-still works. It carries the registry config (`--config`), the stdio
-transport-object wire (`--stdio`) and HTTP + Server-Sent Events (`--addr`).
-`goap serve` is the same daemon in this repository's Go tree, and it is **not
-installed**: run it with `go run`. [Decision 0038](decisions/0038-one-released-binary-and-a-library-for-every-language.md)
-is why there is one released binary, and a library for every language.
+Start the product's Agent Service with
+`oxap serve --config examples/agent-service.json`. The service carries
+many sessions over HTTP and SSE or multi-session stdio. See the
+[Agent Service binding](drafts/agent-service.md) and
+[server migration guide](docs/server-config-migration.md).
+`goap serve` runs the corresponding daemon from the Go tree using `go run`.
+
 
 `goap serve` exposes the adapter registry over HTTP + Server-Sent Events so any
 client — not only Go hosts — can drive any OAP adapter. The daemon is a thin

@@ -1,6 +1,6 @@
 """OAP Python SDK with source-compatible Makai class names.
 
-Starts ``oapx serve agent,provider --stdio`` by default and exposes four
+Starts ``oxap serve --config <generated-server.json>`` by default and exposes four
 namespaces over profiled OAP 0.1 newline-delimited JSON:
 
 ``client.auth``

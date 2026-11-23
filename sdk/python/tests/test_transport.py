@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Any, List
 
 import pytest
@@ -83,6 +84,22 @@ async def test_spawn_failure_is_typed(fake: FakeServerFactory) -> None:
     transport = StdioTransport(command="/definitely/not/a/binary", args=[])
     with pytest.raises(MakaiStreamError, match="failed to spawn"):
         await transport.connect()
+
+
+async def test_default_config_is_removed_on_spawn_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    paths: list[Path] = []
+
+    async def fail(command: str, *args: str, **kwargs: Any) -> None:
+        assert args[:2] == ("serve", "--config")
+        path = Path(args[2])
+        assert path.is_file()
+        paths.append(path)
+        raise FileNotFoundError(command)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fail)
+    with pytest.raises(MakaiStreamError, match="failed to spawn"):
+        await StdioTransport(command="/missing").connect()
+    assert len(paths) == 1 and not paths[0].exists()
 
 
 async def test_frames_route_by_request_id(fake: FakeServerFactory) -> None:

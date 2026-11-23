@@ -48,7 +48,7 @@ not been surveyed.
    `go/serve/serveendpoint/dispatch.go` (the switch and settings branches,
    sequenced by `nextStateSequence` in `endpoint.go`), Zig at
    `zig/src/adapter/endpoint.zig` (the same two).
-2. **No fan-out in the hub.** [The hub draft](hub.md) records that the
+2. **No fan-out in the hub.** [The hub draft](agent-service.md) records that the
    `session.state.updated` an endpoint publishes after a settings response
    "has nowhere to go, because the hub's streams are a run's". A host behind
    the hub reads `state`.

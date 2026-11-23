@@ -289,7 +289,7 @@ Each names the entry, at startup:
 
 Scope: `zig/src/adapter/config.zig` (admit the member and its object's fields
 on the six kinds), `zig/src/tools/makai.zig` (the per-kind translation and
-refusals), tests beside the routing tests, a `drafts/hub.md` paragraph, and a
+refusals), tests beside the routing tests, a `drafts/agent-service.md` paragraph, and a
 verify journey. The journey's stub endpoint asserts the selected upstream and
 auth scheme, and a stub *child* that echoes a sentinel key value in its
 stderr, in an error the adapter surfaces, and in its normal output proves the

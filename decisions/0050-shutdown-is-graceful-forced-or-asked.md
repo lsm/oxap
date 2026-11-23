@@ -21,7 +21,7 @@ storage interface, `docs/storage.md` (#1206). Applies to both trees, to
 
 ## Context
 
-Today shutdown is one thing. [hub.md](../drafts/hub.md) says stdin EOF,
+Today shutdown is one thing. [hub.md](../drafts/agent-service.md) says stdin EOF,
 SIGINT or SIGTERM stops admitting, settles admitted work inside a 5 s window
 per stage, closes every session and exits. A run that is still working when
 the window ends is cut off, its queued reservations vanish, and after a

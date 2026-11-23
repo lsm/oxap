@@ -24,6 +24,8 @@ import (
 
 const DefaultParticipant = protocol.ParticipantID("user")
 
+type AgentServiceClient = Client
+
 type Client struct {
 	base        string
 	http        *http.Client

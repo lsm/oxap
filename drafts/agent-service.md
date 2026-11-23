@@ -1,14 +1,14 @@
-# The Hub: Many Sessions on One Wire
+# Agent Service: Many Sessions on One Wire
 
 Status: proposed design; the specification both trees are judged against
 Date: 2026-09-26
 Base protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
-Reference implementation: `goap serve` (`go/serve`), the only hub that exists
-Written for: `oapx serve` (Zig), which does not exist yet and is the reason this
-document does
-Decides: the wire the Go hub serves today by behaviour
-Governs: the transports, not the profile
+Reference implementations: `oxap serve --config server.json` (Zig), `goap serve` (Go)
+Governs: the multi-session transports
+
+Set `agent.http` or `agent.stdio: multi_session` to select this binding.
+See the [server migration guide](../docs/server-config-migration.md).
 
 Follows [Decision 0032](../decisions/0032-go-and-zig-are-peers.md): where this
 document and either tree disagree, this document decides, and the wrong side
@@ -23,7 +23,7 @@ catalog) and [Decision 0020](../decisions/0020-error-codes-are-declared.md)
 
 ## Why this document exists
 
-The hub's wire is defined by three things and no fourth: `go/serve/servestdio`
+The Agent Service wire is defined by three things and no fourth: `go/serve/servestdio`
 and `go/serve/servehttp`, the README's daemon sections, and `clients/ts`. A Zig
 port has nothing else to be judged against, and
 [Decision 0032](../decisions/0032-go-and-zig-are-peers.md) put an end to "match
@@ -34,7 +34,7 @@ Every rule below names the Go test that pins it today. A rule with no pinning
 test says **none** — those are the places a port can drift without either tree
 noticing, and each carries a numbered entry in [Known gaps](#known-gaps).
 
-## What the hub is
+## What the Agent Service is
 
 One long-running local process that runs many agent sessions at once across any
 mix of harness backends, and answers clients on two transports:
@@ -2690,7 +2690,7 @@ The two corner tests were rewritten to those answers. The rows below record how 
 
 | | |
 | --- | --- |
-| **The rule, which is not in doubt** | `drafts/hub.md:461`: a wrong `Content-Type` is refused `415`, and `:462-463` admit any `charset`. That is the whole pin — it does not say *which* requests the gate applies to, and the draft names no predicate for that. |
+| **The rule, which is not in doubt** | `drafts/agent-service.md:461`: a wrong `Content-Type` is refused `415`, and `:462-463` admit any `charset`. That is the whole pin — it does not say *which* requests the gate applies to, and the draft names no predicate for that. |
 | **What the Zig port does** | `zig/src/hub/http.zig:381` gates on `carriesBody(request)` — declared at `:385`, returning `content_length > 0` at `:386` — and it does so in `answer()`, so it is decided on the head for **every** request. The companion `declaresJson` it calls is declared at `:389`. A `POST` with `Content-Length: 0` and `Content-Type: text/plain` passes the gate; a `GET` carrying a body with `text/plain` is refused. |
 | **What Go does** | `servehttp/server.go:747` gates inside `readRequest`, which is called by the four body-reading routes only — `handleOpen` at `:191`, `handleSubmit` at `:321`, `handleResolve` at `:382`, `handleCancel` at `:496` — and the check reads only `r.Header.Get("Content-Type")`, with no reference to length. So a `POST` to `close` (`:643`), which never calls `readRequest`, is not gated at all, and a `POST` with `Content-Length: 0` and `text/plain` **is** refused 415, because length is never consulted. |
 | **The two corners, stated** | **Empty body, wrong type, on a body-reading route.** `POST /adapters/{name}/sessions` — `handleOpen`, one of the four that call `readRequest` — with `Content-Length: 0` and `Content-Type: text/plain`: **Go answers 415**, because its check reads the media type and never the length, and **Zig passes the gate**, because `carriesBody` is false, and the route then refuses the empty body `400 malformed_json`. **Body on a listing.** `GET /adapters` carrying a body with `text/plain`: **Zig answers 415**, decided on the head, and **Go answers the listing**, because no listing route calls `readRequest`. |

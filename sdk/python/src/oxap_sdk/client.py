@@ -1,6 +1,6 @@
 """The top-level client: one transport, four namespaces.
 
-``MakaiClient`` owns a single ``oapx serve agent,provider --stdio`` child process and exposes
+``MakaiClient`` owns a single ``oxap serve --config <generated-server.json>`` child process and exposes
 ``auth``, ``models``, ``provider``, and ``agent`` over it. The protocols
 multiplex, so concurrent calls on one client are fine; ordering is guaranteed
 only within a stream or session.
@@ -190,8 +190,8 @@ def connect(
     Args:
         command: Explicit binary to run. Defaults to
             :func:`~oxap_sdk.binary.resolve_makai_binary`.
-        args: Process arguments. Defaults to
-            ``["serve", "agent,provider", "--stdio"]``.
+        args: Process arguments. The default passes a generated service
+            config. Explicit arguments are passed through.
         cwd: Working directory for the child process.
         env: Environment for the child process. Defaults to the parent's.
         resolver: Binary resolution options.
