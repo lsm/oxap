@@ -7,21 +7,21 @@ use oxap_adapter::{
     Session as SessionContract, UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
-    CapabilityDescriptor, EndpointDescriptor, FeatureSupport, SupportLevel, ToolSourceDescriptor,
+    CapabilityDescriptor, EndpointDescriptor, FeatureSupport, SupportLevel,
     FEATURE_COMPACTION_POLICY, FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_OPEN_REOPEN,
     FEATURE_RUN_COMPACTION, FEATURE_SESSION_REASONING, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
-    MODE_SESSION_LIVE, MODE_SESSION_OPEN, PROFILE, SCOPE_RUN, TOOL_SOURCE_NATIVE, VERSION,
+    MODE_SESSION_LIVE, MODE_SESSION_OPEN, PROFILE, SCOPE_RUN, VERSION,
 };
 use oxap_protocol::{SessionState, SessionStatus};
 
 use crate::{
+    catalog::native_source,
     native::{apply_flag_settings_request, initialize_request, settings_flags, FlagSettings},
     rpc::{Process, ProcessConfig},
     session::{bind, OpenedSession},
 };
 
 pub(crate) const ENDPOINT_ID: &str = "claude-code.cli";
-const NATIVE_TOOL_SOURCE: &str = "claude-code-native";
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 
 #[derive(Clone, Debug, Default)]
@@ -241,12 +241,7 @@ impl Adapter {
                 protocol_versions: vec![VERSION.into()],
                 profiles: vec![PROFILE.into()],
                 features,
-                sources: vec![ToolSourceDescriptor {
-                    id: NATIVE_TOOL_SOURCE.into(),
-                    kind: TOOL_SOURCE_NATIVE.into(),
-                    display_name: "Claude Code built-in tools".into(),
-                    ..ToolSourceDescriptor::default()
-                }],
+                sources: vec![native_source()],
                 ..CapabilityDescriptor::default()
             },
             capability_revision: pin().capability_revision.clone(),

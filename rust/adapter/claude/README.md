@@ -80,3 +80,10 @@ it. Each raw member is then copied from the same span of the frame's own
 bytes, so it keeps the escape; the replacement keeps every escape six bytes
 long, so the spans line up. A raw member is UTF-8 text, so invalid UTF-8
 inside one reads as U+FFFD where Go keeps the byte.
+
+An idle `system/init` replaces the session's tool catalog. A tool name with
+an MCP prefix uses the longest matching listed server name and otherwise
+uses the built-in source. A scoped list requires degraded opt-in and
+publishes the source attribution for subsequent calls. Until a scoped
+response serves an observed catalog, only built-in attribution is available.
+An unscoped list exposes only the built-in source.
