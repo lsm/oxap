@@ -7,7 +7,7 @@ import { createMakaiClient, MakaiAuthError } from "../src";
 
 const binaryPath = process.env.OAP_SDK_BINARY_PATH;
 
-test("e2e: connect to oapx serve agent,provider over stdio", async (t) => {
+test("e2e: connect to configured Agent and Provider profiles", async (t) => {
   if (!binaryPath) {
     t.skip("OAP_SDK_BINARY_PATH is not set");
     return;

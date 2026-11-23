@@ -42,13 +42,6 @@ type Options struct {
 	Logger *slog.Logger
 }
 
-func (o *Options) args() []string {
-	if o == nil || o.Args == nil {
-		return []string{"serve", "agent,provider", "--stdio"}
-	}
-	return o.Args
-}
-
 func (o *Options) protocolVersion() string {
 	if o == nil || o.ExpectedProtocolVersion == "" {
 		return "0.1"

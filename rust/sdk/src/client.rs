@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -6,7 +7,7 @@ use std::time::Duration;
 use crate::agent::AgentApi;
 use crate::auth::{AuthApi, AuthHandlers};
 use crate::binary::BinaryResolver;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::ModelsApi;
 use crate::provider::ProviderApi;
 use crate::transport::{Transport, TransportOptions};
@@ -20,7 +21,7 @@ const DEFAULT_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ClientBuilder {
     command: Option<PathBuf>,
     resolver: BinaryResolver,
-    args: Vec<String>,
+    args: Option<Vec<String>>,
     cwd: Option<PathBuf>,
     env: BTreeMap<String, String>,
     env_clear: bool,
@@ -37,11 +38,7 @@ impl Default for ClientBuilder {
         Self {
             command: None,
             resolver: BinaryResolver::default(),
-            args: vec![
-                "serve".to_owned(),
-                "agent,provider".to_owned(),
-                "--stdio".to_owned(),
-            ],
+            args: None,
             cwd: None,
             env: BTreeMap::new(),
             env_clear: false,
@@ -95,7 +92,7 @@ impl ClientBuilder {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.args = args.into_iter().map(Into::into).collect();
+        self.args = Some(args.into_iter().map(Into::into).collect());
         self
     }
 
@@ -149,9 +146,30 @@ impl ClientBuilder {
             Some(command) => command.clone(),
             None => self.resolver.resolve().await?,
         };
+        let mut config = None;
+        let args = match self.args {
+            Some(args) => args,
+            None => {
+                let mut file = tempfile::NamedTempFile::new().map_err(|err| {
+                    Error::transport(format!("cannot create runtime config: {err}"))
+                })?;
+                file.write_all(br#"{"agent":{"stdio":"raw","adapter":"builtin","adapters":{"builtin":{"type":"oapx"}}},"provider":{"stdio":"raw"}}"#)
+                    .map_err(|err| Error::transport(format!("cannot write runtime config: {err}")))?;
+                let path = file.into_temp_path();
+                let absolute = std::path::absolute(&*path).map_err(|err| {
+                    Error::transport(format!("cannot resolve runtime config: {err}"))
+                })?;
+                let arg = absolute
+                    .to_str()
+                    .ok_or_else(|| Error::transport("runtime config path is not UTF-8"))?
+                    .to_owned();
+                config = Some(path);
+                vec!["serve".into(), "--config".into(), arg]
+            }
+        };
         let transport = Transport::connect(TransportOptions {
             command,
-            args: self.args.clone(),
+            args,
             cwd: self.cwd.clone(),
             env: self
                 .env
@@ -163,6 +181,7 @@ impl ClientBuilder {
             handshake_timeout: self.handshake_timeout,
         })
         .await?;
+        drop(config);
 
         let transport = Arc::new(transport);
         let auth = AuthApi::new(

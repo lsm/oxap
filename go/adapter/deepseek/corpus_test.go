@@ -275,7 +275,7 @@ func runDSHFakeCase(t *testing.T, definition dshCorpusCase, frames []dshFrame, d
 	t.Helper()
 	execution := dshExecution{}
 	client := newCorpusClient()
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return client, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) { return client, "deepseek-chat", nil }), Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func runDSHFakeCase(t *testing.T, definition dshCorpusCase, frames []dshFrame, d
 			case <-time.After(5 * time.Second):
 				t.Fatal("prompt request was not written")
 			}
-			var want native.SessionPromptParams
+			var want native.EncodedPromptParams
 			dshDecodeStrict(t, decoded[i].Message.Params, &want, fmt.Sprintf("frame %d params", i+1))
 			got, _ := json.Marshal(client.lastCall(t))
 			expected, _ := json.Marshal(want)
@@ -461,7 +461,7 @@ func runDSHProcessCase(t *testing.T, dir string, definition dshCorpusCase, frame
 	if receipts := dshResponseReceipts(decoded); len(receipts) > 0 {
 		environment = append(environment, "OAP_DSH_FIXTURE_RECEIPT="+receipts[0])
 	}
-	implementation, err := New(Config{Executable: self, Args: []string{"--dsh-fixture-server"}, Environment: environment, WorkingDirectory: workspace, Provider: "fixture-provider", Model: "fixture-model", Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Executable: self, Args: []string{"--dsh-fixture-server"}, Environment: environment, WorkingDirectory: workspace, Provider: "fixture-provider", Model: "fixture-model", Clock: &testClock{}, IDs: &testIDs{}, JournalCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +618,7 @@ type corpusClient struct {
 	closed  bool
 	dead    bool
 	err     error
-	calls   []native.SessionPromptParams
+	calls   []native.EncodedPromptParams
 }
 
 type corpusReply struct {
@@ -638,7 +638,7 @@ func (c *corpusClient) CallStarted(_ context.Context, method string, params any,
 		return fmt.Errorf("fixture client: unexpected native call %q", method)
 	}
 	c.mu.Lock()
-	promptParams, _ := params.(native.SessionPromptParams)
+	promptParams, _ := params.(native.EncodedPromptParams)
 	c.calls = append(c.calls, promptParams)
 	c.mu.Unlock()
 	c.started <- struct{}{}
@@ -677,7 +677,7 @@ func (c *corpusClient) callCount() int {
 	defer c.mu.Unlock()
 	return len(c.calls)
 }
-func (c *corpusClient) lastCall(t *testing.T) native.SessionPromptParams {
+func (c *corpusClient) lastCall(t *testing.T) native.EncodedPromptParams {
 	t.Helper()
 	c.mu.Lock()
 	defer c.mu.Unlock()

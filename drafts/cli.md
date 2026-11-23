@@ -23,14 +23,34 @@ not a second product.
 |---|---|---|---|
 | `tui [--context-window N]` | the terminal UI as an `agent-control-core` client: its runs go as envelopes through the in-process endpoint to the `oapx` backend; bare `oapx` starts it | yes | — |
 | `tui --attach URL [--adapter NAME]` | the same client over a running `oapx serve`'s HTTP wire: it opens a session on the named adapter (`oapx` by default), follows each run's SSE stream from its first event, and closes the session on exit. The model is chosen at open through `metadata.oapx.model`, since the hub has no switch route | experimental | — |
+| `oxap serve --config F` | start the Agent and/or Provider selected by a JSON or strict YAML service document | yes | — |
 | `serve agent [--backend B] [--config F] [--stdio]` | one agent loop over `agent-control-core`, raw envelopes per [endpoint-stdio](endpoint-stdio.md); no `--backend` means the binary's own loop: the `oapx` adapter the terminal UI also runs (endpoint `oapx.agent`), with `auth.*` beside it; with `OAPX_PROVIDER_SERVICE_URL` set it takes its catalog and inference from that remote provider service | native loop; harness backends as they are wired | the Go adapters (today `goap endpoint --adapter`) |
 | `serve provider [--stdio \| --http ADDR] [--specimens]` | `model-provider-core` | yes | answers `unavailable` |
 | `serve agent,provider --stdio` | both profiles on one pipe (Decision 0027) | yes | answers `unavailable` |
-| `serve [--config F] [--addr ADDR \| --stdio]`, and `hub` as its old name | the multi-session daemon: an adapter registry, fan-out, cursor replay, HTTP+SSE or the stdio transport-object wire, per [hub](hub.md) | yes | yes |
+| `hub [--config F] [--addr ADDR \| --stdio]` | the multi-session daemon: an adapter registry, fan-out, cursor replay, HTTP+SSE or the stdio transport-object wire, per [Agent Service](agent-service.md) | yes | yes |
 | `validate [--format human\|json] [--mode strict\|tolerant] [--pack DIR]... [--provider] TRACE...` | judge traces: decode, schema, semantic | yes (packs, modes and some semantic rules still porting) | yes |
 | `conformance [--command CMD] [--format text\|json]` | drive an endpoint and judge what crossed the pipe | yes, first slice: the handshake and one submitted run; the interaction, tool, queue, model and auth groups are still to come | yes |
 | `check` | the repository's own schemas, fixtures and reference path | not yet | yes |
 | `run`, `auth`, the TUI (bare invocation) | the product's own loop and credentials | yes | — |
+
+For `oxap serve --config F`, the [service config schema](../schema/server.schema.json)
+defines the Agent and Provider bindings. See the
+[server migration guide](../docs/server-config-migration.md) for the command mappings. Two `stdio: raw` sections share
+one pipe under [Decision 0027](../decisions/0027-composed-stdio-profiles.md).
+An Agent `stdio: multi_session` uses the pipe exclusively. The Agent HTTP
+listener writes its address to stderr when the Provider owns stdio.
+
+Use `hub --config F` for a legacy adapter-registry file. For compatibility,
+`serve` still accepts the legacy hub flags. With a hub flag such as
+`--stdio` or `--addr`, its `--config F` names an adapter-registry file. With
+`--config F` alone, `serve` expects a service document.
+
+Set `agent.provider: cohosted` explicitly to select the configured
+`provider.http` for built-in `oapx` Agent adapters. The Agent uses the
+existing Model Provider client over that loopback listener, which resolves
+credentials on the Provider side. External adapters retain their configured
+model routes. Co-hosting raw stdio profiles leaves their credentials and
+model selection independent.
 
 Native model clients and TLS remote-provider clients honor the standard HTTP,
 HTTPS and fallback proxy environment variables. `OAP_ATTEMPT_AUDIT_ID` enables OpenAI/Codex Responses
@@ -86,6 +106,53 @@ the requests that fit it and is silent about the rest.
   `code` and `index`, and `line` when the input had lines. `oapx` adds
   `"complete": false` while its semantic port is partial, and drops it once it
   is not. A differential job compares the two outputs field by field.
+
+## Service configuration for 0.2
+
+[Decision 0070](../decisions/0070-one-server-with-agent-provider-and-hub-services.md)
+defines a service document. Declare exactly one transport per enabled service:
+
+| Service | Transport | Required settings |
+|---|---|---|
+| Agent | `stdio: multi_session` | None |
+| Agent | `stdio: raw` | `adapter` names an entry in `agent.adapters` |
+| Agent | `http: <address>` | A loopback host and port |
+| Provider | `stdio: raw` | None |
+| Provider | `http: <address>` | `127.0.0.1` and a nonzero port |
+
+```yaml
+agent:
+  http: "127.0.0.1:6270"
+  adapters:
+    demo:
+      type: memory
+provider:
+  stdio: raw
+```
+
+Agent HTTP accepts `127.0.0.1`, `localhost` (bound as `127.0.0.1`), and
+`[::1]`. Quote IPv6 addresses. Ports contain one to five ASCII digits and
+range from 0 to 65535. Port zero lets the OS choose an Agent HTTP port.
+Two HTTP bindings cannot claim the same IPv4 loopback port. Multi-session
+stdio takes the stream exclusively. Agent and Provider may both declare raw
+stdio.
+
+Use [the server schema](../schema/server.schema.json) to validate a decoded
+document. Agent adapters and tool sources use named mappings. The
+multi-session binding resolves an adapter on session open. Raw Agent stdio
+selects one at startup. The loader rejects duplicate and unknown members,
+an empty service set, and any `hub` section. A remote tool source's
+`auth` takes an environment reference such as `{env: TOOL_TOKEN}`.
+
+The configuration accepts JSON and a YAML subset: one document with string
+keys, indented block or flow collections, comments, plain scalars, single
+quotes with doubled apostrophes, and double quotes with JSON escapes. Plain
+booleans, nulls and decimal integers use YAML 1.2 Core spellings. Other
+plain scalars such as `yes` or `off` are strings. Quote strings that look
+like the supported typed scalars. Anchors, aliases, tags, merge keys,
+complex keys, block strings and additional documents are refused. YAML
+syntax errors include a line and column. Config-based dispatch ships
+separately.
 
 ## Migration
 

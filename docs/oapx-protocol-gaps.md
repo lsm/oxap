@@ -100,7 +100,7 @@ with the state document, with three refusals that fail closed
 (`decisions/0040-a-session-reopens-through-its-own-binding.md:79`, `:88`,
 `:132`; `drafts/conformance.md:693`). The hub records one binding per open in
 its session history, and a restarted hub lists and reopens what a shutdown
-left behind (`drafts/hub.md:72`, `:1398`).
+left behind (`drafts/agent-service.md:72`, `:1398`).
 
 **Implementation.** The hub routes a reopen (`zig/src/hub/hub.zig:831`,
 `:846`). Each adapter advertises `session.open.reopen`:
@@ -109,17 +109,18 @@ left behind (`drafts/hub.md:72`, `:1398`).
   (`zig/src/adapter/claude/adapter.zig:27`, `zig/src/adapter/codex/session.zig:1251`,
   `zig/src/adapter/acp/adapter.zig:103`, `zig/src/adapter/hermes/adapter.zig:36`,
   `zig/src/adapter/opencode/adapter.zig:38`, `zig/src/adapter/pi/adapter.zig:69`);
-- unavailable in DeepSeek (`zig/src/adapter/deepseek/adapter.zig:35`);
+- native in DeepSeek, through `session/resume` with the bound native id right
+  after `initialize` (`zig/src/adapter/deepseek/adapter.zig:38`);
 - emulated in oapx's own loop, but only with a history loader
   (`zig/src/adapter/oapx/adapter.zig:64`). Under `serve` it advertises the
   unsaved descriptor without reopen (`:35`, `:180`), for the reason in row 1.
 
-`drafts/hub.md:71` still says a client reconnecting to a restarted hub "finds
+`drafts/agent-service.md:71` still says a client reconnecting to a restarted hub "finds
 no session" because reattach is staged. That row is stale: reattach has
 landed.
 
-**Status.** Partial. Implemented for every pinned harness except DeepSeek;
-not available on oapx's own loop under `serve`.
+**Status.** Partial. Implemented for every pinned harness; not available on
+oapx's own loop under `serve`.
 
 **Spec revision.** No. The oapx gap closes with row 1's wiring.
 
@@ -127,7 +128,7 @@ not available on oapx's own loop under `serve`.
 
 **Spec.** A cursor is `(run, sequence)` and may name its run; an expired
 cursor is `oap-replay-gap` (`decisions/0026-a-resume-cursor-may-name-its-run.md:41`,
-`:47`; `drafts/hub.md:1108`).
+`:47`; `drafts/agent-service.md:1108`).
 
 **Implementation.** The hub's `events` op and the SSE route replay from the
 journal (`zig/src/hub/stdio.zig:697`). The journal is process memory, 256
@@ -238,7 +239,7 @@ refuses a provided tool at open, as Decision 0011 requires.
 
 **Spec.** Decision 0008 describes a source and gates the catalog. A source
 can be attached on the wire at open, within the daemon's trust checks
-(`drafts/hub.md:185`, `:194`, `:198`). The capability declares the modes it
+(`drafts/agent-service.md:185`, `:194`, `:198`). The capability declares the modes it
 accepts; no adapter declares `session_live` for it.
 
 **Implementation.** The operator's sources come from the registry document,
@@ -262,9 +263,9 @@ on an opaque cursor (`decisions/0046-a-session-list-is-the-hosts-bindings.md:50`
 `:76`; `schema/v0.1/envelope.schema.json:118`).
 
 **Implementation.** The hub's `history` op (`zig/src/hub/stdio.zig:1042`;
-`drafts/hub.md:1398`) answers it from the session history, and `sessions`
+`drafts/agent-service.md:1398`) answers it from the session history, and `sessions`
 lists live sessions (`zig/src/hub/stdio.zig:1009`). `work.list` adds each
-harness's own sessions where the adapter can list them (`drafts/hub.md:483`).
+harness's own sessions where the adapter can list them (`drafts/agent-service.md:483`).
 
 **Status.** Implemented.
 
@@ -277,7 +278,7 @@ agent `requested_by` must be it. An open names its participant.
 
 **Implementation.** Every adapter names its endpoint, for example oapx's own
 loop (`zig/src/adapter/oapx/adapter.zig:69`). The hub, though, is
-one participant: "The daemon is participant `user`" (`drafts/hub.md:220`).
+one participant: "The daemon is participant `user`" (`drafts/agent-service.md:220`).
 
 **Status.** Partial. Endpoint identity is implemented. Participant identity is
 one fixed value for everything the hub serves.
@@ -287,8 +288,8 @@ one fixed value for everything the hub serves.
 ### 11. Multi-connection session ownership
 
 **Spec.** None. The hub is a single-user local service with no auth
-(`drafts/hub.md:59`). Fan-out to several subscribers is specified and pinned
-(`drafts/hub.md:1670`), but who owns a session among several connections is
+(`drafts/agent-service.md:59`). Fan-out to several subscribers is specified and pinned
+(`drafts/agent-service.md:1670`), but who owns a session among several connections is
 not.
 
 **Implementation.** Any connection may address any session. Several may
@@ -301,12 +302,12 @@ subscribe to one run.
 ### 13. Per-session environment and credential grants
 
 **Spec.** An adapter entry's `environment` is an allowlist fixed in the
-registry document (`drafts/hub.md:70`). A wire tool-source attachment may
-extend its own source's list by name only (`drafts/hub.md:194`, `:198`).
+registry document (`drafts/agent-service.md:70`). A wire tool-source attachment may
+extend its own source's list by name only (`drafts/agent-service.md:194`, `:198`).
 Authentication is an obligation, not a credential channel (Decision 0025).
 
 **Implementation.** As specified: per adapter entry, not per session. A
-binding record holds no credential (`drafts/hub.md:72`).
+binding record holds no credential (`drafts/agent-service.md:72`).
 
 **Status.** Missing as a per-session grant.
 
@@ -332,7 +333,7 @@ Levels are the adapter's own feature table. "Model switch" is
 | OpenCode server | `zig/src/adapter/opencode/adapter.zig:146` | reopen native (`:38`); native list and read | native (`:21`) | native (`:20`) | none; models list degraded (`:24`) | model switch | P1 |
 | ACP (Devin) | `zig/src/adapter/acp/adapter.zig:160` | reopen native (`:103`); native list and read | degraded, observed only (`:116`) | native (`:119`) | in review (#1163); models list degraded (`:105`) | model switch (#1163); permissions answered at cancel (#1168) | P1 |
 | Pi | `zig/src/adapter/pi/adapter.zig:131` | reopen native (`:69`); native list and read | degraded (`:52`) | unavailable (`:51`) | none | permissions, model switch, models list | P2 |
-| DeepSeek's own harness | `zig/src/adapter/deepseek/adapter.zig:106` | no reopen (`:35`) | degraded (`:19`) | unavailable (`:18`) | none | reopen, cancel (`:23`), permissions, model switch | P3 (oapx's loop is the default for DeepSeek) |
+| DeepSeek's own harness | `zig/src/adapter/deepseek/adapter.zig:106` | native reopen through `session/resume` | degraded (`:19`) | unavailable (`:18`) | none | cancel (`:23`), permissions, model switch | P3 (oapx's loop is the default for DeepSeek) |
 | Claude Code / Agent SDK | `zig/src/adapter/claude/adapter.zig:162` | reopen native (`:27`); native list and read | degraded (`:43`) | native (`:46`) | none | model switch | P3 (HyperNeo keeps Claude on the Agent SDK, outside OAP) |
 
 ## HyperNeo's plan against this inventory

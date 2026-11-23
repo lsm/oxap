@@ -1,7 +1,7 @@
 """Profiled OAP 0.1 newline-delimited stdio transport.
 
 The default connection sends ``protocol.initialize.request`` to a combined
-``oapx serve agent,provider --stdio`` host. One reader routes correlated replies and
+``oxap serve --config <generated-server.json>`` host. One reader routes correlated replies and
 session, inference, and auth-flow events to registered consumers. Unroutable
 late frames are dropped. Closing the transport reaps its child process and
 fails all pending consumers.
@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import sys
+import tempfile
+from pathlib import Path
 from types import TracebackType
 from typing import Any, Dict, Mapping, Optional, Sequence, Type
 
@@ -202,7 +204,7 @@ class StdioTransport:
         stderr_to: Optional[int] = None,
     ) -> None:
         self._command = command
-        self._args = list(args) if args is not None else ["serve", "agent,provider", "--stdio"]
+        self._args = list(args) if args is not None else None
         self._cwd = cwd
         self._env = dict(env) if env is not None else None
         self._resolver = resolver
@@ -256,7 +258,16 @@ class StdioTransport:
             # Resolution may download a binary over HTTP with a 120s timeout;
             # running it inline would stall every other task on this loop.
             command = await asyncio.to_thread(resolve_makai_binary, self._resolver)
-        logger.debug("spawning %s %s", command, self._args)
+        if self._args is not None:
+            await self._spawn_and_initialize(command, self._args)
+            return
+        with tempfile.TemporaryDirectory(prefix="oxap-server-") as directory:
+            path = Path(directory).resolve() / "server.json"
+            path.write_text('{"agent":{"stdio":"raw","adapter":"builtin","adapters":{"builtin":{"type":"oapx"}}},"provider":{"stdio":"raw"}}', encoding="utf-8")
+            await self._spawn_and_initialize(command, ["serve", "--config", str(path)])
+
+    async def _spawn_and_initialize(self, command: str, args: Sequence[str]) -> None:
+        logger.debug("spawning %s %s", command, args)
 
         env = self._env
         if env is None:
@@ -265,7 +276,7 @@ class StdioTransport:
         try:
             process = await asyncio.create_subprocess_exec(
                 command,
-                *self._args,
+                *args,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=self._stderr_to if self._stderr_to is not None else sys.stderr,

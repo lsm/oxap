@@ -30,6 +30,7 @@ pub const op_cancel = "cancel";
 pub const op_task_output = "task_output";
 pub const op_close = "close";
 pub const op_settings = "settings";
+const op_model_switch = contract.feature_model_switch;
 pub const op_events = "events";
 pub const op_unsubscribe = "unsubscribe";
 pub const op_history = "history";
@@ -1065,7 +1066,7 @@ pub const Frontend = struct {
         }
         if (std.mem.eql(u8, request.op, op_events)) return self.events(arena, request);
         if (std.mem.eql(u8, request.op, op_unsubscribe)) return self.unsubscribe(arena, request);
-        if (std.mem.eql(u8, request.op, op_submit) or std.mem.eql(u8, request.op, op_resolve) or std.mem.eql(u8, request.op, op_cancel) or std.mem.eql(u8, request.op, op_task_output) or std.mem.eql(u8, request.op, op_settings)) {
+        if (std.mem.eql(u8, request.op, op_submit) or std.mem.eql(u8, request.op, op_resolve) or std.mem.eql(u8, request.op, op_cancel) or std.mem.eql(u8, request.op, op_task_output) or std.mem.eql(u8, request.op, op_settings) or std.mem.eql(u8, request.op, op_model_switch)) {
             if (try request.only(arena, session_request_parameters)) |refusal| return .{ .refused = refusal };
             if (request.envelopeSizeRefusal()) |refusal| return .{ .refused = refusal };
             const session_id = request.session_id orelse "";
@@ -1078,6 +1079,8 @@ pub const Frontend = struct {
                 try self.cancelControl(arena, session_id, value)
             else if (std.mem.eql(u8, request.op, op_task_output))
                 try self.taskOutputControl(arena, session_id, value)
+            else if (std.mem.eql(u8, request.op, op_model_switch))
+                try self.modelSwitchControl(arena, session_id, value)
             else
                 try self.settingsControl(arena, session_id, value);
             return switch (controlled) {
@@ -2181,6 +2184,30 @@ pub const Frontend = struct {
             .session_id = updated.session_id,
             .capability_revision = envelope.capability_revision,
             .payload = .{ .session_settings_update_response = updated },
+        } };
+    }
+
+    fn modelSwitchControl(self: *Frontend, arena: std.mem.Allocator, id: []const u8, value: std.json.Value) !Control {
+        const gated = try gateEnvelope(arena, value, &.{.session_model_switch_request}, "the request envelope is not a session.model.switch.request");
+        const envelope = switch (gated) {
+            .refused => |refused| return .{ .refused = .{ .refusal = refused } },
+            .envelope => |envelope| envelope,
+        };
+        const request = &envelope.payload.session_model_switch_request;
+        if (!std.mem.eql(u8, request.session_id, id) or !std.mem.eql(u8, envelope.session_id orelse "", id)) {
+            return .{ .refused = .{ .refusal = .{ .code = "scope_mismatch", .message = "session_id does not match the addressed session" } } };
+        }
+        const answer_id = try self.responseId(arena);
+        var reported = contract.Refusal{};
+        const switched = self.hub.switchModel(arena, id, request, &reported) catch |err| {
+            return .{ .refused = .{ .refusal = try controlRefusal(arena, err, &reported, id) } };
+        };
+        return .{ .envelope = .{
+            .id = answer_id,
+            .in_reply_to = envelope.id,
+            .session_id = switched.session_id,
+            .capability_revision = envelope.capability_revision,
+            .payload = .{ .session_model_switch_response = switched },
         } };
     }
 

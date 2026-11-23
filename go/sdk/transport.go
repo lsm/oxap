@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -67,7 +68,25 @@ type transport struct {
 }
 
 func startTransport(ctx context.Context, command string, opts *Options) (*transport, error) {
-	cmd := exec.Command(command, opts.args()...)
+	args := opts.Args
+	if args == nil {
+		config, err := os.CreateTemp("", "oxap-server-*.json")
+		if err != nil {
+			return nil, transportErrorf(err, "cannot create runtime config: %v", err)
+		}
+		defer os.Remove(config.Name())
+		_, err = config.WriteString(`{"agent":{"stdio":"raw","adapter":"builtin","adapters":{"builtin":{"type":"oapx"}}},"provider":{"stdio":"raw"}}`)
+		closeErr := config.Close()
+		if err := errors.Join(err, closeErr); err != nil {
+			return nil, transportErrorf(err, "cannot write runtime config: %v", err)
+		}
+		path, err := filepath.Abs(config.Name())
+		if err != nil {
+			return nil, transportErrorf(err, "cannot resolve runtime config: %v", err)
+		}
+		args = []string{"serve", "--config", path}
+	}
+	cmd := exec.Command(command, args...)
 	cmd.Dir = opts.Dir
 	if opts.Env != nil {
 		cmd.Env = opts.Env
@@ -102,7 +121,7 @@ func startTransport(ctx context.Context, command string, opts *Options) (*transp
 	if err := cmd.Start(); err != nil {
 		return nil, transportErrorf(err, "cannot start runtime %q: %v", command, err)
 	}
-	t.logger.Debug("oap sdk: runtime started", "command", command, "args", opts.args(), "pid", cmd.Process.Pid)
+	t.logger.Debug("oap sdk: runtime started", "command", command, "args", args, "pid", cmd.Process.Pid)
 
 	handshake := make(chan *inbound, 1)
 	go t.readLoop(stdout, handshake)

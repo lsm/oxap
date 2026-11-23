@@ -44,7 +44,7 @@ fn chunks_map_text_and_reasoning_deltas_and_drop_everything_else() {
 }
 
 #[test]
-fn stream_records_expand_in_order() {
+fn stream_records_preserve_batch_boundaries_and_order() {
     let records = [
         AssistantStreamRecord {
             kind: "text-chunks".into(),
@@ -53,7 +53,7 @@ fn stream_records_expand_in_order() {
         },
         AssistantStreamRecord {
             kind: "reasoning-chunks".into(),
-            texts: vec!["r".into()],
+            texts: vec!["r".into(), "s".into()],
             ..AssistantStreamRecord::default()
         },
         AssistantStreamRecord {
@@ -68,7 +68,7 @@ fn stream_records_expand_in_order() {
     ];
     assert_eq!(
         json(&stream_parts(&records)),
-        r#"[{"type":"text","text":"a"},{"type":"text","text":"b"},{"type":"reasoning","reasoning":"r"},{"type":"text","text":"c"}]"#
+        r#"[{"type":"text","text":"ab"},{"type":"reasoning","reasoning":"rs"},{"type":"text","text":"c"}]"#
     );
 }
 

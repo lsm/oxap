@@ -533,6 +533,18 @@ pub const Store = struct {
         try appendFile(path, line, false);
     }
 
+    pub fn conversationStat(self: Store, session_id: []const u8) !?std.Io.File.Stat {
+        if (self.batch) |batch| batch.flush(self);
+        const path = try sessionPath(self.allocator, self.base_dir, session_id);
+        defer self.allocator.free(path);
+        var file = compat.fs.getCwd().openFile(defaultIo(), path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return null,
+            else => return err,
+        };
+        defer file.close(defaultIo());
+        return try file.stat(defaultIo());
+    }
+
     pub fn conversationBytes(self: Store, session_id: []const u8) !u64 {
         if (self.batch) |batch| batch.flush(self);
         const path = try sessionPath(self.allocator, self.base_dir, session_id);

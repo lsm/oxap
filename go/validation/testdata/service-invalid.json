@@ -1,0 +1,62 @@
+[
+  {
+    "name": "claude with fields for other adapters",
+    "config": {"agent":{"stdio":"multi_session","adapters":{"claude":{"allowed_tools":["Read"],"sandbox":"workspace-write","agent":"build","max_tokens":10}}}},
+    "diagnostic": "unknown field"
+  },
+  {
+    "name": "underscore in port",
+    "config": {"agent":{"http":"localhost:8_000"}},
+    "diagnostic": "invalid HTTP address port"
+  },
+  {
+    "name": "signed zero port",
+    "config": {"agent":{"http":"127.0.0.1:-0"}},
+    "diagnostic": "invalid HTTP address port"
+  },
+  {
+    "name": "port overflow",
+    "config": {"agent":{"http":"127.0.0.1:99999"}},
+    "diagnostic": "invalid HTTP address port"
+  },
+  {
+    "name": "negative journal capacity",
+    "config": {"agent":{"stdio":"multi_session","adapters":{"memory":{"journal_capacity":-1}}}},
+    "diagnostic": "journal_capacity"
+  },
+  {
+    "name": "memory with program and model",
+    "config": {"agent":{"stdio":"multi_session","adapters":{"memory":{"executable":"example","model":"example"}}}},
+    "diagnostic": "unknown field"
+  },
+  {
+    "name": "opencode with args",
+    "config": {"agent":{"stdio":"multi_session","adapters":{"opencode":{"args":["--example"]}}}},
+    "diagnostic": "unknown field"
+  },
+  {
+    "name": "codex endpoint with executable",
+    "config": {"agent":{"stdio":"multi_session","adapters":{"codex":{"endpoint":"unix:///run/codex.sock","executable":"codex"}}}},
+    "diagnostic": "endpoint and an executable"
+  },
+  {
+    "name": "signed positive port",
+    "config": {"provider":{"http":"127.0.0.1:+80"}},
+    "diagnostic": "invalid HTTP address port"
+  },
+  {
+    "name": "literal bearer token",
+    "config": {"agent":{"stdio":"multi_session","tool_sources":{"tools":{"kind":"remote","auth":""}}}},
+    "diagnostic": "auth must name an environment variable"
+  },
+  {
+    "name": "unknown cohosted provider selection",
+    "config": {"agent":{"stdio":"multi_session","provider":"auto"},"provider":{"http":"127.0.0.1:6271"}},
+    "diagnostic": "agent.provider must be cohosted"
+  },
+  {
+    "name": "cohosted selection without HTTP",
+    "config": {"agent":{"http":"127.0.0.1:0","provider":"cohosted"},"provider":{"stdio":"raw"}},
+    "diagnostic": "cohosted requires provider.http"
+  }
+]

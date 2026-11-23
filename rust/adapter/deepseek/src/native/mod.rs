@@ -24,6 +24,7 @@ pub use stream::{
 pub const SERVER_NAME: &str = "deepseek-harness-sdk-runtime";
 pub const METHOD_INITIALIZE: &str = "initialize";
 pub const METHOD_SESSION_PROMPT: &str = "session/prompt";
+pub const METHOD_SESSION_RESUME: &str = "session/resume";
 pub const METHOD_SHUTDOWN: &str = "shutdown";
 pub const NOTIFY_SESSION_EVENT: &str = "session.event";
 pub const NOTIFY_SESSION_STATUS: &str = "session.status";
@@ -137,6 +138,12 @@ pub struct InitializeResult {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SessionResumeParams {
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionPromptParams {
     #[serde(default, deserialize_with = "zero")]
     pub session_id: String,
@@ -165,6 +172,10 @@ pub struct ContentBlock {
         skip_serializing_if = "String::is_empty"
     )]
     pub text: String,
+    #[serde(skip_deserializing, skip_serializing_if = "String::is_empty")]
+    pub data: String,
+    #[serde(skip_deserializing, skip_serializing_if = "String::is_empty")]
+    pub mime_type: String,
     #[serde(default, deserialize_with = "raw", skip_serializing_if = "none")]
     pub attachment: Raw,
     #[serde(

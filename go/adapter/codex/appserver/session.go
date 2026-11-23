@@ -732,13 +732,18 @@ func (session *session) handleNotification(notification rpc.NotificationMessage)
 			return
 		}
 		session.onStarted(value)
-	case native.MethodAgentDelta:
+	case native.MethodAgentDelta, native.MethodReasoningDelta:
+		reasoning := notification.Method == native.MethodReasoningDelta
 		var value native.AgentMessageDeltaNotification
 		if json.Unmarshal(notification.Params, &value) != nil {
-			session.failActive("invalid_native_event", "invalid agent message delta")
+			detail := "invalid agent message delta"
+			if reasoning {
+				detail = "invalid reasoning summary delta"
+			}
+			session.failActive("invalid_native_event", detail)
 			return
 		}
-		session.onDelta(value)
+		session.onDelta(value, reasoning)
 	case native.MethodItemStarted, native.MethodItemCompleted:
 		var value native.ItemNotification
 		if json.Unmarshal(notification.Params, &value) != nil {
@@ -821,15 +826,21 @@ func (session *session) onStarted(value native.TurnStartedNotification) {
 	_ = session.emit(run, protocol.TypeRunStarted, protocol.RunStartedPayload{SessionID: session.state.SessionID, RunID: run.id, Status: protocol.RunRunning, ModelID: run.model, StartedAtMS: session.clock.Now().UnixMilli()}, false)
 }
 
-func (session *session) onDelta(value native.AgentMessageDeltaNotification) {
+func (session *session) onDelta(value native.AgentMessageDeltaNotification, reasoning bool) {
 	run := session.runFor(value.ThreadID, value.TurnID)
 	if run == nil || !run.started || run.terminal {
 		return
 	}
-	session.mu.Lock()
-	run.text += value.Delta
-	session.mu.Unlock()
-	_ = session.emit(run, protocol.TypeContentDelta, protocol.ContentDeltaPayload{SessionID: session.state.SessionID, RunID: run.id, MessageID: run.messageID, Part: protocol.ContentPart{Type: protocol.ContentText, Text: value.Delta}}, false)
+	var part protocol.ContentPart
+	if reasoning {
+		part = protocol.ContentPart{Type: protocol.ContentReasoning, Reasoning: value.Delta}
+	} else {
+		session.mu.Lock()
+		run.text += value.Delta
+		session.mu.Unlock()
+		part = protocol.ContentPart{Type: protocol.ContentText, Text: value.Delta}
+	}
+	_ = session.emit(run, protocol.TypeContentDelta, protocol.ContentDeltaPayload{SessionID: session.state.SessionID, RunID: run.id, MessageID: run.messageID, Part: part}, false)
 }
 
 func (session *session) onItem(method string, value native.ItemNotification) {

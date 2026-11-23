@@ -86,8 +86,8 @@
       "reason": "one process and native session per OAP session"
     },
     "session.open.reopen": {
-      "level": "unavailable",
-      "reason": "the harness stores sessions, but the pinned SDK wire has no request to load one, so a reopen is declined rather than read behind the harness"
+      "level": "native",
+      "reason": "session/resume reloads the bound stored session after initialize, under the initialized model route"
     },
     "session.reasoning": {
       "level": "native",

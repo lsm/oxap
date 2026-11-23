@@ -205,7 +205,7 @@ exist.
 | prompt accepted by adapter and written | submit admission | synthesized | admission: emulated | `prompt-admitted` |
 | prompt execution begins | `run.started` | synthesized | run start: emulated | `new-prompt-completed` |
 | `agent_message_chunk` | `content.delta` | normalized | text stream: native once exercised | `new-prompt-completed` |
-| `agent_thought_chunk` | reasoning delta only when policy/profile permits | lossy/optional | unavailable by default | `thought-degraded` |
+| `agent_thought_chunk` with text content | `content.delta` with a `reasoning` part during an active prompt | normalized | reasoning stream | [harness delivery](../.claude/skills/verify/journeys/harness-delivery.md) |
 | `tool_call` | `action.call.requested`, possibly started if status proves it | normalized | tools: degraded until exercised | `tool-completed` |
 | `tool_call_update` | action start/progress/terminal patch | normalized | tools: degraded until exercised | `tool-completed` |
 | permission reverse request | permission interaction | normalized | permissions: native semantics, synthesized ownership | `permission-allow-deny` |

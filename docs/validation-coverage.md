@@ -221,7 +221,7 @@ is checked. Fixture counts are positive / negative traces citing the decision.
 | 0007 a reservation's model control applies at promotion | `unapplied_control` | both | | |
 | 0009 open carries subscription and message; ack unconditional; one refusal per election; cites active revision | `session_state_mismatch`, `unavailable_capability`, `degraded_without_optin`, `stale_capability_revision` | Zig partial | 11 / 7 | |
 | 0009 failure is atomic | `session_state_mismatch` | Zig partial | | |
-| 0009 a transport that carries no stream holds the subscription | — | — | — | hub behaviour; pinned by hub tests (`drafts/hub.md`) |
+| 0009 a transport that carries no stream holds the subscription | — | — | — | hub behaviour; pinned by hub tests (`drafts/agent-service.md`) |
 | 0041 cancel acceptance judged when the cancel is checked; late cancel legal with a typed answer | `illegal_run_transition`, `cancel_not_settled` | both | 2 / 1 | |
 
 ### Decisions 0008, 0011, 0048: tool sources and provided tools
@@ -292,7 +292,7 @@ error codes, no diagnostic yet), 0025 (superseded), 0027 (proposed), 0030
 | source | coverage |
 | --- | --- |
 | `drafts/agent-control-core.md`, `agent-control-profile.md`, `conformance.md` | restate the decisions above; `conformance.md`'s per-unit bullets map onto the rows above |
-| `drafts/hub.md` | the hub's own wire (ops, routes, HTTP statuses); out of the trace validator's scope by design, and every rule names its pinning Go and Zig test. Hub answers that carry a protocol payload (`history`, `transcript`) are pinned by field assertions; no test validates them against the schema |
+| `drafts/agent-service.md` | the hub's own wire (ops, routes, HTTP statuses); out of the trace validator's scope by design, and every rule names its pinning Go and Zig test. Hub answers that carry a protocol payload (`history`, `transcript`) are pinned by field assertions; no test validates them against the schema |
 | `drafts/work.md` | work verbs; no validator; pinned by `go/internal/workwire` tests, Zig hub tests and `hub_parity_test` |
 | `drafts/endpoint-stdio.md` | framing and the serve-agent loop; pinned by the Go conformance runner (`goap conformance`), not by diagnostics |
 | `drafts/model-provider-core.md`, `provider-stdio.md`, `provider-http.md` | provider validator: `credential_in_trace`, `credential_in_headers`, `terminal_not_assembly`, `sequence_gap`, `sequence_regression`, `event_after_terminal` in both trees; the provider corpus holds 9 positive, 11 semantic-invalid, 16 schema-invalid and 2 decode fixtures |

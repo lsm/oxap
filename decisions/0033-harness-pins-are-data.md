@@ -146,9 +146,10 @@ entirely before or after a port, as Decision 0019 requires.
   (`harnesses.Current`); `zig/build.zig` reads it into a generated
   `harness_pins` module. Each version has one revision, which both trees
   serve: a served Zig backend answers with the Go adapter's descriptor, and
-  `TestBackendsMatchOapx` compares the two in CI. `goap check` fails when a Go or Zig
-  string literal equals any value a non-retired version records, so moving a
-  pin edits the catalog, the corpus and the ledger, and no source file.
+  `TestBackendsMatchOapx` compares the two in CI. Rust reads through
+  `oxap_harness::current` (Decision 0052). `goap check` fails when a Go, Zig
+  or Rust string literal equals any value a non-retired version records, so
+  moving a pin edits only the catalog, the corpus and the ledger.
 
 ## What this decision does not admit
 

@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "adapter": "pi-rpc-stdio",
+  "tag": "v1.6.0",
+  "commit": "faac585884ae2c013a6b1400f3e9e77f10b34bac",
+  "commit_tree": "7b395e942aa81ffe0dba09ae2939184c200e4d3b",
+  "sources": {
+    "rpc_types_blob": "7fc71516aebb8b68ea019f1df4eef966eeaa17c7",
+    "rpc_mode_blob": "adcd6adefb85a665a80859d3ebfbaeadeb56f0aa",
+    "agent_session_blob": "6a89c5b4133628bf1b39483b7af35d7fb6c26833",
+    "session_manager_blob": "2420f8a72d80478888e0cb8bad2370be11f9cc3d",
+    "agent_types_blob": "24bdd7531caf7035653255acab9c04e0ef5f485f",
+    "rpc_entry_blob": "11059a8d47f6d4f22469802f8dca0a6af6c8db88",
+    "cli_args_blob": "bf38841d2f052acbcb252f7c612cad3be39755e3"
+  },
+  "cases": [
+    {
+      "id": "completed-text",
+      "path": "completed-text",
+      "ledger_fixtures": [
+        "initialize-minimal",
+        "message-admitted",
+        "completed-text"
+      ]
+    },
+    {
+      "id": "streaming-deltas",
+      "path": "streaming-deltas",
+      "ledger_fixtures": [
+        "streaming-deltas"
+      ]
+    },
+    {
+      "id": "tool-lifecycle",
+      "path": "tool-lifecycle",
+      "ledger_fixtures": [
+        "multi-turn-tools",
+        "tool-completed",
+        "tool-failed",
+        "tool-progress",
+        "tool-parallel-order"
+      ]
+    },
+    {
+      "id": "cancel-settled",
+      "path": "cancel-settled",
+      "ledger_fixtures": [
+        "cancel-settled"
+      ]
+    },
+    {
+      "id": "retry-compaction",
+      "path": "retry-compaction",
+      "ledger_fixtures": [
+        "error-retry",
+        "compaction"
+      ]
+    },
+    {
+      "id": "threshold-compaction",
+      "path": "threshold-compaction",
+      "ledger_fixtures": [
+        "threshold-compaction"
+      ]
+    },
+    {
+      "id": "threshold-compaction-failed",
+      "path": "threshold-compaction-failed",
+      "ledger_fixtures": [
+        "threshold-compaction-failed"
+      ]
+    },
+    {
+      "id": "extension-dialog",
+      "path": "extension-dialog",
+      "ledger_fixtures": [
+        "extension-dialog"
+      ]
+    },
+    {
+      "id": "native-controls",
+      "path": "native-controls",
+      "ledger_fixtures": [
+        "steer-queued",
+        "steer-injected",
+        "follow-up-run",
+        "reconcile-state",
+        "entries-since",
+        "switch-session",
+        "fork-tree",
+        "no-implied-replay"
+      ]
+    },
+    {
+      "id": "process-exit",
+      "path": "process-exit",
+      "ledger_fixtures": [
+        "process-exit"
+      ]
+    },
+    {
+      "id": "prompt-rejected",
+      "path": "prompt-rejected",
+      "ledger_fixtures": [
+        "message-rejected"
+      ]
+    },
+    {
+      "id": "malformed-command",
+      "path": "malformed-command",
+      "ledger_fixtures": [
+        "malformed-command"
+      ]
+    },
+    {
+      "id": "system-message",
+      "path": "system-message",
+      "ledger_fixtures": [
+        "system-message"
+      ]
+    },
+    {
+      "id": "session-reopen",
+      "path": "session-reopen",
+      "ledger_fixtures": [
+        "bound-session-reopen"
+      ]
+    }
+  ]
+}

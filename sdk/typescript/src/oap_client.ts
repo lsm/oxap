@@ -1,5 +1,8 @@
 import { parse as parseLossless, isLosslessNumber } from "lossless-json";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { ulid } from "ulid";
 import { resolveMakaiBinary } from "./binary_resolver";
@@ -857,11 +860,24 @@ class OapAgentApi {
 export async function createOapClient(options: CreateMakaiClientOptions = {}): Promise<MakaiClient> {
   const resolver = options.logger ? { ...options.resolver, logger: options.logger } : options.resolver ?? {};
   const command = options.command ?? await resolveMakaiBinary(resolver);
-  const transport = new OapStdioTransport(command, options.args ?? ["serve", "agent,provider", "--stdio"], {
-    cwd: options.cwd, env: options.env, timeoutMs: options.responseTimeoutMs ?? options.frameTimeoutMs ?? 30_000,
-    handshakeTimeoutMs: options.handshakeTimeoutMs ?? 10_000,
-  });
-  await transport.connect();
+  let directory: string | undefined;
+  let transport: OapStdioTransport;
+  try {
+    let args = options.args;
+    if (args === undefined) {
+      directory = await mkdtemp(resolve(tmpdir(), "oxap-server-"));
+      const path = join(directory, "server.json");
+      await writeFile(path, `{"agent":{"stdio":"raw","adapter":"builtin","adapters":{"builtin":{"type":"oapx"}}},"provider":{"stdio":"raw"}}`, { mode: 0o600 });
+      args = ["serve", "--config", path];
+    }
+    transport = new OapStdioTransport(command, args, {
+      cwd: options.cwd, env: options.env, timeoutMs: options.responseTimeoutMs ?? options.frameTimeoutMs ?? 30_000,
+      handshakeTimeoutMs: options.handshakeTimeoutMs ?? 10_000,
+    });
+    await transport.connect();
+  } finally {
+    if (directory !== undefined) await rm(directory, { recursive: true, force: true });
+  }
   const models = new OapModelsApi(transport);
   const auth = new OapAuthApi(transport, options.frameTimeoutMs ?? 30_000, options.auth?.handlers);
   return {

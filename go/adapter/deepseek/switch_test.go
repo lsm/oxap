@@ -53,7 +53,7 @@ func (r *startedRuntimes) started() int {
 
 func openOnRuntimes(t *testing.T, runtimes *startedRuntimes, request base.OpenRequest) base.Session {
 	t.Helper()
-	implementation, err := New(Config{Executable: "/bin/true", WorkingDirectory: t.TempDir(), Provider: "p", Model: "m", ProcessFactory: runtimes.factory()})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Executable: "/bin/true", WorkingDirectory: t.TempDir(), Provider: "p", Model: "m", ProcessFactory: runtimes.factory()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestASwitchThatCannotStartARuntimeIsNotModelNotFound(t *testing.T) {
 
 func TestASuppliedFactoryRefusesASwitchWithoutStartingAnything(t *testing.T) {
 	started := 0
-	implementation, err := New(Config{Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) {
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Factory: ClientFactoryFunc(func(context.Context) (Client, string, error) {
 		started++
 		return newFake(), "m", nil
 	})})
@@ -219,7 +219,7 @@ func TestASuppliedFactoryRefusesASwitchWithoutStartingAnything(t *testing.T) {
 }
 
 func TestTheDescriptorOffersTheModelSwitchOnlyAsAnEmulation(t *testing.T) {
-	implementation, err := New(Config{Executable: "/bin/true", WorkingDirectory: t.TempDir(), Provider: "p", Model: "m", ProcessFactory: (&startedRuntimes{}).factory()})
+	implementation, err := New(Config{NativeSessionID: sameNativeID, Executable: "/bin/true", WorkingDirectory: t.TempDir(), Provider: "p", Model: "m", ProcessFactory: (&startedRuntimes{}).factory()})
 	if err != nil {
 		t.Fatal(err)
 	}

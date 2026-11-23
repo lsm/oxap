@@ -150,7 +150,7 @@ reads again from its last cursor.
 
 ## Consequences
 
-- `drafts/hub.md`'s release rule, that every op naming a closed session
+- `drafts/agent-service.md`'s release rule, that every op naming a closed session
   answers `unknown_session`, gains `transcript.load` as its exception for a
   session the host has a binding for, as `work.read` already is in the work
   profile.

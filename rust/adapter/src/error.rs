@@ -41,6 +41,8 @@ pub struct ReplayGap {
 pub enum Error {
     #[error("adapter: session closed")]
     SessionClosed,
+    #[error("context deadline exceeded")]
+    DeadlineExceeded,
     #[error("adapter: participant identity is required")]
     InvalidParticipant,
     #[error("adapter: unsupported input")]

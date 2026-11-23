@@ -178,7 +178,7 @@ func newPinnedDeepSeek(t *testing.T, binary, root string, environment, args []st
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	implementation, err := New(Config{
+	implementation, err := New(Config{NativeSessionID: sameNativeID,
 		Executable: binary, Args: args, Environment: environment,
 		WorkingDirectory: workspace, Provider: provider, Model: model,
 		ShutdownTimeout: 5 * time.Second,

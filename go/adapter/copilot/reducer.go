@@ -104,7 +104,7 @@ func (r *reducer) observe(event native.Event) error {
 			_, err := r.emit(run, "run.started", map[string]any{"status": "running"}, false, "")
 			return err
 		}
-	case "assistant.message_delta":
+	case "assistant.message_delta", "assistant.reasoning_delta":
 		if r.current == nil {
 			return nil
 		}
@@ -112,7 +112,11 @@ func (r *reducer) observe(event native.Event) error {
 		if text == "" {
 			return nil
 		}
-		_, err := r.emit(r.current, "content.delta", map[string]any{"message_id": r.current.messageID, "part": protocol.ContentPart{Type: protocol.ContentText, Text: text}}, false, "")
+		part := protocol.ContentPart{Type: protocol.ContentText, Text: text}
+		if event.Type == "assistant.reasoning_delta" {
+			part = protocol.ContentPart{Type: protocol.ContentReasoning, Reasoning: text}
+		}
+		_, err := r.emit(r.current, "content.delta", map[string]any{"message_id": r.current.messageID, "part": part}, false, "")
 		return err
 	case "assistant.message":
 		if r.current != nil {

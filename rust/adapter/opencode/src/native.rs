@@ -314,6 +314,7 @@ const SUPPORTED: &[&str] = &[
     "session.execution.failed",
     "session.execution.interrupted",
     "session.step.started",
+    "session.step.first-token",
     "session.step.streamed",
     "session.step.ended",
     "session.step.failed",

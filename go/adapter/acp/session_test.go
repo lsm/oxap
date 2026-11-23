@@ -860,7 +860,6 @@ func TestDefinedNonLifecycleUpdatesAreObservedOnly(t *testing.T) {
 		{"sessionUpdate": "current_mode_update", "currentModeId": "default"},
 		{"sessionUpdate": "config_option_update", "options": []any{}},
 		{"sessionUpdate": "usage_update", "size": 0, "used": 0},
-		{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking"}},
 		{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": "echo"}},
 	}
 	s, f := openTest(t, 64)

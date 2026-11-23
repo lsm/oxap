@@ -12,6 +12,7 @@ pub const method_turn_completed = "turn/completed";
 pub const method_item_started = "item/started";
 pub const method_item_completed = "item/completed";
 pub const method_agent_delta = "item/agentMessage/delta";
+pub const method_reasoning_delta = "item/reasoning/summaryTextDelta";
 pub const method_command_approval = "item/commandExecution/requestApproval";
 pub const method_file_approval = "item/fileChange/requestApproval";
 pub const method_user_input = "item/tool/requestUserInput";

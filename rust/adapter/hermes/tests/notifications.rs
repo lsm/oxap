@@ -362,7 +362,7 @@ fn a_decoded_event_keeps_its_envelope() {
 
 #[test]
 fn every_event_go_admits_as_observed_is_admitted_with_any_payload() {
-    assert_eq!(OBSERVED_EVENTS.len(), 65);
+    assert_eq!(OBSERVED_EVENTS.len(), 66);
     for observed in OBSERVED_EVENTS {
         let frame = format!(
             r#"{{"type":"{observed}","session_id":"s","seq":4,"payload":{{"anything":true}}}}"#

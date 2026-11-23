@@ -6,6 +6,9 @@ Profile: `open-agent-protocol.agent-control-core`
 Reference implementation: `goap serve agent`
 Conformance runner: `goap conformance`
 
+Start the product binding with `oxap serve --config server.json`, selecting
+`agent.stdio: raw` and an adapter from `agent.adapters`.
+
 This profile may also share one stdio connection with
 `open-agent-protocol.model-provider-core`. In that composed mode the host
 routes on the envelope's `profile` before decoding either profile's payload;
@@ -37,7 +40,7 @@ An endpoint implements none of that. It is one agent loop, not a registry of
 them, and it carries the envelopes themselves — the payload `servestdio` puts
 *inside* its `request` and `event` fields.
 
-[Hub wire](hub.md) is the specification for that other thing, and it is what a
+[Hub wire](agent-service.md) is the specification for that other thing, and it is what a
 hub — in either tree — is judged against. This binding is not: an endpoint and
 a hub share a vocabulary and a correlation idea, and nothing else.
 

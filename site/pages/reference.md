@@ -6,7 +6,7 @@ The following pages are generated at build time from `schema/v0.1`. They expose 
 
 ## Semantic contracts
 
-Use the [validator rule register](./source/drafts/validator-rules/README.md), [agent draft](./source/drafts/agent-control-core.md), [provider draft](./source/drafts/model-provider-core.md), and [Hub transport contract](./source/drafts/hub.md) alongside the fields.
+Use the [validator rule register](./source/drafts/validator-rules/README.md), [agent draft](./source/drafts/agent-control-core.md), [provider draft](./source/drafts/model-provider-core.md), and [Agent Service transport contract](./source/drafts/agent-service.md) alongside the fields.
 
 <!-- manifest-summary -->
 
