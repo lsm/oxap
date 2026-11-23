@@ -15,9 +15,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::native::{
-    decode_strict, Event, InterruptResult, MessageCompletePayload, PromptSubmitResult,
-    SessionInfoPayload, EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_DELTA, EVENT_MESSAGE_START,
-    EVENT_REASONING_DELTA, EVENT_THINKING_DELTA, EVENT_TOOL_COMPLETE, EVENT_TOOL_START,
+    decode_strict, is_run_scoped, Event, InterruptResult, MessageCompletePayload,
+    PromptSubmitResult, SessionInfoPayload, EVENT_MESSAGE_COMPLETE, EVENT_MESSAGE_START,
     METHOD_CONFIG_SET, METHOD_PROMPT_SUBMIT, METHOD_SESSION_CREATE, METHOD_SESSION_INTERRUPT,
     METHOD_SESSION_RESUME, REQUEST_APPROVAL, REQUEST_CLARIFY, REQUEST_SECRET, REQUEST_SUDO,
     SUBMIT_STREAMING,
@@ -340,18 +339,7 @@ impl GatewaySession {
                 Err(TryRecvError::Disconnected) => return Err(Error::SessionClosed),
             };
             match observation {
-                Some(Observation::Event(event))
-                    if matches!(
-                        event.kind.as_str(),
-                        EVENT_MESSAGE_START
-                            | EVENT_MESSAGE_DELTA
-                            | EVENT_MESSAGE_COMPLETE
-                            | EVENT_REASONING_DELTA
-                            | EVENT_THINKING_DELTA
-                            | EVENT_TOOL_START
-                            | EVENT_TOOL_COMPLETE
-                    ) =>
-                {
+                Some(Observation::Event(event)) if is_run_scoped(&event.kind) => {
                     return Err(Error::SessionClosed);
                 }
                 Some(Observation::Request(request)) => {
