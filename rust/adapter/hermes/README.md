@@ -18,6 +18,9 @@ session to waiting for input. Answer them through the shared session using
 the declared participant. Tool lifecycle events stay on the same run stream.
 Set reasoning on shared open or reopen, or update it while the session is
 idle. The adapter also lists stored native sessions through `session.list`.
+Listings reuse one gateway and use a separate process for overlapping calls.
+A broken reused gateway is replaced once. Dropping the adapter closes its
+listing gateway, or call `Adapter::close_listing_gateway` to check shutdown.
 
 The shared session keeps a 256-envelope journal in memory by default. Use
 `Adapter::with_journal_capacity` to choose another capacity. Resume a known

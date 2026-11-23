@@ -173,6 +173,51 @@ def settings_gateway(corpus, case, read, send):
         raise SystemExit(7)
 
 
+def listing_reuse_gateway(send):
+    for instance in range(1, 6):
+        try:
+            Path(f"listing-started-{instance}").touch(exist_ok=False)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise AssertionError("unexpected listing gateway launch")
+
+    def receive(request_id, allow_eof=False):
+        line = sys.stdin.readline()
+        if not line and allow_eof:
+            return False
+        assert json.loads(line) == {"jsonrpc": "2.0", "id": request_id, "method": "session.list",
+                                    "params": {"limit": 1}}
+        return True
+
+    def reply(request_id):
+        send({"jsonrpc": "2.0", "id": request_id,
+              "result": {"sessions": [{"id": f"stored-{instance}"}]}})
+
+    receive(1)
+    if instance == 4:
+        Path("fresh-gateway-broke").touch()
+        return
+    reply(1)
+    if instance == 1:
+        if not receive(2, allow_eof=True):
+            return
+        send({"jsonrpc": "2.0", "id": 2, "error": {"code": -32000, "message": "list refused"}})
+        receive(3)
+        Path("listing-held").touch()
+        deadline = time.monotonic() + 10
+        while not Path("release-listing").exists():
+            assert time.monotonic() < deadline, "concurrent listing did not complete"
+            assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+        reply(3)
+        receive(4)
+        Path("reused-gateway-broke").touch()
+        return
+    assert sys.stdin.read() == ""
+    Path(f"listing-eof-{instance}").touch()
+
+
 def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
@@ -180,6 +225,10 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
+    if case == "native-list-reuse":
+        send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
+        listing_reuse_gateway(send)
+        return
     if case in {"shared-settings", "shared-settings-reopen", "native-list", "native-list-exit-error"}:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         settings_gateway(corpus, case, read, send)
@@ -385,6 +434,12 @@ def verify(binary, corpus, mode, case):
             timeout=45, capture_output=True, text=True,
         )
         replay_complete = (root / "replay-complete").exists()
+        if case == "native-list-reuse" and result.returncode == 0:
+            assert len(list(root.glob("listing-started-*"))) == 4
+            assert (root / "listing-eof-2").exists()
+            assert (root / "listing-eof-3").exists()
+            assert (root / "reused-gateway-broke").exists()
+            assert (root / "fresh-gateway-broke").exists()
         resume_received = (root / "resume-received").exists()
         mismatch = root / "replay-mismatch"
         if mismatch.exists():
@@ -409,6 +464,9 @@ def verify(binary, corpus, mode, case):
         print(f"MATCHED DEADLINE EXPIRY: {case}")
         return
     result.check_returncode()
+    if case == "native-list-reuse":
+        print("LISTING GATEWAYS: 4\nCLEAN LISTING EOF: 2")
+        return
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
     if case in {"shared-settings", "shared-settings-reopen", "native-list"}:

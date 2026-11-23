@@ -23,7 +23,7 @@ oapx serve agent --stdio --backend acp --config oap-serve.json
 | `codex` | `codex-app-server` | `rust-v0.171.0` | yes: `codex` from `PATH` | [mapping](../research/codex-app-server-0.171.0-mapping.md) |
 | `pi` | `pi` | `v1.6.0` | yes: `pi` from `PATH` | [mapping](../research/pi-v1.6.0-mapping.md) |
 | `opencode` | `opencode` | `v2.3.2` | yes: the installed build, else `opencode` from `PATH` | [mapping](../research/opencode-v2.3.2-mapping.md) |
-| `acp` | `acp` | `v1.17.0` | no: needs `executable` | [mapping](../research/acp-v1.17.0-mapping.md) |
+| `acp` | `acp` | `v1.21.2` | no: needs `executable` | [mapping](../research/acp-v1.21.2-mapping.md) |
 | `hermes` | `hermes` | `v0.23.3` | no: needs `executable` | [mapping](../research/hermes-v0.23.3-mapping.md) |
 | `deepseek` | `deepseek-harness` | `dsh-v0.2.2-rc.5` | no: needs `executable`, `provider` and `model` | [mapping](../research/deepseek-harness-dsh-v0.2.2-rc.5-mapping.md) |
 

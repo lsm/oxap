@@ -283,6 +283,7 @@ for case in shared-settings shared-settings-reopen native-list; do
   python3 "$replay" "$example" "--$case" "$case" || exit $?
 done
 python3 "$replay" "$example" --native-list native-list-exit-error
+python3 "$replay" "$example" --native-list-reuse native-list-reuse
 ```
 
 The gateway sees `off` as `none` on create and on the restored runtime
@@ -293,3 +294,8 @@ refused. The isolated listing calls `session.list` with the requested limit,
 skips rows without IDs, falls back to preview and converts seconds to
 milliseconds. All three cases observe clean gateway EOF. The failed exit
 case returns a gateway error after the listing reply and emits no success.
+The reuse journey expects four launches. The first gateway survives a native
+RPC refusal, then holds one listing while the second serves a concurrent
+request and exits on EOF. A broken reused gateway is replaced once, and the
+replacement exits when the adapter is dropped. A failed first request on a
+fresh gateway is returned to the caller without a retry.
