@@ -190,6 +190,9 @@ impl Adapter {
 
     pub fn launch(&self, request: &OpenRequest) -> Result<Launch, Error> {
         let mut process = self.config.process.clone();
+        if request.reopen && !request.bound_model_id.is_empty() {
+            process.initialize.model.clone_from(&request.bound_model_id);
+        }
         let level = &request.reasoning_level;
         if !level.is_empty()
             && ![
@@ -254,7 +257,7 @@ impl Adapter {
         let state = SessionState {
             session_id,
             status: SessionStatus::IDLE,
-            current_model_id: self.config.model.clone(),
+            current_model_id: launch.process.initialize.model.clone(),
             updated_at_ms: self.config.runtime.now_ms(),
             reasoning_level: request.reasoning_level,
             compaction_policy: request.compaction_policy,
@@ -265,10 +268,8 @@ impl Adapter {
             process,
             native_id,
             state,
-            self.config.journal_capacity,
-            self.config.runtime.clone(),
             launch,
-            self.config.start_timeout,
+            &self.config,
         ))
     }
 }

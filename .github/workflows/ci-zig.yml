@@ -689,6 +689,7 @@ jobs:
           OAP_RUST_HUB_BIN="$PWD/rust/target/debug/oap-rust-hub" go test ./go/cmd/goap/ -run 'TestHubStdioAnswersGoapAndRustTheSame|TestHubStdioHoldsASubscriptionAcrossRunsUntilItsHostEndsIt|TestBackendsMatchRustHub|TestHubHTTPAnswersGoapAndRustTheSame' -v
           python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py rust/target/debug/oap-rust-hub --verb serve
           python3 .claude/skills/verify/scripts/deepseek-inline-images.py rust/target/debug/oap-rust-hub
+          python3 .claude/skills/verify/scripts/deepseek-native-resume.py --rust-hub rust/target/debug/oap-rust-hub
 
       - name: Require the Rust serve agent endpoint to pass goap conformance
         working-directory: .

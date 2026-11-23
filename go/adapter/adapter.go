@@ -111,6 +111,8 @@ type OpenRequest struct {
 
 	NativeSessionID string
 
+	BoundModelID string
+
 	ReasoningLevel protocol.ReasoningLevel
 
 	CompactionPolicy *protocol.CompactionPolicy

@@ -36,6 +36,7 @@ pub struct OpenRequest {
     pub allow_degraded_features: Vec<String>,
     pub reopen: bool,
     pub native_session_id: String,
+    pub bound_model_id: String,
     pub reasoning_level: ReasoningLevel,
     pub compaction_policy: Option<CompactionPolicy>,
     pub adopted: bool,

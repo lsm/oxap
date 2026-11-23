@@ -119,6 +119,7 @@ func (h *Hub) openIn(ctx context.Context, adapterName, directory string, request
 			return nil, protocol.SessionState{}, &UnknownSessionError{ID: request.SessionID}
 		}
 		request.NativeSessionID = bound.Record.NativeSessionID
+		request.BoundModelID = bound.Record.Model
 		request.Adopted = bound.Record.Adopted
 		if directory != "" && directory != bound.Record.Directory {
 			return nil, protocol.SessionState{}, ErrDirectoryMismatch

@@ -115,7 +115,7 @@ pub const OpenRequest = struct {
         };
     }
 
-    fn contractRequest(self: OpenRequest, native_session_id: []const u8, adopted: bool) contract.OpenRequest {
+    fn contractRequest(self: OpenRequest, native_session_id: []const u8, bound_model_id: []const u8, adopted: bool) contract.OpenRequest {
         return .{
             .session_id = self.session_id,
             .participant = self.participant,
@@ -125,6 +125,7 @@ pub const OpenRequest = struct {
             .tool_sources_json = self.tool_sources_json,
             .reopen = self.reopen,
             .native_session_id = native_session_id,
+            .bound_model_id = bound_model_id,
             .adopted = adopted,
             .reasoning_level = self.reasoning_level,
             .compaction_policy_json = self.compaction_policy_json,
@@ -981,9 +982,10 @@ pub const Hub = struct {
             }
         }
         try contract.refuseUnadvertisedOpenElections(descriptor, &request.payload(), &refused.reason);
-        try registered.adapter.admit(arena, request.contractRequest("", false), &refused.reason);
+        try registered.adapter.admit(arena, request.contractRequest("", "", false), &refused.reason);
         if (request.session_id.len > 0 and self.findSession(request.session_id) != null) return error.SessionExists;
         var native_session_id: []const u8 = "";
+        var bound_model_id: []const u8 = "";
         var adopted_native = false;
         var directory = request.directory;
         if (request.reopen and request.adopt_native_id.len > 0) {
@@ -993,6 +995,7 @@ pub const Hub = struct {
             if (self.findBound(request.session_id)) |record| {
                 if (!std.mem.eql(u8, record.adapter_name, adapter_name)) return error.UnknownSession;
                 native_session_id = try arena.dupe(u8, record.native_id);
+                bound_model_id = record.model;
                 adopted_native = record.adopted;
                 if (request.directory.len > 0 and !std.mem.eql(u8, request.directory, record.directory)) return error.DirectoryMismatch;
                 directory = try arena.dupe(u8, record.directory);
@@ -1007,6 +1010,7 @@ pub const Hub = struct {
                 };
                 if (!std.mem.eql(u8, stored.record.adapter, adapter_name)) return error.UnknownSession;
                 native_session_id = stored.record.native_session_id;
+                bound_model_id = stored.record.model;
                 adopted_native = stored.record.adopted;
                 if (request.directory.len > 0 and !std.mem.eql(u8, request.directory, stored.record.directory)) return error.DirectoryMismatch;
                 directory = stored.record.directory;
@@ -1014,7 +1018,7 @@ pub const Hub = struct {
         }
         const placed = try self.placedIn(registered, directory);
         if (request.reopen and directory.len > 0 and !std.mem.eql(u8, directory, placed.directory)) return error.DirectoryMismatch;
-        var session = placed.adapter.open(arena, request.contractRequest(native_session_id, adopted_native), &refused.reason) catch |err| {
+        var session = placed.adapter.open(arena, request.contractRequest(native_session_id, bound_model_id, adopted_native), &refused.reason) catch |err| {
             if (request.reopen and err == error.UnknownSession) return refused.reason.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
             return err;
         };
@@ -1120,6 +1124,7 @@ pub const Hub = struct {
             .tools_json = opened.tools_json,
             .reopen = true,
             .native_session_id = record.native_id,
+            .bound_model_id = record.model,
             .adopted = record.adopted,
             .reasoning_level = reasoning_level orelse if (record.reasoning_level.len > 0) record.reasoning_level else null,
             .compaction_policy_json = compaction_policy orelse if (record.compaction_policy.len > 0) record.compaction_policy else null,
