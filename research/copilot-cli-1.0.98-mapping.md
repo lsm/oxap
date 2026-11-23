@@ -184,7 +184,8 @@ exercise it.
 | --- | --- |
 | `assistant.message_delta {messageId, deltaContent}` (ephemeral) | `content.delta` |
 | `assistant.message {messageId, content, phase, toolRequests}` | authoritative text for the final response; `phase:"final_answer"` marks the last |
-| `assistant.reasoning_delta` / `assistant.reasoning {reasoningId, content}` | reasoning, same shape |
+| `assistant.reasoning_delta {reasoningId, deltaContent}` | `content.delta` with a `reasoning` part |
+| `assistant.reasoning {reasoningId, content}` | observed-only: the deltas already carried it |
 | `assistant.streaming_delta {totalResponseSizeBytes}` | observed-only: a byte counter, no text |
 | `assistant.usage {inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, reasoningTokens, cost, model, isAuto, …}` | one per model call; known input/output counts sum exactly on the terminal. A missing or unrepresentable term makes that accumulated count unknown, never zero or a saturated approximation. Totals are omitted because cache terms are not mapped, per Decisions 0063/0065. `cost` is premium requests and goes to a namespaced extension |
 | `assistant.message` that ends a message, with the `assistant.usage` calls since the previous one | `content.completed` carrying that message's own `usage` ([Decision 0049](../decisions/0049-a-message-reports-its-own-usage.md)) |

@@ -7,8 +7,11 @@ use serde_json::value::RawValue;
 use serde_json::Value;
 
 fn corpus_frames() -> Vec<Value> {
+    let pin = oxap_harness::current("codex-app-server").unwrap();
     let cases = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../fixtures/adapters/codex-appserver-0.167.2/cases");
+        .join("../../..")
+        .join(&pin.corpus)
+        .join("cases");
     let mut frames = Vec::new();
     for case in std::fs::read_dir(cases).unwrap() {
         let native = std::fs::read_to_string(case.unwrap().path().join("native.jsonl")).unwrap();

@@ -13,8 +13,9 @@ use serde_json::value::RawValue;
 use crate::native::{
     AgentMessageDeltaNotification, ItemNotification, ThreadTokenUsageUpdatedNotification,
     TurnNotification, METHOD_AGENT_DELTA, METHOD_COMMAND_APPROVAL, METHOD_FILE_APPROVAL,
-    METHOD_ITEM_COMPLETED, METHOD_ITEM_STARTED, METHOD_TOKEN_USAGE, METHOD_TURN_COMPLETED,
-    METHOD_TURN_STARTED, METHOD_USER_INPUT, TURN_COMPLETED, TURN_FAILED, TURN_INTERRUPTED,
+    METHOD_ITEM_COMPLETED, METHOD_ITEM_STARTED, METHOD_REASONING_DELTA, METHOD_TOKEN_USAGE,
+    METHOD_TURN_COMPLETED, METHOD_TURN_STARTED, METHOD_USER_INPUT, TURN_COMPLETED, TURN_FAILED,
+    TURN_INTERRUPTED,
 };
 use crate::rpc::{Inbound, NotificationMessage};
 use crate::session::{hold, Inner, Shared};
@@ -129,8 +130,12 @@ impl Shared {
                 None => invalid(&mut inner, "invalid turn/started payload"),
             },
             METHOD_AGENT_DELTA => match read::<AgentMessageDeltaNotification>(notification) {
-                Some(value) => self.delta(&mut inner, &value),
+                Some(value) => self.delta(&mut inner, value, false),
                 None => invalid(&mut inner, "invalid agent message delta"),
+            },
+            METHOD_REASONING_DELTA => match read::<AgentMessageDeltaNotification>(notification) {
+                Some(value) => self.delta(&mut inner, value, true),
+                None => invalid(&mut inner, "invalid reasoning summary delta"),
             },
             METHOD_ITEM_STARTED | METHOD_ITEM_COMPLETED => {
                 match read::<ItemNotification>(notification) {
@@ -184,7 +189,7 @@ impl Shared {
         self.emit(inner, &id, EnvelopeType::RUN_STARTED, &payload, false);
     }
 
-    fn delta(&self, inner: &mut Inner, value: &AgentMessageDeltaNotification) {
+    fn delta(&self, inner: &mut Inner, value: AgentMessageDeltaNotification, reasoning: bool) {
         let Some(id) = self.run_for(inner, &value.thread_id, &value.turn_id) else {
             return;
         };
@@ -195,16 +200,25 @@ impl Shared {
         else {
             return;
         };
-        run.text.push_str(&value.delta);
+        let part = if reasoning {
+            ContentPart {
+                part_type: ContentPartType::REASONING,
+                reasoning: value.delta,
+                ..ContentPart::default()
+            }
+        } else {
+            run.text.push_str(&value.delta);
+            ContentPart {
+                part_type: ContentPartType::TEXT,
+                text: value.delta,
+                ..ContentPart::default()
+            }
+        };
         let payload = ContentDeltaPayload {
             session_id: inner.state.session_id.clone(),
             run_id: id.clone(),
             message_id: Some(run.message_id.clone()),
-            part: ContentPart {
-                part_type: ContentPartType::TEXT,
-                text: value.delta.clone(),
-                ..ContentPart::default()
-            },
+            part,
         };
         self.emit(inner, &id, EnvelopeType::CONTENT_DELTA, &payload, false);
     }

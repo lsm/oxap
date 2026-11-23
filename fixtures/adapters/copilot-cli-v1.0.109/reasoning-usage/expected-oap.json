@@ -20,8 +20,29 @@
     "protocol": "open-agent-protocol",
     "version": "0.1",
     "profile": "open-agent-protocol.agent-control-core",
-    "type": "run.completed",
+    "type": "content.delta",
     "id": "event-4",
+    "payload": {
+      "session_id": "s1",
+      "run_id": "run-1",
+      "message_id": "message-2",
+      "part": {
+        "type": "reasoning",
+        "reasoning": "private synthetic reasoning"
+      }
+    },
+    "sequence": 2,
+    "timestamp_ms": 2,
+    "session_id": "s1",
+    "run_id": "run-1",
+    "capability_revision": "copilot-cli-1.0.109-oap-v1"
+  },
+  {
+    "protocol": "open-agent-protocol",
+    "version": "0.1",
+    "profile": "open-agent-protocol.agent-control-core",
+    "type": "run.completed",
+    "id": "event-5",
     "payload": {
       "session_id": "s1",
       "run_id": "run-1",
@@ -41,8 +62,8 @@
         "output_tokens": 4
       }
     },
-    "sequence": 2,
-    "timestamp_ms": 2,
+    "sequence": 3,
+    "timestamp_ms": 3,
     "session_id": "s1",
     "run_id": "run-1",
     "capability_revision": "copilot-cli-1.0.109-oap-v1",

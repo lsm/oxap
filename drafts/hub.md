@@ -95,7 +95,7 @@ An adapter entry takes exactly these members: `type`, `executable`, `args`,
 `environment`, `working_directory`, `model`, `journal_capacity`,
 `allowed_tools`, `unrestricted_tools`, `approval_policy`, `sandbox`,
 `provider`, `max_tokens`, `agent_config`, `system_prompt`, `endpoint`, `agent`,
-`any_directory`, and in `oapx` also `model_provider`.
+`any_directory`, and in `oapx` also `model_provider` and `model_endpoint`.
 `type` defaults to the entry's own name, so a registry of one memory adapter
 needs nothing but its name. Without `--config` the hub serves the built-in
 memory reference adapter alone.
@@ -125,8 +125,8 @@ and `TestTheExampleCopilotEntryUsesAnExplicitNativeEnvironment`; the public
 refusing the Go-only example. It claims no live Copilot authentication or model
 response.
 
-`model_provider` names a catalog row as a claude or codex entry's model provider (#361),
-and is `oapx`'s own under Decision 0038: Go's decoder refuses it as an unknown
+`model_provider` names a catalog row as a claude, codex, or deepseek entry's model provider,
+and is `oapx`'s own under Decision 0038: Go and Rust refuse it as an unknown
 member, so a document carrying it is an `oapx` document. `oapx` translates it
 into Claude Code's official settings, recorded in the 2.1.282 ledger's
 *Model-provider settings* section, and nothing else: `ANTHROPIC_BASE_URL` is the
@@ -139,8 +139,8 @@ catalog's: a `base_url_env` or a `providers.json` override moves `oapx`'s own
 requests, not the harness's. Each of these is refused at startup, naming the
 entry: a row that is not catalogued, one with no `anthropic-messages` endpoint, an
 `environment` that already sets one of the three variables, a row with no key,
-a key that is an OAuth login, and `model_provider` on any type but `claude` or
-`codex`.
+a key that is an OAuth login, and `model_provider` on any type except `claude`,
+`codex`, or `deepseek`.
 
 A codex entry is routed through Codex's own `-c` settings, recorded in the
 0.160.1 ledger's *Model-provider settings* section: `model_provider` names a
@@ -152,6 +152,59 @@ holding the row's key. The settings follow the entry's own `args`. A row with no
 `openai-responses` endpoint at a fixed address is refused, as are an
 `environment` that sets `OAPX_PROVIDER_API_KEY` and a codex `endpoint`, whose
 running app-server chose its provider when it started.
+
+A deepseek entry passes the row's catalogued `anthropic-messages` endpoint
+as `DEEPSEEK_BASE_URL` and its key as `DEEPSEEK_API_KEY`, after the entry's
+`environment`. For `opencode-go`, `oapx` reads `OPENCODE_API_KEY` from the hub
+process environment and falls back to its credential store. Startup refuses
+the named entry for an unknown row, a missing endpoint or key, an OAuth login,
+or either translated variable already set in `environment`. The dsh
+`provider` and the adapter's capabilities stay the same.
+
+A Claude, Codex, DeepSeek, Hermes, OpenCode, or Pi hub entry can use `model_endpoint` to route
+directly to a gateway. Set `base_url` to an absolute HTTPS URL or a
+loopback HTTP URL without userinfo, a query, or a fragment. The hub passes
+it through verbatim. Set `credential_env` to the name of a hub environment
+variable whose value is at least 16 bytes. Short credentials can collide
+with protocol field names during redaction. Startup refuses an entry that
+combines this setting with `model_provider` or lists the source variable or
+a routing destination in `environment`. The hub replaces the key with its
+source variable name in child stderr and hub output. Go and Rust refuse
+the member as unknown.
+
+- Claude uses `anthropic-messages`. Its optional `auth` selects `api-key`
+  by default or `bearer`.
+- Codex uses `openai-responses` and selects `oapx-custom` through its own
+  `-c` settings. The key goes to `OAPX_PROVIDER_API_KEY`. A running
+  app-server selected its provider at launch, so `endpoint` is refused.
+- DeepSeek uses `anthropic-messages` and receives `DEEPSEEK_BASE_URL` and
+  `DEEPSEEK_API_KEY`. Startup refuses `--patch` or a `.credentials.yaml`
+  under the resolved dsh home because either can override the route.
+- Hermes uses `openai-responses` and sends `provider: "openai-api"` beside
+  the required bare model id at session creation. The child receives
+  `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and a fresh `HERMES_HOME` under oxap
+  state. Startup refuses these destination variables, numbered
+  `OPENAI_API_KEY_2` and later siblings listed in `environment`, and URLs
+  Hermes reclassifies away from Responses, including AWS Bedrock Runtime.
+- OpenCode and Pi require `model: "oapx/<model-id>"` and one of
+  `anthropic-messages`, `openai-completions`, or `openai-responses` in
+  `wire`. OpenCode receives an inline `OPENCODE_CONFIG_CONTENT` layer and
+  selects the model at session creation. A running OpenCode server cannot
+  receive that layer, so `endpoint` is refused. Pi receives a generated
+  `models.json` in a content-addressed directory under oxap state and
+  selects the model through `--provider` and `--model`. A routed Pi entry
+  uses this directory for its agent state. Startup refuses `--provider`,
+  `--model`, and `--api-key` in the entry's `args`.
+
+Fixed-wire adapters can omit `wire`. Only Claude accepts `auth`.
+Both generated configs reference `credential_env` by name. OpenCode's own
+server log is outside the hub's redaction boundary.
+
+A Go Copilot entry can forward `COPILOT_PROVIDER_BASE_URL` and
+`COPILOT_PROVIDER_API_KEY` by name in `environment`. For Docker Agent,
+configure `base_url`, `api_type`, and `token_key` in the agent YAML and
+forward the variable that `token_key` names through the ACP entry's
+`environment`. Set its `args` to `["serve", "acp", "agent.yaml"]`.
 
 `any_directory: true` makes the entry a template: a `work.start` naming another
 absolute directory gets a session from an adapter built from this entry with
@@ -171,10 +224,10 @@ refused rather than one being chosen. The keys are the ones `oapx tui` sends —
 `user_input` — plus `model`, a `provider/api@id` reference as the session's
 model catalog prints it, so two sessions on one hub can run different providers
 and models. An open naming a model the catalog lacks is refused
-`model_not_found` with the `model_id` it named. The model is fixed for the
-session's life over the hub: the adapter does not advertise
+`model_not_found` with the `model_id` it named. The adapter does not advertise
 `run.model_selection`, so a submit carrying `model_id` is refused
-`unsupported_feature`, and the hub has no op for `session.model.switch`.
+`unsupported_feature`. Use `session.model.switch` over stdio to change
+the session default.
 This type is Zig's alone: Go has no counterpart adapter, so `goap serve` refuses
 the entry as an unknown type, and `examples/oap-serve.json` does not carry one
 because `goap serve` reads that file too (D27).
@@ -1475,8 +1528,10 @@ never connects overflows exactly as a slow consumer does, and the adopter reads
 
 ## The operations
 
-Seventeen ops, plus `shutdown`, which [Shutdown and exit on
-stdio](#shutdown-and-exit-on-stdio) describes, with its route `POST /shutdown`.
+The transports share seventeen ops and [`shutdown`](#shutdown-and-exit-on-stdio),
+which uses `POST /shutdown` over HTTP. The stdio hubs also serve
+[`session.model.switch`](#sessionmodelswitch). See [D38](#d38--session-model-switch-has-no-http-route)
+for HTTP.
 Each row gives the request line's parameters, the answer, and the errors. A
 refusal the row does not name is `internal` on both, with the
 exceptions stated once here rather than repeated per row:
@@ -1920,6 +1975,21 @@ are specified in [triggered runs](triggered-runs.md).
   adapter, and one naming nothing or another session is refused before it`.
   `oapx serve --stdio` serves the op through the same `Frontend.settingsControl`
   the daemon route runs.
+
+### `session.model.switch`
+
+- **params:** `session_id` and a `session.model.switch.request` envelope in
+  `request`. Both session IDs in the envelope must match `session_id`.
+- **answer:** the held adapter's correlated `session.model.switch.response`.
+  When the model changes, the hub refreshes the live binding with the model
+  the adapter confirmed. Read `state` for the current model and `history`
+  for the latest stored binding. DeepSeek allows a different model before
+  the first turn and refuses a different model after it has run.
+- **errors:** `unknown_session`, `scope_mismatch`, `unsupported_feature`,
+  `capability_degraded`, `model_not_found`, `run_active`, `session_closed`,
+  and the standard envelope and transport refusals.
+- **pinned by:** the `stdio-deepseek-model-switch.py` parity journey in CI,
+  run against the Go, Rust and Zig stdio hubs.
 
 ### `close`
 
@@ -2818,6 +2888,13 @@ says `Allow: GET`, and its route test pins that. Answering `GET, HEAD` for a
 [Parking](#parking) lands one tree at a time. Zig parks and wakes a session, by
 default after five idle seconds and never with `--park-after 0`; Go and Rust have no
 park at all.
+
+### D38 — Session model switch has no HTTP route
+
+All three stdio hubs serve [`session.model.switch`](#sessionmodelswitch). Their
+HTTP bindings do not expose it yet. The host initiating this change connects
+over stdio. Closing the gap requires a shared HTTP route with the same
+envelope, scope checks, and refusal mapping.
 
 ### Recorded, and not divergences
 

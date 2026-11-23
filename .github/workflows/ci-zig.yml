@@ -75,7 +75,7 @@ jobs:
             echo "has_github_copilot=$has_github_copilot"
           } >> "$GITHUB_OUTPUT"
 
-  # =============================================================================
+  # ======================================================================
   # Unit Tests (always run, no secrets needed)
   # =============================================================================
   unit-tests:
@@ -347,13 +347,17 @@ jobs:
       - name: Build oapx
         run: zig build --build-file zig/build.zig install --prefix /tmp/oapx-parity
 
-      - name: Require each backend to answer and write its child exactly as goap does
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the Rust endpoint
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
+
+      - name: Compare the served Zig, Go, and Rust backends
         env:
           OAP_OAPX_BIN: /tmp/oapx-parity/bin/oxap
-        run: go test ./go/cmd/goap/ -run TestBackendsMatchOapx -v
-
-      - name: Setup Rust for trace validation
-        uses: dtolnay/rust-toolchain@stable
+          OAP_RUST_HUB_BIN: ${{ github.workspace }}/rust/target/debug/oap-rust-hub
+        run: bash .claude/skills/verify/scripts/backend-parity.sh
 
       - name: Setup Node for SDK command parity
         uses: actions/setup-node@v4
@@ -464,6 +468,33 @@ jobs:
         run: |
           zig build --build-file zig/build.zig build-service-config-probe --prefix /tmp/oapx-hub -Doptimize=ReleaseSafe
           python3 .claude/skills/verify/scripts/service-config.py /tmp/oapx-hub/bin/service-config-probe
+=======
+      - name: Verify Claude custom endpoint routing and key redaction
+        run: python3 .claude/skills/verify/scripts/claude-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
+
+      - name: Verify Codex and DeepSeek custom endpoints
+        run: python3 .claude/skills/verify/scripts/codex-deepseek-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
+
+      - name: Verify DeepSeek model switching over stdio
+        run: |
+          go build -o /tmp/oapx-hub/bin/goap ./go/cmd/goap
+          python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py /tmp/oapx-hub/bin/oxap
+          python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py /tmp/oapx-hub/bin/goap
+
+      - name: Verify Hermes custom endpoint routing and key redaction
+        run: python3 .claude/skills/verify/scripts/hermes-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
+
+      - name: Verify OpenCode, Pi, Copilot and Docker Agent custom endpoints
+        run: |
+          python3 .claude/skills/verify/scripts/opencode-pi-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
+
+      - name: Verify DeepSeek sessions resume across a hub restart
+        run: python3 .claude/skills/verify/scripts/deepseek-native-resume.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
+
+      - name: Verify DeepSeek inline image prompts
+        run: |
+          python3 .claude/skills/verify/scripts/deepseek-inline-images.py /tmp/oapx-hub/bin/oxap
+          python3 .claude/skills/verify/scripts/deepseek-inline-images.py /tmp/oapx-hub/bin/goap --verb hub
 
       - name: Require the oapx alias to match oxap on stdout and exit code
         run: |
@@ -562,7 +593,7 @@ jobs:
     name: Rust SDK
     needs: [unit-tests]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ github.event_name == 'push' && 25 || 15 }}
     defaults:
       run:
         working-directory: rust
@@ -580,8 +611,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Restore Cargo cache
+        id: cargo-cache
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
@@ -637,6 +669,8 @@ jobs:
           set -euo pipefail
           cargo build --quiet --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
           OAP_RUST_HUB_BIN="$PWD/rust/target/debug/oap-rust-hub" go test ./go/cmd/goap/ -run 'TestHubStdioAnswersGoapAndRustTheSame|TestHubStdioHoldsASubscriptionAcrossRunsUntilItsHostEndsIt|TestBackendsMatchRustHub|TestHubHTTPAnswersGoapAndRustTheSame' -v
+          python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py rust/target/debug/oap-rust-hub --verb serve
+          python3 .claude/skills/verify/scripts/deepseek-inline-images.py rust/target/debug/oap-rust-hub
 
       - name: Require the Rust serve agent endpoint to pass goap conformance
         working-directory: .
@@ -658,6 +692,16 @@ jobs:
         if: always()
         working-directory: .
         run: ./scripts/check-no-test-litter.sh
+
+      - name: Save Cargo cache on main
+        if: github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # =============================================================================
   # Python SDK (sdk/python/)

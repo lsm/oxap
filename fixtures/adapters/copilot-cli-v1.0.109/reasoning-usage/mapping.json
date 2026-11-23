@@ -23,8 +23,8 @@
   {
     "index": 4,
     "direction": "copilot-to-host",
-    "classification": "observed-only",
-    "fidelity": "observed-only",
+    "classification": "mapped",
+    "fidelity": "normalized",
     "oap": "event projection or explicit omission"
   },
   {

@@ -193,13 +193,82 @@ const StderrNotice = struct {
     }
 };
 
+const RouteRedactions = struct {
+    const Key = struct { variable: []const u8, value: []const u8 };
+
+    keys: std.ArrayList(Key) = .empty,
+
+    fn text(self: *const RouteRedactions, arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error![]const u8 {
+        var rest = bytes;
+        var out: std.ArrayList(u8) = .empty;
+        while (true) {
+            var first = rest.len;
+            var matched: ?Key = null;
+            for (self.keys.items) |key| {
+                const at = std.mem.find(u8, rest, key.value) orelse continue;
+                if (at > first or (at == first and key.value.len <= matched.?.value.len)) continue;
+                first = at;
+                matched = key;
+            }
+            const key = matched orelse break;
+            try out.appendSlice(arena, rest[0..first]);
+            try out.appendSlice(arena, key.variable);
+            rest = rest[first + key.value.len ..];
+        }
+        if (rest.ptr == bytes.ptr) return bytes;
+        try out.appendSlice(arena, rest);
+        return out.items;
+    }
+
+    fn value(self: *const RouteRedactions, arena: std.mem.Allocator, node: *std.json.Value) std.mem.Allocator.Error!bool {
+        var changed = false;
+        switch (node.*) {
+            .string => |original| {
+                node.string = try self.text(arena, original);
+                return original.ptr != node.string.ptr;
+            },
+            .array => |*array| for (array.items) |*item| {
+                changed = (try self.value(arena, item)) or changed;
+            },
+            .object => |*object| {
+                for (object.keys(), object.values()) |*name, *item| {
+                    const original = name.*;
+                    name.* = try self.text(arena, original);
+                    changed = (try self.value(arena, item)) or changed or original.ptr != name.ptr;
+                }
+            },
+            else => {},
+        }
+        return changed;
+    }
+
+    fn json(context: *const anyopaque, arena: std.mem.Allocator, bytes: []const u8) std.mem.Allocator.Error![]const u8 {
+        const self: *const RouteRedactions = @ptrCast(@alignCast(context));
+        if (self.keys.items.len == 0) return bytes;
+        var parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{ .parse_numbers = false }) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return self.text(arena, bytes),
+        };
+        if (!try self.value(arena, &parsed)) return bytes;
+        return std.json.Stringify.valueAlloc(arena, parsed, .{});
+    }
+};
+
 const StdoutSink = struct {
     file: std.Io.File,
     io: std.Io,
+    redactions: ?*const RouteRedactions = null,
+    json: bool = false,
 
     fn write(context: *anyopaque, line: []const u8) anyerror!void {
         const self: *StdoutSink = @ptrCast(@alignCast(context));
-        try self.file.writeStreamingAll(self.io, line);
+        var scratch = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer scratch.deinit();
+        const bytes = if (self.redactions) |redactions|
+            if (self.json) try RouteRedactions.json(redactions, scratch.allocator(), line) else try redactions.text(scratch.allocator(), line)
+        else
+            line;
+        try self.file.writeStreamingAll(self.io, bytes);
         try self.file.writeStreamingAll(self.io, "\n");
     }
 };
@@ -274,7 +343,7 @@ const ServedSessions = struct {
 
     fn attach(self: *ServedSessions, adapter: *oapx_adapter.Adapter) void {
         self.startWriter() catch {};
-        adapter.history = .{ .ctx = self, .load = load, .read = read, .entries = entries };
+        adapter.history = .{ .ctx = self, .load = load, .read = read, .entries = entries, .stamp = stamp };
         adapter.transcripts = .{ .ctx = self, .save = saveTranscript };
         adapter.recorder = .{ .ctx = self, .record = record };
     }
@@ -373,6 +442,15 @@ const ServedSessions = struct {
             .compaction => |summary| .{ .offset = entry.offset, .at_ms = entry.at_ms, .compaction = summary },
         };
         return saved;
+    }
+
+    fn stamp(ctx: *anyopaque, session_id: []const u8) anyerror!?oapx_adapter.SavedStamp {
+        const self: *ServedSessions = @ptrCast(@alignCast(ctx));
+        self.flush();
+        self.recorders_mutex.lockUncancelable(hubIo());
+        defer self.recorders_mutex.unlock(hubIo());
+        const stat = (try self.store.conversationStat(session_id)) orelse return null;
+        return .{ .size = stat.size, .inode = @intCast(stat.inode), .mtime_ns = stat.mtime.nanoseconds, .ctime_ns = stat.ctime.nanoseconds };
     }
 
     fn cloneMessages(arena: std.mem.Allocator, loaded: []const ai_types.Message) ![]const ai_types.Message {
@@ -591,6 +669,7 @@ fn runHubHttp(
     core: *hub.Hub,
     bind: []const u8,
     served: []const u8,
+    redactions: *const RouteRedactions,
     stdout: std.Io.File,
     stderr: std.Io.File,
 ) !void {
@@ -620,7 +699,11 @@ fn runHubHttp(
 
     var daemon = try hub_daemon.Daemon.init(allocator, core, allow orelse &.{}, hub_http.always_going);
     defer daemon.deinit();
-    var notices = StdoutSink{ .file = stderr, .io = hubIo() };
+    var notices = StdoutSink{ .file = stderr, .io = hubIo(), .redactions = redactions };
+    if (redactions.keys.items.len > 0) {
+        daemon.redact_json = RouteRedactions.json;
+        daemon.redaction_context = redactions;
+    }
     daemon.signals = endpoint_signals.count;
     daemon.signal_readable = endpoint_signals.readable();
     daemon.frontend.notices = .{ .context = &notices, .write = StdoutSink.write };
@@ -792,7 +875,15 @@ fn runMultiSessionAgent(
     stdout: std.Io.File,
     stderr: std.Io.File,
 ) !void {
-    const surface = withSurface(hub_config_surface, arena, stderr);
+    var redactions: RouteRedactions = .{};
+    var surface = withSurface(hub_config_surface, arena, stderr);
+    surface.redactions = &redactions;
+    for (file.adapters) |entry| {
+        if (entry.model_endpoint) |endpoint| {
+            const value = environ.get(endpoint.credential_env).?;
+            try redactions.keys.append(arena, .{ .variable = endpoint.credential_env, .value = value });
+        }
+    }
     const tool_sources = try configuredSources(arena, file.tool_sources);
     var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources };
     defer registry.deinit();
@@ -846,13 +937,13 @@ fn runMultiSessionAgent(
         try compat.stdio.writeAll(stderr, "oxap serve: a console interrupt ends this process rather than the hub; the Windows path is #460\n");
     }
 
-    const served = try std.mem.join(arena, ", ", try core.names(arena));
-    if (options.address) |address| return runHubHttp(allocator, arena, &core, address, served, stdout, stderr);
+    const served = try redactions.text(arena, try std.mem.join(arena, ", ", try core.names(arena)));
+    if (options.address) |address| return runHubHttp(allocator, arena, &core, address, served, &redactions, stdout, stderr);
 
-    var sink = StdoutSink{ .file = stdout, .io = hubIo() };
+    var sink = StdoutSink{ .file = stdout, .io = hubIo(), .redactions = &redactions, .json = true };
     var frontend = try hub_stdio.Frontend.init(allocator, &core, .{ .context = &sink, .write = StdoutSink.write }, .{});
     defer frontend.deinit();
-    var notices = StdoutSink{ .file = stderr, .io = hubIo() };
+    var notices = StdoutSink{ .file = stderr, .io = hubIo(), .redactions = &redactions };
     frontend.notices = .{ .context = &notices, .write = StdoutSink.write };
     try compat.stdio.writeAll(stderr, "oxap: serving adapters over stdio: ");
     try compat.stdio.writeAll(stderr, served);
@@ -873,7 +964,8 @@ fn runMultiSessionAgent(
                     line,
                     if (frontend.recorded.cut) " (cut)" else "",
                 }) catch "oxap: framing defect, stopped serving\n";
-                compat.stdio.writeAll(stderr, message) catch {};
+                const filtered = try redactions.text(arena, message);
+                compat.stdio.writeAll(stderr, filtered) catch {};
             } else {
                 compat.stdio.writeAll(stderr, "oxap: framing defect, stopped serving\n") catch {};
             }
@@ -5297,10 +5389,12 @@ const ConfigSurface = struct {
     noun: []const u8,
     stderr: std.Io.File = undefined,
     arena: std.mem.Allocator = undefined,
+    redactions: ?*RouteRedactions = null,
 
     fn refuse(self: ConfigSurface, comptime format: []const u8, args: anytype) !void {
         const message = try std.fmt.allocPrint(self.arena, "{s}: " ++ format ++ "\n", .{self.label} ++ args);
-        try compat.stdio.writeAll(self.stderr, message);
+        const filtered = if (self.redactions) |redactions| try redactions.text(self.arena, message) else message;
+        try compat.stdio.writeAll(self.stderr, filtered);
     }
 };
 
@@ -5338,10 +5432,15 @@ fn backendEntry(
         return error.BackendRefused;
     };
     sources.* = file.tool_sources;
-    return file.adapter(name) orelse {
+    const entry = file.adapter(name) orelse {
         try surface.refuse("--config {s} names no adapter \"{s}\"", .{ path, name });
         return error.BackendRefused;
     };
+    if (entry.model_endpoint != null) {
+        try surface.refuse("{s} \"{s}\" uses model_endpoint, which requires the hub", .{ surface.noun, entry.name });
+        return error.BackendRefused;
+    }
+    return entry;
 }
 
 fn claudeBackendConfig(
@@ -5361,7 +5460,11 @@ fn claudeBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; name one with \"executable\" in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
-    const environment = if (entry.model_provider.len > 0)
+    const custom = entry.model_endpoint;
+    const key = if (custom) |endpoint| environ.get(endpoint.credential_env).? else "";
+    const environment = if (custom) |endpoint|
+        try providerRouteEnvironment(arena, entry.environment, "ANTHROPIC_BASE_URL", endpoint.base_url, if (endpoint.bearer) "ANTHROPIC_AUTH_TOKEN" else "ANTHROPIC_API_KEY", key)
+    else if (entry.model_provider.len > 0)
         try routedClaudeEnvironment(surface, arena, entry, environ, routeStorage)
     else
         entry.environment;
@@ -5369,6 +5472,7 @@ fn claudeBackendConfig(
         .executable = executable,
         .args = entry.args,
         .environment = environment,
+        .stderr_redaction = if (custom) |endpoint| .{ .value = key, .variable = endpoint.credential_env } else null,
         .working_directory = entry.working_directory,
         .model = entry.model,
         .tools = switch (posture) {
@@ -5377,8 +5481,6 @@ fn claudeBackendConfig(
         },
     } };
 }
-
-const claude_routed_variables = [_][]const u8{ "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN" };
 
 const RouteStorage = *const fn (std.mem.Allocator) ?oauth_storage.AuthStorage;
 
@@ -5448,20 +5550,42 @@ fn routedClaudeEnvironment(
         try surface.refuse("{s} \"{s}\" names model_provider \"{s}\", which serves no anthropic-messages endpoint, the only wire Claude Code's provider settings reach", .{ surface.noun, entry.name, id });
         return error.BackendRefused;
     };
-    try refuseRoutedVariables(surface, entry, &claude_routed_variables);
+    try refuseRoutedVariables(surface, entry, &adapter_config.claude_endpoint_variables);
     const credential = try routedCredential(surface, arena, entry, row, environ, load_storage);
 
     const variable = if (std.mem.eql(u8, credential.name, "ANTHROPIC_AUTH_TOKEN")) "ANTHROPIC_AUTH_TOKEN" else "ANTHROPIC_API_KEY";
     const trimmed = std.mem.trimEnd(u8, base, "/");
     const endpoint = if (provider_catalog.endpointCarriesVersion(id, base) and std.mem.endsWith(u8, trimmed, "/v1")) trimmed[0 .. trimmed.len - "/v1".len] else trimmed;
-    const environment = try arena.alloc([]const u8, entry.environment.len + 2);
-    @memcpy(environment[0..entry.environment.len], entry.environment);
-    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "ANTHROPIC_BASE_URL={s}", .{endpoint});
-    environment[entry.environment.len + 1] = try std.fmt.allocPrint(arena, "{s}={s}", .{ variable, credential.key });
+    return providerRouteEnvironment(arena, entry.environment, "ANTHROPIC_BASE_URL", endpoint, variable, credential.key);
+}
+
+fn providerRouteEnvironment(arena: std.mem.Allocator, inherited: []const []const u8, base_variable: []const u8, endpoint: []const u8, key_variable: []const u8, key: []const u8) ![]const []const u8 {
+    const environment = try arena.alloc([]const u8, inherited.len + 2);
+    @memcpy(environment[0..inherited.len], inherited);
+    environment[inherited.len] = try std.fmt.allocPrint(arena, "{s}={s}", .{ base_variable, endpoint });
+    environment[inherited.len + 1] = try std.fmt.allocPrint(arena, "{s}={s}", .{ key_variable, key });
     return environment;
 }
 
-const codex_route_key_variable = "OAPX_PROVIDER_API_KEY";
+fn routedDeepseekEnvironment(
+    surface: ConfigSurface,
+    arena: std.mem.Allocator,
+    entry: adapter_config.AdapterEntry,
+    environ: *const std.process.Environ.Map,
+) ![]const []const u8 {
+    const id = entry.model_provider;
+    const row = try routedRow(surface, entry);
+    const base = provider_catalog.baseUrl(id, "anthropic-messages", provider_catalog.defaultRegion(id)) orelse {
+        try surface.refuse("{s} \"{s}\" names model_provider \"{s}\", which serves no anthropic-messages endpoint, the wire the DeepSeek harness uses", .{ surface.noun, entry.name, id });
+        return error.BackendRefused;
+    };
+    try refuseRoutedVariables(surface, entry, &adapter_config.deepseek_endpoint_variables);
+    const credential = try routedCredential(surface, arena, entry, row, environ, routeStorage);
+
+    return providerRouteEnvironment(arena, entry.environment, "DEEPSEEK_BASE_URL", base, "DEEPSEEK_API_KEY", credential.key);
+}
+
+const codex_route_key_variable = adapter_config.codex_endpoint_variable;
 
 const CodexRoute = struct {
     args: []const []const u8,
@@ -5497,9 +5621,13 @@ fn routedCodex(
 
     const base = if (std.mem.endsWith(u8, request, "/responses")) request[0 .. request.len - "/responses".len] else request;
     const provider = try std.fmt.allocPrint(arena, "oapx-{s}", .{id});
+    return codexRoute(arena, entry, provider, row.display_name orelse id, base, credential.key);
+}
+
+fn codexRoute(arena: std.mem.Allocator, entry: adapter_config.AdapterEntry, provider: []const u8, name: []const u8, base: []const u8, key: []const u8) !CodexRoute {
     const settings = [_][2][]const u8{
         .{ "model_provider", provider },
-        .{ try std.fmt.allocPrint(arena, "model_providers.{s}.name", .{provider}), row.display_name orelse id },
+        .{ try std.fmt.allocPrint(arena, "model_providers.{s}.name", .{provider}), name },
         .{ try std.fmt.allocPrint(arena, "model_providers.{s}.base_url", .{provider}), base },
         .{ try std.fmt.allocPrint(arena, "model_providers.{s}.env_key", .{provider}), codex_route_key_variable },
         .{ try std.fmt.allocPrint(arena, "model_providers.{s}.wire_api", .{provider}), "responses" },
@@ -5512,7 +5640,7 @@ fn routedCodex(
     }
     const environment = try arena.alloc([]const u8, entry.environment.len + 1);
     @memcpy(environment[0..entry.environment.len], entry.environment);
-    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "{s}={s}", .{ codex_route_key_variable, credential.key });
+    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "{s}={s}", .{ codex_route_key_variable, key });
     return .{ .args = args, .environment = environment };
 }
 
@@ -5523,6 +5651,10 @@ fn codexBackendConfig(
     environ: *const std.process.Environ.Map,
 ) !codex_adapter.Config {
     if (entry.endpoint.len > 0) {
+        if (entry.model_endpoint != null) {
+            try surface.refuse("{s} \"{s}\" names an endpoint and a model_endpoint; route the executable oxap spawns instead", .{ surface.noun, entry.name });
+            return error.BackendRefused;
+        }
         const unix_scheme = "unix://";
         if (!std.mem.startsWith(u8, entry.endpoint, unix_scheme) or entry.endpoint.len == unix_scheme.len) {
             try surface.refuse("{s} \"{s}\" names endpoint \"{s}\"; a codex endpoint is unix://<path to the app-server control socket>", .{ surface.noun, entry.name, entry.endpoint });
@@ -5555,7 +5687,11 @@ fn codexBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; name one with \"executable\" in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
-    const route: CodexRoute = if (entry.model_provider.len > 0)
+    const custom = entry.model_endpoint;
+    const key = if (custom) |endpoint| environ.get(endpoint.credential_env).? else "";
+    const route: CodexRoute = if (custom) |endpoint|
+        try codexRoute(arena, entry, "oapx-custom", "Custom endpoint", endpoint.base_url, key)
+    else if (entry.model_provider.len > 0)
         try routedCodex(surface, arena, entry, environ, routeStorage)
     else
         .{ .args = entry.args, .environment = entry.environment };
@@ -5563,6 +5699,7 @@ fn codexBackendConfig(
         .executable = executable,
         .args = route.args,
         .environment = route.environment,
+        .stderr_redaction = if (custom) |endpoint| .{ .value = key, .variable = endpoint.credential_env } else null,
         .working_directory = entry.working_directory,
         .model = entry.model,
         .approval_policy = entry.approval_policy,
@@ -5581,12 +5718,80 @@ fn piBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; name one with \"executable\" in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
+    if (entry.model_endpoint) |endpoint| {
+        const model_id = entry.model["oapx/".len..];
+        const directory = try piRouteDirectory(surface, arena, entry, endpoint, model_id, environ);
+        const key = environ.get(endpoint.credential_env).?;
+        return .{
+            .executable = executable,
+            .args = try std.mem.concat(arena, []const u8, &.{ entry.args, &.{ "--provider", "oapx", "--model", model_id } }),
+            .environment = try customChildEnvironment(arena, entry, endpoint, key, adapter_config.pi_endpoint_variable, directory),
+            .stderr_redaction = .{ .value = key, .variable = endpoint.credential_env },
+            .working_directory = entry.working_directory,
+        };
+    }
     return .{
         .executable = executable,
         .args = entry.args,
         .environment = entry.environment,
         .working_directory = entry.working_directory,
     };
+}
+
+fn piRouteDirectory(
+    surface: ConfigSurface,
+    arena: std.mem.Allocator,
+    entry: adapter_config.AdapterEntry,
+    endpoint: adapter_config.ModelEndpoint,
+    model_id: []const u8,
+    environ: *const std.process.Environ.Map,
+) ![]const u8 {
+    const home = environ.get("HOME") orelse "";
+    if (!std.fs.path.isAbsolute(home)) {
+        try surface.refuse("{s} \"{s}\" needs an absolute HOME for Pi model_endpoint state", .{ surface.noun, entry.name });
+        return error.BackendRefused;
+    }
+    const rendered = try std.json.Stringify.valueAlloc(arena, .{
+        .providers = .{ .oapx = .{
+            .baseUrl = endpoint.base_url,
+            .api = endpoint.wire,
+            .apiKey = try std.fmt.allocPrint(arena, "${{{s}}}", .{endpoint.credential_env}),
+            .models = .{.{ .id = model_id }},
+        } },
+    }, .{});
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(rendered, &digest, .{});
+    const hash = std.fmt.bytesToHex(digest, .lower);
+    const directory = try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "pi", &hash });
+    const path = try std.fs.path.join(arena, &.{ directory, "models.json" });
+    writePiRoute(path, rendered) catch |err| {
+        try surface.refuse("{s} \"{s}\" could not write Pi model_endpoint models.json: {s}", .{ surface.noun, entry.name, @errorName(err) });
+        return error.BackendRefused;
+    };
+    return directory;
+}
+
+fn writePiRoute(path: []const u8, rendered: []const u8) !void {
+    const io = backendIo();
+    var file = try compat.fs.getCwd().createFileAtomic(io, path, .{ .make_path = true, .replace = true, .permissions = compat.fs.default_file_mode });
+    defer file.deinit(io);
+    try file.file.writeStreamingAll(io, rendered);
+    try file.replace(io);
+}
+
+fn customChildEnvironment(
+    arena: std.mem.Allocator,
+    entry: adapter_config.AdapterEntry,
+    endpoint: adapter_config.ModelEndpoint,
+    key: []const u8,
+    destination: []const u8,
+    value: []const u8,
+) ![]const []const u8 {
+    const environment = try arena.alloc([]const u8, entry.environment.len + 2);
+    @memcpy(environment[0..entry.environment.len], entry.environment);
+    environment[entry.environment.len] = try std.fmt.allocPrint(arena, "{s}={s}", .{ destination, value });
+    environment[entry.environment.len + 1] = try std.fmt.allocPrint(arena, "{s}={s}", .{ endpoint.credential_env, key });
+    return environment;
 }
 
 fn acpBackendConfig(
@@ -5635,6 +5840,30 @@ fn hermesBackendConfig(
         try surface.refuse("{s} \"{s}\" needs an absolute \"working_directory\"", .{ surface.noun, entry.name });
         return error.BackendRefused;
     }
+    if (entry.model_endpoint) |endpoint| {
+        const home = environ.get("HOME") orelse "";
+        if (!std.fs.path.isAbsolute(home)) {
+            try surface.refuse("{s} \"{s}\" needs an absolute HOME for Hermes model_endpoint state", .{ surface.noun, entry.name });
+            return error.BackendRefused;
+        }
+        const directory = hermesRouteHome(arena, home) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            try surface.refuse("{s} \"{s}\" could not create HERMES_HOME for model_endpoint: {s}", .{ surface.noun, entry.name, @errorName(err) });
+            return error.BackendRefused;
+        };
+        const key = environ.get(endpoint.credential_env).?;
+        const routed = try providerRouteEnvironment(arena, entry.environment, "OPENAI_BASE_URL", endpoint.base_url, "OPENAI_API_KEY", key);
+        const home_env = try std.fmt.allocPrint(arena, "HERMES_HOME={s}", .{directory});
+        return .{
+            .executable = executable,
+            .args = entry.args,
+            .environment = try std.mem.concat(arena, []const u8, &.{ routed, &.{home_env} }),
+            .stderr_redaction = .{ .value = key, .variable = endpoint.credential_env },
+            .working_directory = working_directory,
+            .model = entry.model,
+            .provider = "openai-api",
+        };
+    }
     return .{
         .executable = executable,
         .args = entry.args,
@@ -5642,6 +5871,102 @@ fn hermesBackendConfig(
         .working_directory = working_directory,
         .model = entry.model,
     };
+}
+
+fn hermesRouteHome(arena: std.mem.Allocator, home: []const u8) ![]const u8 {
+    const base = try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "hermes" });
+    try compat.fs.createDir(compat.fs.getCwd(), base);
+    var random: [16]u8 = undefined;
+    compat.random.fillSecureBytes(&random);
+    const name = std.fmt.bytesToHex(random, .lower);
+    const directory = try std.fs.path.join(arena, &.{ base, &name });
+    try compat.fs.createPrivateDir(directory);
+    return directory;
+}
+
+const WindowsProfile = if (builtin.os.tag == .windows) struct {
+    const win = std.os.windows;
+    const token_query = 0x0008;
+
+    extern "advapi32" fn OpenProcessToken(process: win.HANDLE, access: win.DWORD, token: *win.HANDLE) callconv(.winapi) win.BOOL;
+    extern "userenv" fn GetUserProfileDirectoryW(token: win.HANDLE, output: ?[*]u16, size: *win.DWORD) callconv(.winapi) win.BOOL;
+
+    fn home(arena: std.mem.Allocator) !?[]const u8 {
+        var token: win.HANDLE = undefined;
+        if (OpenProcessToken(win.current_process, token_query, &token) == .FALSE) return null;
+        defer win.CloseHandle(token);
+        var size: win.DWORD = 0;
+        _ = GetUserProfileDirectoryW(token, null, &size);
+        if (size == 0) return null;
+        const buffer = try arena.alloc(u16, size);
+        if (GetUserProfileDirectoryW(token, buffer.ptr, &size) == .FALSE) return null;
+        return try std.unicode.wtf16LeToWtf8Alloc(arena, std.mem.sliceTo(buffer, 0));
+    }
+} else struct {};
+
+fn deepseekDefaultHome(arena: std.mem.Allocator) !?[]const u8 {
+    if (builtin.os.tag == .windows) return WindowsProfile.home(arena);
+    if (!builtin.link_libc) return null;
+    var user: std.c.passwd = undefined;
+    var result: ?*std.c.passwd = null;
+    var buffer: [4096]u8 = undefined;
+    if (std.c.getpwuid_r(std.c.geteuid(), &user, &buffer, buffer.len, &result) != 0 or result == null) return null;
+    const home = user.dir orelse return null;
+    return try arena.dupe(u8, std.mem.span(home));
+}
+
+fn deepseekHomeBlank(text: []const u8) bool {
+    const view = std.unicode.Utf8View.init(text) catch return false;
+    var chars = view.iterator();
+    while (chars.nextCodepoint()) |c| switch (c) {
+        0x09...0x0d, 0x20, 0xa0, 0x1680, 0x2000...0x200a, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn checkDeepseekEndpoint(surface: ConfigSurface, arena: std.mem.Allocator, entry: adapter_config.AdapterEntry, working_directory: []const u8) !void {
+    for (entry.args) |arg| {
+        if (std.mem.eql(u8, arg, "--patch") or std.mem.startsWith(u8, arg, "--patch=")) {
+            try surface.refuse("{s} \"{s}\" passes --patch, which can override model_endpoint", .{ surface.noun, entry.name });
+            return error.BackendRefused;
+        }
+    }
+    const home_variable = if (builtin.os.tag == .windows) "USERPROFILE" else "HOME";
+    const env_names = std.process.Environ.Map.EnvNameHashContext{};
+    var home: ?[]const u8 = null;
+    var dsh: []const u8 = "";
+    for (entry.environment) |item| {
+        const name, const value = std.mem.cutScalar(u8, item, '=') orelse continue;
+        if (env_names.eql(name, home_variable, 0)) home = value;
+        if (env_names.eql(name, "DSH_HOME", 0)) dsh = value;
+    }
+    const default_home = deepseekHomeBlank(dsh);
+    const tilde_home = std.mem.eql(u8, dsh, "~") or std.mem.startsWith(u8, dsh, "~/") or std.mem.startsWith(u8, dsh, "~\\");
+    const home_dir = if (default_home or tilde_home) home orelse (try deepseekDefaultHome(arena)) orelse {
+        try surface.refuse("{s} \"{s}\" cannot resolve the DeepSeek home for model_endpoint; set DSH_HOME", .{ surface.noun, entry.name });
+        return error.BackendRefused;
+    } else "";
+    const selected = if (default_home)
+        try std.fs.path.join(arena, &.{ home_dir, ".dsh" })
+    else if (tilde_home)
+        try std.fs.path.join(arena, &.{ home_dir, if (dsh.len > 1) dsh[2..] else "" })
+    else
+        dsh;
+    const cwd: []const u8 = if (std.fs.path.isAbsolute(selected)) "" else std.Io.Dir.realPathFileAbsoluteAlloc(backendIo(), working_directory, arena) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        try surface.refuse("{s} \"{s}\" cannot resolve the working directory for a relative DeepSeek home: {s}", .{ surface.noun, entry.name, @errorName(err) });
+        return error.BackendRefused;
+    };
+    const dsh_home = try std.fs.path.resolveAlloc(arena, &.{ cwd, selected });
+    const credentials = try std.fs.path.join(arena, &.{ dsh_home, ".credentials.yaml" });
+    _ = compat.fs.getCwd().statFile(backendIo(), credentials, .{ .follow_symlinks = false }) catch |err| {
+        if (err == error.FileNotFound) return;
+        try surface.refuse("{s} \"{s}\" cannot check DeepSeek .credentials.yaml for model_endpoint: {s}", .{ surface.noun, entry.name, @errorName(err) });
+        return error.BackendRefused;
+    };
+    try surface.refuse("{s} \"{s}\" has .credentials.yaml in its DeepSeek home, which can override model_endpoint", .{ surface.noun, entry.name });
+    return error.BackendRefused;
 }
 
 fn deepseekBackendConfig(
@@ -5663,10 +5988,19 @@ fn deepseekBackendConfig(
         try surface.refuse("{s} \"{s}\" needs an absolute \"working_directory\"", .{ surface.noun, entry.name });
         return error.BackendRefused;
     }
+    const custom = entry.model_endpoint;
+    if (custom != null) try checkDeepseekEndpoint(surface, arena, entry, working_directory);
+    const key = if (custom) |endpoint| environ.get(endpoint.credential_env).? else "";
     return .{
         .executable = executable,
         .args = entry.args,
-        .environment = entry.environment,
+        .environment = if (custom) |endpoint|
+            try providerRouteEnvironment(arena, entry.environment, "DEEPSEEK_BASE_URL", endpoint.base_url, "DEEPSEEK_API_KEY", key)
+        else if (entry.model_provider.len > 0)
+            try routedDeepseekEnvironment(surface, arena, entry, environ)
+        else
+            entry.environment,
+        .stderr_redaction = if (custom) |endpoint| .{ .value = key, .variable = endpoint.credential_env } else null,
         .working_directory = working_directory,
         .provider = entry.provider,
         .model = entry.model,
@@ -5714,6 +6048,10 @@ fn opencodeBackendConfig(
     started: *?*opencode_server.Server,
 ) !opencode_adapter.Config {
     if (entry.endpoint.len > 0) {
+        if (entry.model_endpoint != null) {
+            try surface.refuse("{s} \"{s}\" names an endpoint and a model_endpoint; route the executable oxap spawns instead", .{ surface.noun, entry.name });
+            return error.BackendRefused;
+        }
         if (entry.executable.len > 0) {
             try surface.refuse("{s} \"{s}\" names an endpoint and an executable; an OpenCode endpoint is a server already running, so set one or the other", .{ surface.noun, entry.name });
             return error.BackendRefused;
@@ -5731,10 +6069,33 @@ fn opencodeBackendConfig(
         try surface.refuse("no executable \"{s}\" on PATH for {s} \"{s}\"; run oxap harness install opencode, or name one with \"executable\", or a running server with \"endpoint\", in a --config entry", .{ wanted, surface.noun, entry.name });
         return error.BackendRefused;
     };
+    var config: opencode_adapter.Config = .{ .endpoint = "", .agent = entry.agent, .username = opencode_server.username };
+    var environment = entry.environment;
+    if (entry.model_endpoint) |endpoint| {
+        const model_id = entry.model["oapx/".len..];
+        config.model = .{ .id = model_id, .provider_id = "oapx" };
+        const package = if (std.mem.eql(u8, endpoint.wire, "anthropic-messages"))
+            "@opencode/ai/providers/anthropic-compatible"
+        else if (std.mem.eql(u8, endpoint.wire, "openai-responses"))
+            "@opencode/ai/providers/openai-compatible/responses"
+        else
+            "@opencode/ai/providers/openai-compatible";
+        var models: std.json.ArrayHashMap(struct {}) = .{};
+        try models.map.put(arena, model_id, .{});
+        const overlay = try std.json.Stringify.valueAlloc(arena, .{
+            .providers = .{ .oapx = .{
+                .package = package,
+                .settings = .{ .baseURL = endpoint.base_url, .apiKey = try std.fmt.allocPrint(arena, "{{env:{s}}}", .{endpoint.credential_env}) },
+                .models = models,
+            } },
+        }, .{});
+        const key = environ.get(endpoint.credential_env).?;
+        environment = try customChildEnvironment(arena, entry, endpoint, key, adapter_config.opencode_endpoint_variables[1], overlay);
+    }
     var why: []const u8 = "";
     const server = opencode_server.Server.start(allocator, arena, .{
         .executable = executable,
-        .environment = entry.environment,
+        .environment = environment,
         .working_directory = entry.working_directory,
         .log_path = try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "opencode", try std.fmt.allocPrint(arena, "{s}.log", .{entry.name}) }),
     }, &why) catch |err| {
@@ -5743,7 +6104,9 @@ fn opencodeBackendConfig(
         return error.BackendRefused;
     };
     started.* = server;
-    return .{ .endpoint = server.endpoint, .agent = entry.agent, .username = opencode_server.username, .password = &server.password };
+    config.endpoint = server.endpoint;
+    config.password = &server.password;
+    return config;
 }
 
 fn opencodePassword(environment: []const []const u8) []const u8 {
@@ -6177,6 +6540,37 @@ test "a claude entry naming a catalog provider hands the child that row's endpoi
 
     const unrouted = try claudeBackendConfig(surface, arena, .{ .name = "plain", .kind = "claude", .executable = "/bin/echo", .unrestricted_tools = true, .environment = &.{"HOME=/home/me"} }, &environ);
     try std.testing.expectEqual(@as(usize, 1), unrouted.backend.environment.len);
+}
+
+test "a deepseek entry routes the catalog endpoint and hub key to dsh after the entry environment" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var environ = std.process.Environ.Map.init(arena);
+    try environ.put("OPENCODE_API_KEY", "go-env");
+
+    var entry: adapter_config.AdapterEntry = .{
+        .name = "ds",
+        .kind = "deepseek",
+        .executable = "/bin/echo",
+        .working_directory = "/",
+        .environment = &.{"DSH_HOME=/fixture"},
+        .provider = "deepseek-official",
+        .model = "deepseek-v4-pro",
+        .model_provider = "opencode-go",
+    };
+    const config = try deepseekBackendConfig(hub_config_surface, arena, entry, &environ);
+    try std.testing.expectEqual(@as(usize, 3), config.environment.len);
+    try std.testing.expectEqualStrings("DSH_HOME=/fixture", config.environment[0]);
+    try std.testing.expectEqualStrings("DEEPSEEK_BASE_URL=https://opencode.ai/inference/go", config.environment[1]);
+    try std.testing.expectEqualStrings("DEEPSEEK_API_KEY=go-env", config.environment[2]);
+    try std.testing.expectEqualStrings(entry.provider, config.provider);
+    try std.testing.expectEqualStrings(entry.model, config.model);
+
+    entry.model_provider = "";
+    const unrouted = try deepseekBackendConfig(hub_config_surface, arena, entry, &environ);
+    try std.testing.expectEqual(@as(usize, 1), unrouted.environment.len);
+    try std.testing.expectEqualStrings(entry.environment[0], unrouted.environment[0]);
 }
 
 test "a claude entry naming a provider it cannot route to is refused by name before the child starts" {

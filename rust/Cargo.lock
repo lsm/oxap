@@ -1008,7 +1008,7 @@ checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "oxap"
-version = "0.1.0-alpha.39"
+version = "0.1.0-alpha.42"
 dependencies = [
  "oxap-sdk",
 ]
@@ -1092,6 +1092,7 @@ dependencies = [
  "crossbeam-channel",
  "futures",
  "futures-channel",
+ "getrandom 0.3.4",
  "oxap-adapter",
  "oxap-harness",
  "oxap-protocol",
@@ -1104,7 +1105,10 @@ name = "oxap-adapter-hermes"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "futures-executor",
  "oxap-adapter",
+ "oxap-harness",
+ "oxap-protocol",
  "rustix",
  "serde",
  "serde_json",
@@ -1185,7 +1189,7 @@ dependencies = [
 
 [[package]]
 name = "oxap-sdk"
-version = "0.1.0-alpha.39"
+version = "0.1.0-alpha.42"
 dependencies = [
  "async-stream",
  "futures",
