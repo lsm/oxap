@@ -68,11 +68,10 @@ impl Catalog {
             })
             .collect();
         if !self.served {
-            self.attribution = tools
-                .iter()
-                .filter(|tool| tool.source == NATIVE_SOURCE)
-                .map(|tool| (tool.name.clone(), tool.source.clone()))
-                .collect();
+            let native_tools = tools.iter().filter(|tool| tool.source == NATIVE_SOURCE);
+            self.attribution.clear();
+            self.attribution
+                .extend(native_tools.map(|tool| (tool.name.clone(), tool.source.clone())));
         }
         self.observed = Some(ToolsListResponse {
             sources,

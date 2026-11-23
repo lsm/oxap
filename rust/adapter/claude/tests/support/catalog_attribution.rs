@@ -21,6 +21,10 @@ fn refresh_preserves_attribution_from_the_last_scoped_list() {
     assert_eq!(catalog.attribution[native], NATIVE_SOURCE);
     assert!(!catalog.attribution.contains_key(mcp));
 
+    catalog.observe(&InitFrame::default());
+    assert!(catalog.attribution.is_empty());
+    catalog.observe(&init);
+
     catalog.list(Some("session".into()));
     assert_eq!(catalog.attribution[mcp], "mcp:files");
     catalog.observe(&InitFrame {
