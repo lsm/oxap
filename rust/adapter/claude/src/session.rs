@@ -10,10 +10,11 @@ use oxap_adapter::{
     ToolCatalog, ToolLister,
 };
 use oxap_protocol::{
-    ActiveRun, Admission as RunAdmission, ContentPartType, EffectiveDeliveryMode, Envelope,
-    EnvelopeType, MessageId, MessageRole, MessageSubmitRequest, MessageSubmitResponse,
-    RequestedDeliveryMode, RunCancelResponse, RunId, RunStartedPayload, RunStatus, SessionState,
-    SessionStatus, ToolsListRequest, FEATURE_TOOLS_LIST,
+    ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart, ContentPartType,
+    EffectiveDeliveryMode, Envelope, EnvelopeType, Message, MessageContent, MessageId, MessageRole,
+    MessageSubmitRequest, MessageSubmitResponse, ProtocolError, RequestedDeliveryMode,
+    RunCancelResponse, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus,
+    SessionId, SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST,
 };
 use serde::Deserialize;
 use serde_json::value::to_raw_value;
@@ -46,11 +47,13 @@ struct PendingTurn {
     uuid: String,
     model: String,
     corroborated: Option<oneshot::Sender<()>>,
-    buffered: Vec<ObservationMessage>,
+    buffered: Vec<(Observation, bool)>,
 }
 
 struct ActiveTurn {
     uuid: String,
+    run_id: RunId,
+    message_id: MessageId,
     events: Subscriber,
 }
 
@@ -94,7 +97,7 @@ impl Echo {
 }
 
 impl SessionData {
-    fn observe(&mut self, observation: ObservationMessage) {
+    fn observe(&mut self, observation: ObservationMessage, runtime: &Runtime) {
         if let Some(turn) = &mut self.pending {
             let Some(corroborates) = Echo::corroborates(&observation, &turn.uuid) else {
                 return;
@@ -107,28 +110,78 @@ impl SessionData {
                 self.session.status = SessionStatus::CLOSED;
                 return;
             }
-            turn.buffered.push(observation);
+            turn.buffered.push((observation.value, corroborates));
             if corroborates {
                 if let Some(signal) = turn.corroborated.take() {
                     let _ = signal.send(());
                 }
             }
-        } else if self
-            .active
-            .as_ref()
-            .is_none_or(|turn| Echo::corroborates(&observation, &turn.uuid).is_some())
-        {
-            self.apply(observation);
+        } else if let Some(corroborates) = self.active.as_ref().map_or(Some(false), |turn| {
+            Echo::corroborates(&observation, &turn.uuid)
+        }) {
+            self.apply(observation.value, corroborates, runtime);
         }
     }
 
-    fn apply(&mut self, observation: ObservationMessage) {
-        if let Observation::Init(init) = observation.value {
+    fn apply(&mut self, observation: Observation, corroborates: bool, runtime: &Runtime) {
+        if let Observation::Init(init) = observation {
             self.catalog.observe(&init);
             self.session.current_model_id = init.model;
             if !init.session_id.is_empty() {
                 bind(&mut self.session, &init.session_id);
             }
+            return;
+        }
+        let Some(turn) = &mut self.active else { return };
+        let session_id = &self.session.session_id;
+        let mut event = match observation {
+            Observation::StreamEvent(frame) => {
+                let Some((kind, text)) = frame.stream_delta() else {
+                    return;
+                };
+                let mut part = ContentPart::default();
+                if kind == "thinking" {
+                    part.part_type = ContentPartType::REASONING;
+                    part.reasoning = text;
+                } else {
+                    part.part_type = ContentPartType::TEXT;
+                    part.text = text;
+                }
+                let delta = ContentDeltaPayload {
+                    session_id: session_id.clone(),
+                    run_id: turn.run_id.clone(),
+                    message_id: Some(turn.message_id.clone()),
+                    part,
+                };
+                Envelope::new(EnvelopeType::CONTENT_DELTA, runtime.new_id("event"), &delta)
+                    .expect("delta payload serializes")
+            }
+            Observation::Result(frame)
+                if corroborates
+                    && !frame.cancelled()
+                    && frame.queued_turn_count.unwrap_or(0) <= 0 =>
+            {
+                turn.terminal(session_id, &frame, runtime.new_id("event"))
+            }
+            _ => return,
+        };
+        let sequence = self.session.active_runs[0].as_of_sequence.get_or_insert(1);
+        *sequence += 1;
+        self.session.transcript_cursor = sequence.to_string();
+        self.session.updated_at_ms = runtime.now_ms();
+        event.sequence = Some(*sequence);
+        event.timestamp_ms = Some(self.session.updated_at_ms);
+        event.session_id = Some(session_id.clone());
+        event.run_id = Some(turn.run_id.clone());
+        event.capability_revision = Some(pin().capability_revision.clone());
+        let terminal = event.envelope_type == EnvelopeType::RUN_COMPLETED
+            || event.envelope_type == EnvelopeType::RUN_FAILED;
+        turn.events.offer(event, terminal);
+        if terminal {
+            self.active = None;
+            self.session.status = SessionStatus::IDLE;
+            self.session.active_run_id = None;
+            self.session.active_runs.clear();
         }
     }
 
@@ -159,6 +212,7 @@ impl SessionData {
         let events = Subscriber::new(DEFAULT_QUEUE_CAPACITY);
         events.offer(start, false);
         self.session.status = SessionStatus::RUNNING;
+        self.session.transcript_cursor = "1".into();
         self.session.updated_at_ms = now;
         self.session.active_run_id = Some(run_id.clone());
         self.session.active_runs = vec![ActiveRun {
@@ -170,10 +224,12 @@ impl SessionData {
         }];
         self.active = Some(ActiveTurn {
             uuid: turn.uuid,
+            run_id: run_id.clone(),
+            message_id: message_id.clone(),
             events: events.clone(),
         });
-        for observation in turn.buffered {
-            self.apply(observation);
+        for (observation, corroborates) in turn.buffered {
+            self.apply(observation, corroborates, runtime);
         }
         Ok((
             MessageSubmitResponse {
@@ -204,6 +260,113 @@ impl SessionData {
     }
 }
 
+impl ActiveTurn {
+    fn terminal(&self, session: &SessionId, frame: &native::ResultFrame, id: String) -> Envelope {
+        let [input, output, cache_read, cache_write] = [
+            frame.usage.input_tokens,
+            frame.usage.output_tokens,
+            frame.usage.cache_read_input_tokens,
+            frame.usage.cache_creation_input_tokens,
+        ]
+        .map(|count| count.and_then(|count| u64::try_from(count).ok()));
+        let usage = Some(Usage {
+            input_tokens: input,
+            output_tokens: output,
+            cache_read_input_tokens: cache_read,
+            cache_write_input_tokens: cache_write,
+            total_tokens: [input, output, cache_read, cache_write]
+                .into_iter()
+                .try_fold(0_u64, |sum, count| sum.checked_add(count?)),
+            ..Default::default()
+        });
+        let duration_ms = frame.duration_ms.max(0);
+        let max_turns = frame.max_turns();
+        let success = frame.subtype == native::RESULT_SUCCESS;
+        let mut event = if max_turns || (success && !frame.is_error) {
+            let stop_reason = if max_turns {
+                "max_turns"
+            } else {
+                [
+                    frame.terminal_reason.as_str(),
+                    frame.stop_reason.as_deref().unwrap_or_default(),
+                ]
+                .into_iter()
+                .find(|reason| !reason.is_empty())
+                .unwrap_or("completed")
+            };
+            let completed = RunCompletedPayload {
+                session_id: session.clone(),
+                run_id: self.run_id.clone(),
+                final_response: Message {
+                    id: Some(self.message_id.clone()),
+                    role: MessageRole::ASSISTANT,
+                    content: MessageContent::from_text(&frame.result),
+                    ..Default::default()
+                },
+                stop_reason: stop_reason.into(),
+                usage,
+                duration_ms,
+                ..Default::default()
+            };
+            Envelope::new(EnvelopeType::RUN_COMPLETED, id, &completed)
+        } else {
+            let reason = if success && !frame.terminal_reason.is_empty() {
+                &frame.terminal_reason
+            } else {
+                &frame.subtype
+            };
+            let code = frame.api_error_status.map_or_else(
+                || format!("claude_{reason}"),
+                |status| format!("claude_api_{status}"),
+            );
+            let message = if !frame.errors.is_empty() {
+                frame.errors.join("; ")
+            } else if !frame.result.trim().is_empty() {
+                frame.result.trim().into()
+            } else if !success && !frame.subtype.is_empty() {
+                frame.subtype.clone()
+            } else if let Some(status) = frame.api_error_status {
+                format!("API error (HTTP {status})")
+            } else {
+                "unknown error".into()
+            };
+            let failed = RunFailedPayload {
+                session_id: session.clone(),
+                run_id: self.run_id.clone(),
+                error: ProtocolError {
+                    code,
+                    message,
+                    ..Default::default()
+                },
+                usage,
+                duration_ms,
+                ..Default::default()
+            };
+            Envelope::new(EnvelopeType::RUN_FAILED, id, &failed)
+        }
+        .expect("terminal payload serializes");
+        let total_cost = frame
+            .total_cost_usd
+            .map(oxap_adapter::gojson::go_float)
+            .and_then(|cost| cost.parse::<serde_json::Number>().ok());
+        let mut cost = serde_json::json!({
+            "num_turns": frame.num_turns,
+            "total_cost_usd": total_cost,
+            "cache_read_input_tokens": frame.usage.cache_read_input_tokens,
+            "cache_creation_input_tokens": frame.usage.cache_creation_input_tokens,
+        });
+        let cost = cost.as_object_mut().expect("cost is an object");
+        cost.retain(|_, value| !value.is_null());
+        if !cost.is_empty() {
+            event.extensions.insert(
+                "com.anthropic.claude-code.cost".into(),
+                to_raw_value(cost).expect("cost serializes"),
+            );
+        }
+        event
+    }
+}
+
 impl OpenedSession {
     pub(crate) fn new(
         process: Process,
@@ -225,12 +388,13 @@ impl OpenedSession {
         };
         let inbound = session.process.client.inbound();
         let state = session.state.clone();
+        let runtime = session.runtime.clone();
         std::thread::Builder::new()
             .spawn(move || {
                 for frame in inbound {
                     match frame {
                         Inbound::Observation(observation) => {
-                            state.lock().unwrap().observe(observation);
+                            state.lock().unwrap().observe(observation, &runtime);
                         }
                         Inbound::Control(control) => {
                             let deadline = Some(Instant::now() + RPC_TIMEOUT);

@@ -31,3 +31,7 @@ from the main turn because a matching marker alone does not distinguish
 main-turn activity from child or injected activity. The Rust process replay
 exercises both combinations with synthetic frames. The pinned corpus leaves
 both combinations unverified.
+
+Go includes non-null native `structured_output` in the terminal envelope
+extension `com.anthropic.claude-code.structured_output`. The Rust port
+defers that projection to the result arbitration and hygiene slice.

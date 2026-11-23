@@ -44,7 +44,7 @@ init = next(frame["raw"] for frame in frames if isinstance(frame["raw"], dict)
             and frame["raw"].get("subtype") == "init")
 init["session_id"] = binding
 exchange(frames[0]["raw"], frames[1]["raw"], mode == "initialize-refusal",
-         None if mode == "catalog" or mode.startswith("admission-") else init, close_stdin=mode == "submit-write-refused")
+         None if mode == "catalog" or mode.startswith(("admission-", "run-")) else init, close_stdin=mode == "submit-write-refused")
 if mode == "submit-write-refused":
     deadline = time.monotonic() + 5
     while not Path("release-turn").exists() and time.monotonic() < deadline:
@@ -72,6 +72,53 @@ if mode in {"settings", "settings-refusal"}:
         {"type": "control_response", "response": {"subtype": "success", "response": {}}},
         mode == "settings-refusal",
     )
+if mode.startswith("run-"):
+    def send(raw, corpus_uuid, native_uuid):
+        raw = dict(raw, session_id=binding)
+        if raw.get("user_message_uuid") == corpus_uuid:
+            raw["user_message_uuid"] = native_uuid
+        if "user_message_uuids" in raw:
+            raw["user_message_uuids"] = [
+                native_uuid if marker == corpus_uuid else marker
+                for marker in raw["user_message_uuids"]
+            ]
+        print(json.dumps(raw), flush=True)
+
+    def wait_for_host(index):
+        deadline = time.monotonic() + 5
+        while not Path(f"continue-{index}").exists():
+            assert time.monotonic() < deadline, "caller never received admission"
+            time.sleep(0.01)
+
+    run_index = 0
+    for entry in frames[2:]:
+        action, raw = entry["action"], entry["raw"]
+        if action == "submit":
+            assert select.select([sys.stdin], [], [], 5)[0], "missing user turn"
+            turn = json.loads(sys.stdin.readline())
+            corpus_uuid, native_uuid = raw["uuid"], turn["uuid"]
+            assert turn == dict(raw, uuid=native_uuid)
+            buffered = []
+        elif action == "observe":
+            if mode == "run-buffered" and raw.get("event", {}).get("type") == "message_start":
+                buffered.append(raw)
+                continue
+            if raw["type"] == "result":
+                for echo in buffered:
+                    send(echo, corpus_uuid, native_uuid)
+                wait_for_host(run_index)
+                send(dict(raw, user_message_uuid="", user_message_uuids=[]), corpus_uuid, native_uuid)
+            send(raw, corpus_uuid, native_uuid)
+            if mode == "run-streaming" and raw.get("event", {}).get("type") == "message_start":
+                wait_for_host(run_index)
+            if raw["type"] == "result":
+                send(raw, corpus_uuid, native_uuid)
+                run_index += 1
+    if select.select([sys.stdin], [], [], 5)[0]:
+        assert not sys.stdin.readline(), "extra native input"
+        Path("eof").touch()
+    sys.exit(0)
+
 if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith("admission-"):
     raw = sys.stdin.readline()
     frame = json.loads(raw)
