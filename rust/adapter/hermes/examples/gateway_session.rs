@@ -27,7 +27,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [python, source, state, mode, model]
             if matches!(
                 mode.as_str(),
-                "--run" | "--reopen" | "--reopen-deadline" | "--shared-reopen" | "--shared-submit"
+                "--run"
+                    | "--reopen"
+                    | "--reopen-deadline"
+                    | "--shared-reopen"
+                    | "--shared-submit"
+                    | "--shared-cancel"
             ) =>
         {
             (python, source, state, mode.as_str(), model.as_str(), None)
@@ -42,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>]"
                     .into(),
             );
         }
@@ -74,8 +79,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if matches!(mode, "--shared-open" | "--shared-reopen") {
         return shared_session(config, (mode == "--shared-reopen").then_some(model));
     }
-    if mode == "--shared-submit" {
-        return shared_submit(config, state, model);
+    if matches!(mode, "--shared-submit" | "--shared-cancel") {
+        return shared_submit(config, state, model, mode == "--shared-cancel");
     }
     let timeout = if mode == "--reopen-deadline" {
         Duration::from_secs(1)
@@ -277,6 +282,7 @@ fn shared_submit(
     config: oxap_adapter_hermes::process::ProcessConfig,
     state_dir: &str,
     model: &str,
+    cancel: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::future::poll_fn;
     use std::path::Path;
@@ -311,6 +317,9 @@ fn shared_submit(
             ..MessageSubmitRequest::default()
         },
     };
+    if cancel {
+        return shared_cancel(session.as_ref(), request, std::path::Path::new(state_dir));
+    }
     let mut unsupported = request.clone();
     unsupported.request.model_id = Some("other".into());
     assert!(matches!(
@@ -396,6 +405,95 @@ fn shared_submit(
     }
     block_on(session.close())?;
     println!("gateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_cancel(
+    session: &dyn oxap_adapter::Session,
+    request: oxap_adapter::SubmitRequest,
+    state_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::{
+        future::poll_fn,
+        task::{Context, Poll, Waker},
+        time::Duration,
+    };
+
+    use futures_executor::block_on;
+    use oxap_adapter::{Error, EventStream};
+    use oxap_protocol::{Envelope, EnvelopeType, RunStatus, SessionStatus};
+
+    fn next(stream: &mut EventStream) -> Result<Envelope, Box<dyn std::error::Error>> {
+        Ok(block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))).ok_or("missing envelope")??)
+    }
+
+    assert!(matches!(
+        block_on(session.cancel("stale".into())),
+        Err(Error::RunNotFound)
+    ));
+    let (admission, mut stream) = block_on(session.submit(request.clone()))?;
+    let run = admission.run_id.ok_or("missing run ID")?;
+    assert_eq!(next(&mut stream)?.envelope_type, EnvelopeType::RUN_STARTED);
+    let race = state_dir.join("cancel-race").exists();
+    let mut context = Context::from_waker(Waker::noop());
+    let mut cancellation = session.cancel(run.clone());
+    let mut following = None;
+    if race {
+        assert!(matches!(
+            cancellation.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        assert_eq!(
+            next(&mut stream)?.envelope_type,
+            EnvelopeType::RUN_COMPLETED
+        );
+        let mut submit = session.submit(request.clone());
+        assert!(matches!(submit.as_mut().poll(&mut context), Poll::Pending));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(matches!(submit.as_mut().poll(&mut context), Poll::Pending));
+        following = Some(submit);
+        std::fs::write(state_dir.join("release-interrupt"), "")?;
+    }
+    let receipt = block_on(cancellation)?;
+    assert!(receipt.accepted);
+    assert_eq!(receipt.session_id.as_str(), "session");
+    assert_eq!(receipt.run_id, run);
+    assert_eq!(receipt.status, RunStatus::CANCELLING);
+    println!("CANCEL INTENT: accepted");
+    if !race {
+        assert_eq!(block_on(session.cancel(run.clone()))?, receipt);
+        assert_eq!(block_on(session.state())?.status, SessionStatus::RUNNING);
+        assert!(matches!(
+            stream.as_mut().poll_next(&mut context),
+            Poll::Pending
+        ));
+        std::fs::write(state_dir.join("release-interrupt"), "")?;
+        let terminal = next(&mut stream)?;
+        assert_eq!(terminal.envelope_type, EnvelopeType::RUN_FAILED);
+        let payload: serde_json::Value =
+            serde_json::from_str(terminal.payload.ok_or("missing failure payload")?.get())?;
+        assert_eq!(payload["error"]["code"], "hermes_interrupted");
+    }
+    assert!(block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))).is_none());
+    assert!(matches!(
+        block_on(session.cancel(run)),
+        Err(Error::RunNotFound)
+    ));
+    let (_, mut stream) = block_on(following.unwrap_or_else(|| session.submit(request)))?;
+    assert_eq!(next(&mut stream)?.envelope_type, EnvelopeType::RUN_STARTED);
+    assert_eq!(
+        next(&mut stream)?.envelope_type,
+        EnvelopeType::RUN_COMPLETED
+    );
+    assert!(block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))).is_none());
+    assert_eq!(block_on(session.state())?.status, SessionStatus::IDLE);
+    block_on(session.close())?;
+    assert!(matches!(
+        block_on(session.cancel("stale".into())),
+        Err(Error::SessionClosed)
+    ));
+    println!("TERMINALS: 2\ngateway exited cleanly");
     Ok(())
 }
 

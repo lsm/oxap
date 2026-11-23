@@ -422,19 +422,25 @@ impl GatewaySession {
     }
 
     pub fn interrupt(&self, deadline: Option<Instant>) -> Result<InterruptResult, Error> {
-        call(
-            self.client(),
-            METHOD_SESSION_INTERRUPT,
-            &SessionParams {
-                session_id: self.runtime_id(),
-            },
-            deadline,
-        )
+        interrupt(self.client(), self.runtime_id(), deadline)
     }
 
     pub fn close(&self) -> Result<(), Error> {
         self.process.close().map_err(Error::harness)
     }
+}
+
+pub(crate) fn interrupt(
+    client: &RpcClient,
+    session_id: &str,
+    deadline: Option<Instant>,
+) -> Result<InterruptResult, Error> {
+    call(
+        client,
+        METHOD_SESSION_INTERRUPT,
+        &SessionParams { session_id },
+        deadline,
+    )
 }
 
 fn resume_stored(

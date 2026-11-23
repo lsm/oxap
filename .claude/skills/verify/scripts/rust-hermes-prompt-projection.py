@@ -58,6 +58,45 @@ def answered_frames(corpus):
 REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
 REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 SHARED_BACKLOG = 300
+SHARED_CANCEL_CASES = {"shared-cancel", "shared-cancel-race"}
+
+
+def shared_cancel_gateway(corpus, read, send, race):
+    def event(kind, seq, **payload):
+        params = {"type": kind, "session_id": "sess0001", "seq": seq}
+        if payload:
+            params["payload"] = payload
+        send({"jsonrpc": "2.0", "method": "event", "params": params})
+
+    def start(request_id, seq):
+        assert read() == {"jsonrpc": "2.0", "id": request_id, "method": "prompt.submit",
+                          "params": {"session_id": "sess0001", "text": "hello"}}
+        send({"jsonrpc": "2.0", "id": request_id, "result": {"status": "streaming"}})
+        event("message.start", seq)
+
+    start(2, 1)
+    pinned = [json.loads(frame["raw"]) for frame in frames(corpus / "approval-interrupt/native.jsonl")
+              if frame["action"] in {"expect-write", "reply"}]
+    interrupt = next(frame for frame in pinned if frame.get("method") == "session.interrupt")
+    receipt = next(frame for frame in pinned if frame.get("id") == interrupt["id"] and "result" in frame)
+    interrupt["params"]["session_id"] = "sess0001"
+    assert read() == interrupt
+    if race:
+        event("message.complete", 2, status="complete", text="done")
+    else:
+        send(receipt)
+    deadline = time.monotonic() + 10
+    while not Path("release-interrupt").exists():
+        assert time.monotonic() < deadline, "consumer did not check cancellation"
+        assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+    if race:
+        send({**receipt, "result": {"status": "not_interrupted", "interrupted": False}})
+    else:
+        event("message.complete", 2, status="interrupted")
+    start(4, 3)
+    event("message.complete", 4, status="complete", text="done")
+    assert sys.stdin.read() == ""
+    Path("replay-complete").touch()
 
 
 def shared_submit_frames(corpus):
@@ -112,10 +151,14 @@ def gateway(corpus, case):
     if case != "malformed-frame" and case not in REOPEN_CASES:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create",
-                          "params": {"model": "hermes-test"} if shared_submit else {}}
+                          "params": {"model": "hermes-test"}
+                          if shared_submit or case in SHARED_CANCEL_CASES else {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
+    if case in SHARED_CANCEL_CASES:
+        shared_cancel_gateway(corpus, read, send, case == "shared-cancel-race")
+        return
     if case == "answered-gates":
         replay = answered_frames(corpus)
     elif case in GATE_CHECKS:
@@ -235,6 +278,8 @@ def verify(binary, corpus, mode, case):
         stored_id = request["params"]["session_id"]
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
         root = Path(directory)
+        if case == "shared-cancel-race":
+            (root / "cancel-race").touch()
         module = root / "tui_gateway"
         module.mkdir()
         script = Path(__file__).resolve()
@@ -243,7 +288,7 @@ def verify(binary, corpus, mode, case):
             f"from pathlib import Path\n"
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
-        model = ["hermes-test"] if case in {"malformed-frame", "shared-submit"} else []
+        model = ["hermes-test"] if case in {"malformed-frame", "shared-submit"} | SHARED_CANCEL_CASES else []
         if case == "answered-gates":
             answers_file = root / "answers.json"
             expected = json.loads(expected_path.read_text())
@@ -280,6 +325,9 @@ def verify(binary, corpus, mode, case):
     result.check_returncode()
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
+    if case in SHARED_CANCEL_CASES:
+        assert replay_complete and shutdowns == 1
+        return
     if case in REOPEN_CASES:
         expected = expected_path.read_text()
         prefix = "state: " if case == "session-reopen" else "refusal: "

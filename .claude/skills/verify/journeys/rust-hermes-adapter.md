@@ -224,3 +224,21 @@ session and a busy refusal. The first run adds 300 deltas to the corpus
 replay. The caller waits for idle before draining them and checks every
 sequence through the terminal. The second run follows the original corpus.
 A model override must be refused before a gateway write.
+
+Exercise shared cancellation through the same stdio consumer:
+
+```sh
+for case in shared-cancel shared-cancel-race; do
+  python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+    "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --shared-cancel "$case" || exit $?
+done
+```
+
+Each replay checks a single `session.interrupt` addressed to the runtime
+session ID, an accepted cancelling receipt, two run terminals and clean gateway
+EOF. The first replays the native interrupt and withholds settlement until the
+caller checks that the run is still active and a duplicate cancel writes
+nothing. Native interrupted settlement projects as `hermes_interrupted`.
+The second lets completion win and withholds the interrupt reply while the
+caller submits the next prompt. That prompt reaches Hermes after the reply.
+Stale run IDs and closed sessions refuse cancellation without a native write.
