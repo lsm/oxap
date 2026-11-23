@@ -14,7 +14,7 @@
     "timestamp_ms": 1,
     "session_id": "s1",
     "run_id": "run-1",
-    "capability_revision": "copilot-cli-1.0.109-oap-v1"
+    "capability_revision": "copilot-cli-1.0.114-oap-v1"
   },
   {
     "protocol": "open-agent-protocol",
@@ -37,7 +37,7 @@
     "timestamp_ms": 2,
     "session_id": "s1",
     "run_id": "run-1",
-    "capability_revision": "copilot-cli-1.0.109-oap-v1",
+    "capability_revision": "copilot-cli-1.0.114-oap-v1",
     "tool_call_id": "tool-call-4"
   },
   {
@@ -58,7 +58,7 @@
     "timestamp_ms": 3,
     "session_id": "s1",
     "run_id": "run-1",
-    "capability_revision": "copilot-cli-1.0.109-oap-v1",
+    "capability_revision": "copilot-cli-1.0.114-oap-v1",
     "in_reply_to": "event-5",
     "tool_call_id": "tool-call-4"
   },
@@ -84,7 +84,7 @@
     "timestamp_ms": 4,
     "session_id": "s1",
     "run_id": "run-1",
-    "capability_revision": "copilot-cli-1.0.109-oap-v1",
+    "capability_revision": "copilot-cli-1.0.114-oap-v1",
     "in_reply_to": "event-6",
     "tool_call_id": "tool-call-4"
   },
@@ -108,6 +108,6 @@
     "timestamp_ms": 5,
     "session_id": "s1",
     "run_id": "run-1",
-    "capability_revision": "copilot-cli-1.0.109-oap-v1"
+    "capability_revision": "copilot-cli-1.0.114-oap-v1"
   }
 ]

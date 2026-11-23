@@ -60,14 +60,14 @@ func TestSyntheticCopilotChild(t *testing.T) {
 		prompt := "hello"
 		switch message.Method {
 		case "ping":
-			result = map[string]any{"protocolVersion": 3}
+			result = map[string]any{"protocolVersion": 4}
 			if os.Getenv("OAP_COPILOT_SESSION_MODE") == "bad-protocol" {
-				result = map[string]any{"protocolVersion": 4}
+				result = map[string]any{"protocolVersion": 3}
 			}
 		case "status.get":
-			result = map[string]any{"version": PinnedVersion, "protocolVersion": 3}
+			result = map[string]any{"version": PinnedVersion, "protocolVersion": 4}
 			if os.Getenv("OAP_COPILOT_SESSION_MODE") == "bad-version" {
-				result = map[string]any{"version": "synthetic-other", "protocolVersion": 3}
+				result = map[string]any{"version": "synthetic-other", "protocolVersion": 4}
 			}
 		case "session.create":
 			var params map[string]json.RawMessage
@@ -377,5 +377,34 @@ func TestCrashReplayRetainsMoreThanOneFollowerBuffer(t *testing.T) {
 		if event.ID != first[index].ID || *event.Sequence != *first[index].Sequence {
 			t.Fatalf("replay changed event %d", index)
 		}
+	}
+}
+
+func TestSubagentEventsDoNotEnterRootRun(t *testing.T) {
+	r := newReducer("s1", "ses", &corpusIDs{}, &corpusClock{})
+	run, err := r.admit(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.nativeMessage = "m1"
+	for _, frame := range []string{
+		`{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"user.message","data":{"messageId":"m1"}}}}`,
+		`{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"assistant.message_delta","agentId":"child","data":{"deltaContent":"child"}}}}`,
+		`{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"assistant.message_delta","data":{"deltaContent":"root"}}}}`,
+	} {
+		message, err := native.Parse([]byte(frame))
+		if err != nil {
+			t.Fatal(err)
+		}
+		event, err := native.DecodeEvent(message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.observe(*event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(r.events) != 2 || r.events[1].Type != protocol.TypeContentDelta {
+		t.Fatalf("events = %+v", r.events)
 	}
 }

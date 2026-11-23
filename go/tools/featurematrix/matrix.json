@@ -52,43 +52,43 @@
     },
     {
       "harness": "claude-code",
-      "pin": "2.1.322",
-      "capability_revision": "claude-code-2.1.322-oap-v1",
-      "corpus": "fixtures/adapters/claude-code-2.1.322",
+      "pin": "2.1.330",
+      "capability_revision": "claude-code-2.1.330-oap-v1",
+      "corpus": "fixtures/adapters/claude-code-2.1.330",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a submitted prompt streams provenance-tagged deltas and completes",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/streaming-provenance" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/streaming-provenance" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "three provenance-tagged content.delta envelopes",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/streaming-provenance" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/streaming-provenance" }
           ]
         },
         {
           "column": "cancel",
           "claim": "the interrupt control flow settles run.cancelled",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/interrupt-cancel", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/interrupt-cancel" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/interrupt-cancel", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/interrupt-cancel" }
           ]
         },
         {
           "column": "reopen",
           "claim": "rebinds the stored native session and reports its current model",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/session-reopen", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/session-reopen" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/session-reopen", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/session-reopen" }
           ]
         },
         {
           "column": "tool-observation",
           "claim": "calls requested, started, completed and failed are observed",
           "evidence": [
-            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.322/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.322/tool-lifecycle" }
+            { "package": "go/adapter/claude", "test": "TestClaudeEvidenceCorpus/claude-code-2.1.330/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/claude-code-2.1.330/tool-lifecycle" }
           ]
         }
       ]
@@ -138,15 +138,15 @@
     },
     {
       "harness": "copilot-cli",
-      "pin": "v1.0.109",
-      "capability_revision": "copilot-cli-1.0.109-oap-v1",
-      "corpus": "fixtures/adapters/copilot-cli-v1.0.109",
+      "pin": "v1.0.114",
+      "capability_revision": "copilot-cli-1.0.114-oap-v1",
+      "corpus": "fixtures/adapters/copilot-cli-v1.0.114",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "the pinned synthetic server opens, submits and completes, and the reducer completes the captured text",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.109/completed-text" },
+            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/completed-text" },
             { "package": "go/adapter/copilot", "test": "TestPublicAdapterOpensThePinnedSyntheticServerAndRuns", "kind": "positive" }
           ]
         },
@@ -154,7 +154,7 @@
           "column": "text-deltas",
           "claim": "the reducer delivers the captured delta and completion",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.109/completed-text" }
+            { "package": "go/adapter/copilot", "test": "TestLifecycleCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/completed-text" }
           ]
         },
         {
@@ -173,9 +173,9 @@
         },
         {
           "column": "tool-observation",
-          "claim": "a tool execution start, progress and completion are observed; Copilot executes its own tools",
+          "claim": "a tool execution start, status progress and completion are observed; Copilot executes its own tools",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestToolCorpus/tool-success", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.109/tool-success" }
+            { "package": "go/adapter/copilot", "test": "TestToolCorpus/tool-progress", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/tool-progress" }
           ]
         }
       ]

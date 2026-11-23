@@ -12,7 +12,7 @@ pub const endpoint_id = session.endpoint_id;
 const harness_pins = @import("harness_pins");
 pub const endpoint_version = harness_pins.copilot_cli_endpoint_version;
 pub const capability_revision = harness_pins.copilot_cli_capability_revision;
-pub const protocol_version: i64 = 3;
+pub const protocol_version: i64 = 4;
 
 const features = [_]contract.Feature{
     .{ .key = "protocol.initialize", .level = .emulated, .reason = "the adapter checks the server's protocol version with ping and creates the native session" },
@@ -160,7 +160,7 @@ pub const Session = struct {
         const spoken = if (pong == .object) pong.object.get("protocolVersion") else null;
         if (spoken == null or spoken.? != .integer or spoken.?.integer != protocol_version) {
             try self.fail("unexpected protocol version");
-            return refusal.fail(error.BackendFailed, "the copilot server does not speak the pinned protocol version 3");
+            return refusal.fail(error.BackendFailed, "the copilot server does not speak the pinned protocol version 4");
         }
         const status = try self.call(arena, "status.get", .{ .object = .empty }, refusal);
         const version = if (status == .object) native.text(status.object, "version") else "";
@@ -561,8 +561,8 @@ const fake_prelude =
 ;
 
 const fake_connect = fake_prelude ++
-    \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","timestamp":1,"protocolVersion":3}}'
-    ++ "\ntake; say '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"version\":\"" ++ endpoint_version ++ "\",\"protocolVersion\":3}}'\n" ++
+    \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","timestamp":1,"protocolVersion":4}}'
+++ "\ntake; say '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"version\":\"" ++ endpoint_version ++ "\",\"protocolVersion\":4}}'\n" ++
     \\take; say '{"jsonrpc":"2.0","id":3,"result":{"sessionId":"ses-1","workspacePath":"/w"}}'
     \\
 ;
@@ -654,17 +654,17 @@ test "an open refuses a server on another protocol version, and one that answers
     var refusal = contract.Refusal{};
     var wrong: Probe = undefined;
     try wrong.init(fake_prelude ++
-        \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","protocolVersion":4}}'
+        \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","protocolVersion":3}}'
         \\
     ++ fake_idle);
     defer wrong.deinit();
     try testing.expectError(error.BackendFailed, wrong.open(&refusal));
-    try testing.expect(std.mem.indexOf(u8, refusal.message, "protocol version 3") != null);
+    try testing.expect(std.mem.indexOf(u8, refusal.message, "protocol version 4") != null);
 
     var anonymous: Probe = undefined;
     try anonymous.init(fake_prelude ++
-        \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","protocolVersion":3}}'
-        ++ "\ntake; say '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"version\":\"" ++ endpoint_version ++ "\",\"protocolVersion\":3}}'\n" ++
+        \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","protocolVersion":4}}'
+    ++ "\ntake; say '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"version\":\"" ++ endpoint_version ++ "\",\"protocolVersion\":4}}'\n" ++
         \\take; say '{"jsonrpc":"2.0","id":3,"result":{}}'
         \\
     ++ fake_idle);
@@ -778,8 +778,8 @@ test "an open refuses a server that reports another Copilot version" {
     var refusal = contract.Refusal{};
     var other: Probe = undefined;
     try other.init(fake_prelude ++
-        \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","protocolVersion":3}}'
-        \\take; say '{"jsonrpc":"2.0","id":2,"result":{"version":"1.0.97","protocolVersion":3}}'
+        \\take; say '{"jsonrpc":"2.0","id":1,"result":{"message":"pong","protocolVersion":4}}'
+        \\take; say '{"jsonrpc":"2.0","id":2,"result":{"version":"1.0.97","protocolVersion":4}}'
         \\
     ++ fake_idle);
     defer other.deinit();

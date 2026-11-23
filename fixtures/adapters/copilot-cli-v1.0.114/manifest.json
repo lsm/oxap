@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "adapter": "copilot-cli",
+  "tag": "v1.0.114",
+  "commit": "a9b36a75fd67e99da321b0088202dd7c19c3c492",
+  "commit_tree": "dada69076c35dc32310c2022e5feff0b18bbf705",
+  "provenance": {
+    "kind": "synthetic",
+    "basis": "research/copilot-cli-1.0.109-mapping.md; not a live capture"
+  },
+  "cases": [
+    {
+      "id": "completed-text",
+      "path": "completed-text"
+    },
+    {
+      "id": "reasoning-usage",
+      "path": "reasoning-usage"
+    },
+    {
+      "id": "queued-busy-period",
+      "path": "queued-busy-period"
+    },
+    {
+      "id": "tool-progress",
+      "path": "tool-progress"
+    },
+    {
+      "id": "tool-denied-progress",
+      "path": "tool-denied-progress"
+    },
+    {
+      "id": "session-error",
+      "path": "session-error"
+    },
+    {
+      "id": "foreign-session",
+      "path": "foreign-session"
+    },
+    {
+      "id": "unknown-event",
+      "path": "unknown-event"
+    },
+    {
+      "id": "invalid-wire",
+      "path": "invalid-wire"
+    },
+    {
+      "id": "invalid-event",
+      "path": "invalid-event"
+    },
+    {
+      "id": "usage-sparse",
+      "path": "usage-sparse"
+    },
+    {
+      "id": "usage-precision",
+      "path": "usage-precision"
+    },
+    {
+      "id": "usage-wide",
+      "path": "usage-wide"
+    },
+    {
+      "id": "usage-partial-call",
+      "path": "usage-partial-call"
+    },
+    {
+      "id": "usage-overflow",
+      "path": "usage-overflow"
+    },
+    {
+      "id": "tool-orphan",
+      "path": "tool-orphan"
+    },
+    {
+      "id": "tool-incomplete",
+      "path": "tool-incomplete"
+    },
+    {
+      "id": "tool-progress-duplicate-end",
+      "path": "tool-progress-duplicate-end"
+    },
+    {
+      "id": "usage-negative-zero",
+      "path": "usage-negative-zero"
+    },
+    {
+      "id": "cost-wide",
+      "path": "cost-wide"
+    },
+    {
+      "id": "cost-unrepresentable",
+      "path": "cost-unrepresentable"
+    },
+    {
+      "id": "cost-unknown",
+      "path": "cost-unknown"
+    },
+    {
+      "id": "cost-partial",
+      "path": "cost-partial"
+    },
+    {
+      "id": "metadata-107",
+      "path": "metadata-107"
+    },
+    {
+      "id": "child-agent-observed",
+      "path": "child-agent-observed"
+    }
+  ]
+}
