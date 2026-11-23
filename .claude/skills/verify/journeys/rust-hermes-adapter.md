@@ -112,19 +112,24 @@ targeted gateway session suite also checks that duplicate starts and
 unmatched completions fail the run and that unfinished tools fail before
 run settlement.
 
-Replay a malformed frame and a gateway that closes stdout after emitting a delta:
+Replay active transport failures and reverse RPC refusals:
 
 ```sh
-for case in malformed-frame process-exit; do
+for case in malformed-frame process-exit process-exit-status reverse-method; do
   python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
     "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run "$case" || exit $?
 done
 ```
 
-Expect three matched envelopes and one clean shutdown per case. The last
-envelope is an inferred `run.failed` with `hermes_process_exit` and the
-transport diagnostic. The process-exit fixture supplies a synthetic error
-message. The replay expects `EOF`, the diagnostic from the real stdio closure.
+Expect three matched envelopes per case, with the queued delta before an
+inferred `run.failed` with `hermes_process_exit`. The last envelope carries
+the malformed-frame diagnostic, `EOF` for a clean process exit, or
+`exit status 7` for the nonzero exit. The nonzero case also reports status 7
+at close. The process-exit variants replay the fixture's native
+frames and substitute the live diagnostics for its synthetic error message.
+The reverse-method case checks two byte-matched JSON-RPC `-32601` replies,
+one before the submit receipt and one during the run. Both allow the run
+to proceed.
 
 Replay the four reverse requests from the interaction corpus in one run:
 
@@ -262,7 +267,7 @@ Replay the shared session journal over stdio:
 ```sh
 example="${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session"
 replay=.claude/skills/verify/scripts/rust-hermes-prompt-projection.py
-for case in shared-resume shared-resume-tiny shared-resume-exit; do
+for case in shared-resume shared-resume-tiny shared-resume-exit shared-resume-stalled; do
   python3 "$replay" "$example" --shared-resume "$case" || exit $?
 done
 python3 "$replay" "$example" --shared-submit shared-resume-window
@@ -272,8 +277,10 @@ The recovery corpus drives a live replay through settlement and a completed
 suffix. Compare the serialized envelopes with the original submit stream.
 Check an unknown native ID, future and terminal cursors, and explicit close.
 Repeat with one retained envelope and with an inferred failure after gateway
-exit. The burst case checks the default 256-envelope window, the gap before
-that window, and exact replay of the retained suffix. The gateway expects
+exit. In the stalled case, the gateway sends the corpus's malformed frame
+and stays alive until the shared stream and replay deliver the same terminal
+with the frame diagnostic. The burst case checks the default 256-envelope
+window, the gap before it, and exact replay of the retained suffix. The gateway expects
 only prompt writes and reaches EOF without a native replay call.
 
 Check reasoning settings and native session listing through the shared API:

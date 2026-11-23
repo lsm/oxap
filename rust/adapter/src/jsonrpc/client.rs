@@ -48,6 +48,7 @@ struct State {
     incoming: HashMap<RequestId, ()>,
     closed: bool,
     err: Option<String>,
+    reader_error: Option<String>,
     activated: bool,
     decoding: bool,
     routing: bool,
@@ -129,6 +130,7 @@ impl RpcClient {
                 incoming: HashMap::new(),
                 closed: false,
                 err: None,
+                reader_error: None,
                 activated: false,
                 decoding: false,
                 routing: false,
@@ -181,6 +183,10 @@ impl RpcClient {
 
     pub fn err(&self) -> Option<String> {
         lock(&self.0.state).err.clone()
+    }
+
+    pub fn reader_error(&self) -> Option<String> {
+        lock(&self.0.state).reader_error.clone()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -482,16 +488,15 @@ impl RpcClient {
                         return;
                     }
                 }
-                Err(Error {
-                    fault: Fault::Io(error),
-                    ..
-                }) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-                    self.close_with("EOF".into());
-                    self.settle_reader();
-                    return;
-                }
                 Err(error) => {
-                    self.close_with(error.to_string());
+                    let reason = match &error.fault {
+                        Fault::Io(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                            "EOF".into()
+                        }
+                        _ => error.to_string(),
+                    };
+                    lock(&self.0.state).reader_error = Some(reason.clone());
+                    self.close_with(reason);
                     self.settle_reader();
                     return;
                 }

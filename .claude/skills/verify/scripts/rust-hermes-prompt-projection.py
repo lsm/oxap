@@ -59,7 +59,7 @@ REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
 REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 SHARED_BACKLOG = 300
 SHARED_CANCEL_CASES = {"shared-cancel", "shared-cancel-race"}
-SHARED_RESUME_CASES = {"shared-resume", "shared-resume-tiny", "shared-resume-exit"}
+SHARED_RESUME_CASES = {"shared-resume", "shared-resume-tiny", "shared-resume-exit", "shared-resume-stalled"}
 IDLE_CASES = {"reconciliation", "replay-epoch", "idle-orphan", "idle-foreign"}
 
 
@@ -312,6 +312,8 @@ def gateway(corpus, case):
         replay = shared_submit_frames(corpus)
     elif case in SHARED_RESUME_CASES:
         replay = frames(corpus / "recovery-journal/native.jsonl")
+    elif case in {"process-exit-status", "reverse-method"}:
+        replay = frames(corpus / "process-exit/native.jsonl")
     else:
         replay = frames(corpus / case / "native.jsonl")
     pending_start = False
@@ -328,10 +330,22 @@ def gateway(corpus, case):
                     raise AssertionError(mismatch)
             else:
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
+            if case == "reverse-method" and frame["action"] == "submit":
+                reject_unknown_method(send, "before-start")
         elif frame["direction"] == "gateway-to-host":
             raw = frame["raw"]
             event_type = raw.get("params", {}).get("type") if isinstance(raw, dict) else None
-            if case == "shared-resume-exit" and event_type == "message.complete":
+            if case in {"shared-resume-exit", "shared-resume-stalled"} and event_type == "message.complete":
+                if case == "shared-resume-stalled":
+                    malformed = next(frame["raw"] for frame in frames(corpus / "malformed-frame/native.jsonl")
+                                     if frame["action"] == "decode-error")
+                    send(malformed)
+                    assert sys.stdin.read() == ""
+                    deadline = time.monotonic() + 5
+                    while not Path("terminal-observed").exists():
+                        if time.monotonic() >= deadline:
+                            sys.exit(8)
+                        time.sleep(0.01)
                 Path("replay-complete").touch()
                 return
             if shared_submit and raw.get("id") == 2:
@@ -351,11 +365,25 @@ def gateway(corpus, case):
             while not release.exists():
                 assert time.monotonic() < deadline, "consumer did not receive admission"
                 assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+        elif case == "reverse-method" and frame["action"] == "wait-submit":
+            reject_unknown_method(send, "during-run")
         elif frame["action"] == "process-exit":
+            if case == "process-exit-status":
+                sys.exit(7)
+            if case == "reverse-method":
+                Path("replay-complete").touch()
             return
     assert sys.stdin.read() == ""
     if case in REOPEN_CASES | SHARED_RESUME_CASES or shared_submit or case == "shared-input":
         Path("replay-complete").touch()
+
+
+def reject_unknown_method(send, request_id):
+    send({"jsonrpc": "2.0", "id": request_id, "method": "unsupported"})
+    assert sys.stdin.readline() == json.dumps({
+        "error": {"code": -32601, "message": "method not found"},
+        "id": request_id, "jsonrpc": "2.0",
+    }, separators=(",", ":")) + "\n"
 
 
 def verify_unanswered_gates(envelopes, corpus):
@@ -418,6 +446,8 @@ GATE_CHECKS = {
 
 def verify(binary, corpus, mode, case):
     fixture = "interaction-gates" if case in {"answered-gates", "shared-input"} else case
+    if case in {"process-exit-status", "reverse-method"}:
+        fixture = "process-exit"
     if case in SHARED_RESUME_CASES:
         fixture = "recovery-journal"
     if case in {"shared-submit", "shared-resume-window"}:
@@ -435,7 +465,7 @@ def verify(binary, corpus, mode, case):
             (root / "check-resume-window").touch()
         if case in IDLE_CASES:
             (root / "idle-case").write_text(case)
-        if case in {"shared-resume-tiny", "shared-resume-exit"}:
+        if case in SHARED_RESUME_CASES - {"shared-resume"}:
             (root / case).touch()
         if case == "replay-epoch":
             (root / "shared-resume-tiny").touch()
@@ -504,7 +534,10 @@ def verify(binary, corpus, mode, case):
         assert resume_received == (case == "reopen-resume-timeout")
         print(f"MATCHED DEADLINE EXPIRY: {case}")
         return
-    result.check_returncode()
+    if case == "process-exit-status":
+        assert result.returncode == 1 and "exit status 7" in result.stderr
+    else:
+        result.check_returncode()
     if case == "native-list-reuse":
         print("LISTING GATEWAYS: 4\nCLEAN LISTING EOF: 2")
         return
@@ -517,6 +550,8 @@ def verify(binary, corpus, mode, case):
     if case in SHARED_RESUME_CASES:
         assert "LIVE REPLAY ENVELOPES: 2" in lines
         assert "COMPLETED REPLAY ENVELOPES: 1" in lines
+        if case == "shared-resume-stalled":
+            assert "TERMINALS BEFORE GATEWAY EXIT: 1" in lines
         assert shutdowns == 1 and replay_complete
         return
     if case in IDLE_CASES:
@@ -636,11 +671,20 @@ def verify(binary, corpus, mode, case):
             print(f"CLEAN SHUTDOWNS: {shutdowns}")
             return
         expected = json.loads(expected_path.read_text())
-        if case == "process-exit":
+        if fixture == "process-exit":
             assert expected[-1]["payload"]["error"]["message"] == "gateway died"
-            expected[-1]["payload"]["error"]["message"] = "EOF"
-        assert envelopes == [json.dumps(envelope, separators=(",", ":"), ensure_ascii=False) for envelope in expected]
+            expected[-1]["payload"]["error"]["message"] = (
+                "exit status 7" if case == "process-exit-status" else "EOF"
+            )
+        assert envelopes == [json.dumps(envelope, separators=(",", ":"), ensure_ascii=False) for envelope in expected], envelopes
+        if case == "process-exit-status":
+            assert shutdowns == 0
+            print(f"BYTE-MATCHED ENVELOPES: {len(envelopes)}\nGATEWAY EXIT ERROR: 7")
+            return
         assert shutdowns == 1
+        if case == "reverse-method":
+            assert replay_complete
+            print("BYTE-MATCHED METHOD REFUSALS: 2")
         if case == "answered-gates":
             replies = sum(frame["action"] == "expect-write" for frame in answered_frames(corpus))
             print(f"BYTE-MATCHED GATE REPLIES: {replies}")

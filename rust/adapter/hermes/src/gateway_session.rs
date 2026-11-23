@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 use crossbeam_channel::{
-    at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender, TryRecvError,
+    after, at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender, TryRecvError,
 };
 use futures_channel::oneshot;
 use oxap_adapter::gojson::{go_quote, zero};
@@ -150,6 +150,7 @@ pub struct GatewaySession {
     stored_id: String,
     last_seq: i64,
     observation_error: Option<Error>,
+    disconnected_at: Option<Instant>,
 }
 
 impl GatewaySession {
@@ -243,6 +244,7 @@ impl GatewaySession {
             stored_id,
             last_seq: 0,
             observation_error: None,
+            disconnected_at: None,
         };
         Ok((session, result))
     }
@@ -305,11 +307,19 @@ impl GatewaySession {
                 }
                 Err(RecvTimeoutError::Timeout) => return Err(observation_timeout().into()),
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(ObservationError::Transport(
-                        self.client()
-                            .err()
-                            .unwrap_or_else(|| "hermes adapter: observation stream closed".into()),
-                    ));
+                    let disconnected_at = self.disconnected_at.get_or_insert_with(Instant::now);
+                    let grace = after(
+                        self.process
+                            .exit_timeout()
+                            .saturating_sub(disconnected_at.elapsed()),
+                    );
+                    let exited = self.process.exited();
+                    select_biased! {
+                        recv(timeout) -> _ => return Err(observation_timeout().into()),
+                        recv(exited) -> _ => {},
+                        recv(grace) -> _ => {},
+                    }
+                    return Err(ObservationError::Transport(self.process.transport_error()));
                 }
             }
         }
@@ -342,19 +352,7 @@ impl GatewaySession {
                 Some(Observation::Event(event)) if is_run_scoped(&event.kind) => {
                     return Err(Error::SessionClosed);
                 }
-                Some(Observation::Request(request)) => {
-                    if !matches!(request.id, RequestId::String(_))
-                        || matches!(
-                            request.method.as_str(),
-                            REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
-                        )
-                    {
-                        return Err(Error::SessionClosed);
-                    }
-                    request
-                        .respond_error(-32601, "method not found")
-                        .map_err(Error::harness)?;
-                }
+                Some(Observation::Request(_)) => return Err(Error::SessionClosed),
                 _ => {}
             }
         }
@@ -585,22 +583,45 @@ fn relay_inbound(client: &RpcClient, stop: Receiver<()>) -> Result<Receiver<Inbo
     let (out, relayed) = bounded(RELAY_CAPACITY);
     std::thread::Builder::new()
         .name("hermes-session-relay".into())
-        .spawn(move || loop {
-            select_biased! {
-                recv(stop) -> _ => return,
-                recv(inbound) -> message => match message {
-                    Ok(Inbound::Barrier(ack)) => drop(ack),
-                    Ok(message) => select_biased! {
-                        recv(stop) -> _ => return,
-                        send(out, message) -> sent => {
-                            if sent.is_err() {
-                                return;
+        .spawn(move || {
+            let forward = |message| match message {
+                Inbound::Barrier(ack) => {
+                    drop(ack);
+                    true
+                }
+                Inbound::Request(request)
+                    if matches!(request.id, RequestId::String(_))
+                        && !matches!(
+                            request.method.as_str(),
+                            REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
+                        ) =>
+                {
+                    let _ = request.respond_error(-32601, "method not found");
+                    true
+                }
+                message => select_biased! {
+                    recv(stop) -> _ => false,
+                    send(out, message) -> sent => sent.is_ok(),
+                },
+            };
+            loop {
+                select_biased! {
+                    recv(stop) -> _ => return,
+                    recv(inbound) -> message => {
+                        let Ok(message) = message else { return };
+                        if !forward(message) {
+                            return;
+                        }
+                    }
+                    recv(read_done) -> _ => {
+                        for message in inbound.try_iter() {
+                            if !forward(message) {
+                                break;
                             }
                         }
-                    },
-                    Err(_) => return,
-                },
-                recv(read_done) -> _ => return,
+                        return;
+                    }
+                }
             }
         })
         .map_err(Error::harness)?;

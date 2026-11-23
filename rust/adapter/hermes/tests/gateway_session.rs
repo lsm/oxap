@@ -479,14 +479,18 @@ fn run_settles_open_tools_on_disconnect_after_read_deadline() {
     use oxap_adapter_hermes::RunObservation;
     use oxap_protocol::{EnvelopeType, RunFailedPayload};
 
+    let unknown = r#"{"jsonrpc":"2.0","id":"unknown","method":"unsupported"}"#;
+    let refused =
+        r#"{"error":{"code":-32601,"message":"method not found"},"id":"unknown","jsonrpc":"2.0"}"#;
     let config = gateway(
         EMPTY_CREATE,
         &format!("printf '%s\\n' '{INFO}' '{CREATED}'"),
         &format!(
             "IFS= read -r line\ntest \"$line\" = '{SUBMIT}'\n\
+             printf '%s\\n' '{unknown}'\nIFS= read -r line\ntest \"$line\" = '{refused}'\n\
              printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"status\":\"streaming\"}}}}' '{STARTED}'\n\
              printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"method\":\"event\",\"params\":{{\"type\":\"tool.start\",\"session_id\":\"running\",\"seq\":3,\"payload\":{{\"tool_id\":\"tool-1\",\"name\":\"search\"}}}}}}'\n\
-             exit 0"
+             exit 7"
         ),
     );
     let mut session = open(&config, "", "").unwrap();
@@ -525,9 +529,9 @@ fn run_settles_open_tools_on_disconnect_after_read_deadline() {
     assert_eq!(terminal.envelope_type, EnvelopeType::RUN_FAILED);
     let payload: RunFailedPayload = terminal.decode_payload().unwrap();
     assert_eq!(payload.error.code, "hermes_process_exit");
-    assert_eq!(payload.error.message, "EOF");
+    assert_eq!(payload.error.message, "exit status 7");
     assert_eq!(payload.settled_by, "inferred");
-    session.close().unwrap();
+    assert_eq!(session.close().unwrap_err().to_string(), "exit status 7");
 }
 
 #[test]
