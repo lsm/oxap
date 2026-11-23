@@ -5157,7 +5157,11 @@ fn runProviderStdio(
 
             if (agent) |endpoint| {
                 if (!try isProviderOapLine(allocator, line)) {
-                    try endpoint.handleAgentLine(line, true);
+                    endpoint.handleAgentLine(line, true) catch |err| {
+                        _ = try writeEndpointOutbound(&output, allocator, endpoint);
+                        if (serveFatalMessage(err)) |message| try compat.stdio.writeAll(stderr, message);
+                        return err;
+                    };
                     _ = try writeEndpointOutbound(&output, allocator, endpoint);
                     did_work = true;
                     continue;

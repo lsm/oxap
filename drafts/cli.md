@@ -39,6 +39,11 @@ one pipe under [Decision 0027](../decisions/0027-composed-stdio-profiles.md).
 An Agent `stdio: multi_session` uses the pipe exclusively. The Agent HTTP
 listener writes its address to stderr when the Provider owns stdio.
 
+Use `hub --config F` for a legacy adapter-registry file. For compatibility,
+`serve` still accepts the legacy hub flags. With a hub flag such as
+`--stdio` or `--addr`, its `--config F` names an adapter-registry file. With
+`--config F` alone, `serve` expects a service document.
+
 Set `agent.provider: cohosted` explicitly to select the configured
 `provider.http` for built-in `oapx` Agent adapters. The Agent uses the
 existing Model Provider client over that loopback listener, which resolves
