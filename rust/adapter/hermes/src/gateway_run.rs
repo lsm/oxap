@@ -14,7 +14,7 @@ use oxap_protocol::{
 use serde::Serialize;
 use serde_json::value::{to_raw_value, RawValue};
 
-use crate::gateway_session::ObservationError;
+use crate::gateway_session::{ObservationError, PromptStartError};
 use crate::native::{
     decode_server_request, decode_strict, request_session_id, ApprovalResult, ClarifyAnswersResult,
     InterruptResult, RequestCancelPayload, ServerRequest, ToolCompletePayload, ToolStartPayload,
@@ -69,11 +69,23 @@ impl GatewaySession {
         runtime: Runtime,
         deadline: Option<Instant>,
     ) -> Result<GatewayRun<'_>, Error> {
+        self.start_run_classified(text, session_id, model_id, runtime, deadline)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn start_run_classified(
+        &mut self,
+        text: &str,
+        session_id: SessionId,
+        model_id: &str,
+        runtime: Runtime,
+        deadline: Option<Instant>,
+    ) -> Result<GatewayRun<'_>, PromptStartError> {
         let revision = &oxap_harness::current("hermes")
             .expect("embedded catalog pins Hermes")
             .capability_revision;
         let message_id = runtime.new_id("message").into();
-        self.start_prompt(text, deadline)?;
+        self.start_prompt_classified(text, deadline)?;
         let mut run = GatewayRun {
             session: self,
             run_id: runtime.new_id("run").into(),

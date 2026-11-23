@@ -18,6 +18,7 @@ use oxap_protocol::{
 };
 
 use crate::{
+    gateway_session::PromptStartError,
     process::{Process, ProcessConfig},
     GatewayRun, GatewaySession, Observation, RunObservation,
 };
@@ -225,6 +226,8 @@ impl Session for OpenedSession {
                         Error::RunActive
                     }
                 })?;
+                slot.state.status = SessionStatus::QUEUED;
+                slot.state.updated_at_ms = self.runtime.now_ms();
                 (gateway, slot.state.clone())
             };
             let slot = self.slot.clone();
@@ -232,7 +235,7 @@ impl Session for OpenedSession {
             let (reply, admission) = oneshot::channel();
             std::thread::spawn(move || {
                 let deadline = Some(Instant::now() + Duration::from_secs(30));
-                let mut run = match gateway.start_run(
+                let mut run = match gateway.start_run_classified(
                     &text,
                     state.session_id.clone(),
                     &state.current_model_id,
@@ -241,8 +244,10 @@ impl Session for OpenedSession {
                 ) {
                     Ok(run) => run,
                     Err(error) => {
-                        lock_slot(&slot).settle(None, &runtime);
-                        let _ = reply.send(Err(error));
+                        let reusable = matches!(error, PromptStartError::Refused(_))
+                            && gateway.client().err().is_none();
+                        lock_slot(&slot).settle(reusable.then_some(gateway), &runtime);
+                        let _ = reply.send(Err(error.into()));
                         return;
                     }
                 };
