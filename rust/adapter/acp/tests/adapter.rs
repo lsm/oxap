@@ -70,6 +70,27 @@ fn invalid_configuration_is_refused() {
 }
 
 #[test]
+fn unsupported_client_capabilities_are_refused_unless_null() {
+    for capability in ["subagents", "plan"] {
+        let mut configured = config();
+        configured.process.client_capabilities.insert(
+            capability.into(),
+            serde_json::value::RawValue::from_string("{}".into()).unwrap(),
+        );
+        assert!(Adapter::new(configured.clone())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains(&format!("client capability {capability} is not supported")));
+        configured.process.client_capabilities.insert(
+            capability.into(),
+            serde_json::value::RawValue::from_string("null".into()).unwrap(),
+        );
+        assert!(Adapter::new(configured).is_ok());
+    }
+}
+
+#[test]
 fn the_public_probe_cites_the_catalog_revision_and_levels() {
     let adapter = Adapter::new(Config {
         mcp_servers: vec![McpServer {
