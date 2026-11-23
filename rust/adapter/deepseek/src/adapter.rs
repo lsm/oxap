@@ -268,10 +268,8 @@ impl Adapter {
             process,
             native_id,
             state,
-            self.config.journal_capacity,
-            self.config.runtime.clone(),
             launch,
-            self.config.start_timeout,
+            &self.config,
         ))
     }
 }

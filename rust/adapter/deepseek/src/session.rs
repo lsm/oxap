@@ -20,7 +20,7 @@ use oxap_protocol::{
 use serde_json::value::RawValue;
 
 use crate::adapter::{
-    accepts_images, capability_revision, resume, unsatisfiable, Launch, ENDPOINT_ID,
+    accepts_images, capability_revision, resume, unsatisfiable, Config, Launch, ENDPOINT_ID,
 };
 use crate::admission::{Admission, Candidate};
 use crate::content::{final_content, stream_parts};
@@ -124,15 +124,13 @@ impl Session {
         process: Process,
         native_id: String,
         state: SessionState,
-        journal_capacity: usize,
-        runtime: Runtime,
         launch: Launch,
-        start_timeout: Duration,
+        config: &Config,
     ) -> Self {
         let client = process.client.clone();
         let shared = Arc::new(Shared {
             native_id,
-            revision: capability_revision(&launch.process.initialize.model),
+            revision: capability_revision(&config.model),
             recovered: state
                 .recovery
                 .as_ref()
@@ -146,12 +144,12 @@ impl Session {
                 last_seq: None,
                 children: Vec::new(),
             }),
-            journal: Journal::new(journal_capacity),
-            runtime,
+            journal: Journal::new(config.journal_capacity),
+            runtime: config.runtime.clone(),
             prompting: Mutex::new(()),
             reducing: Mutex::new(()),
             launch,
-            start_timeout,
+            start_timeout: config.start_timeout,
         });
         shared.read(client);
         Self { shared }

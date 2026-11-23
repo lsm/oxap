@@ -17,7 +17,8 @@ during a turn after two completed tools and a third tool start. A second hub
 reopens the session from its history under the same Pro default. Its first
 `initialize` must carry Flash, followed by one `session/resume` with the same
 native id. Selecting Flash again must be idempotent, and the next Flash turn
-must see the conversation history. A second fresh open must get another native
+must see the conversation history and cite the hub's advertised capability
+revision. A second fresh open must get another native
 id. A third hub reopens while the runtime never answers `session/resume`. The
 open must be refused as `unsatisfiable` after the resume bound passes, and the
 hub must keep serving. Require exit 0 and `PASS`. CI runs the same journey for
