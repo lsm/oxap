@@ -42,9 +42,9 @@ def main():
         params = message.get("params", {})
         result = {}
         if method == "ping":
-            result = {"protocolVersion": 3}
+            result = {"protocolVersion": 4}
         elif method == "status.get":
-            result = {"version": os.environ["OAP_SYNTHETIC_VERSION"], "protocolVersion": 3}
+            result = {"version": os.environ["OAP_SYNTHETIC_VERSION"], "protocolVersion": 4}
         elif method == "session.create":
             assert params["requestPermission"] is False and params["requestUserInput"] is False
             assert params["streaming"] is True and params["workingDirectory"] == os.environ["HOME"]
@@ -59,7 +59,7 @@ def main():
         prompt = params["prompt"]
         if prompt == "tool":
             event("tool.execution_start", {"toolCallId": "t1", "toolName": "read_file", "arguments": {"path": "synthetic.txt"}})
-            event("tool.execution_partial_result", {"toolCallId": "t1", "partialOutput": "synthetic output"})
+            event("tool.execution_progress", {"toolCallId": "t1", "progressMessage": "synthetic output"})
             event("tool.execution_complete", {"toolCallId": "t1", "success": True, "result": {"content": "synthetic output"}})
         event("assistant.message_delta", {"deltaContent": prompt})
         event("assistant.message", {"content": prompt})
