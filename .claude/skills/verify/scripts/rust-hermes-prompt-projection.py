@@ -60,6 +60,40 @@ REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 SHARED_BACKLOG = 300
 SHARED_CANCEL_CASES = {"shared-cancel", "shared-cancel-race"}
 SHARED_RESUME_CASES = {"shared-resume", "shared-resume-tiny", "shared-resume-exit"}
+IDLE_CASES = {"reconciliation", "replay-epoch", "idle-orphan", "idle-foreign"}
+
+
+def shared_idle_gateway(corpus, case, read, send):
+    fixture = "replay-epoch" if case.startswith("idle-") else case
+    replay = frames(corpus / fixture / "native.jsonl")
+    assert read() == replay[0]["raw"]
+    observations = [frame["raw"] for frame in replay if frame["direction"] == "gateway-to-host"]
+    *run, idle = observations
+    for frame in run:
+        send(frame)
+    deadline = time.monotonic() + 5
+    while not Path("release-idle").exists():
+        assert time.monotonic() < deadline, "consumer did not drain the first run"
+        assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+    if case == "reconciliation":
+        usage = next(frame for frame in run if frame.get("params", {}).get("type") == "session.usage")
+        send(idle)
+        send({**usage, "params": {**usage["params"], "seq": 6}})
+    else:
+        if case.startswith("idle-"):
+            idle["params"].update(type="message.start", seq=3)
+            idle["params"].pop("payload")
+        if case == "idle-foreign":
+            idle["params"].update(type="session.info", session_id="other", payload={"model": "m"})
+        send(idle)
+    Path("idle-sent").touch()
+    if case == "reconciliation":
+        assert read() == {**replay[0]["raw"], "id": 3}
+        send({**run[0], "id": 3})
+        for frame, seq in ((run[1], 7), (run[-1], 8)):
+            send({**frame, "params": {**frame["params"], "seq": seq}})
+    assert sys.stdin.read() == ""
+    Path("replay-complete").touch()
 
 
 def shared_cancel_gateway(corpus, read, send, race):
@@ -260,12 +294,15 @@ def gateway(corpus, case):
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create",
                           "params": {"model": "hermes-test"}
                           if shared_submit or case == "shared-input"
-                          or case in SHARED_CANCEL_CASES | SHARED_RESUME_CASES else {}}
+                          or case in SHARED_CANCEL_CASES | SHARED_RESUME_CASES | IDLE_CASES else {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
     if case in SHARED_CANCEL_CASES:
         shared_cancel_gateway(corpus, read, send, case == "shared-cancel-race")
+        return
+    if case in IDLE_CASES:
+        shared_idle_gateway(corpus, case, read, send)
         return
     if case in {"answered-gates", "shared-input"}:
         replay = answered_frames(corpus)
@@ -396,8 +433,12 @@ def verify(binary, corpus, mode, case):
         root = Path(directory)
         if case == "shared-resume-window":
             (root / "check-resume-window").touch()
+        if case in IDLE_CASES:
+            (root / "idle-case").write_text(case)
         if case in {"shared-resume-tiny", "shared-resume-exit"}:
             (root / case).touch()
+        if case == "replay-epoch":
+            (root / "shared-resume-tiny").touch()
         if case == "shared-cancel-race":
             (root / "cancel-race").touch()
         module = root / "tui_gateway"
@@ -410,7 +451,7 @@ def verify(binary, corpus, mode, case):
         )
         model = ["hermes-test"] if case in {
             "malformed-frame", "shared-submit", "shared-resume-window",
-        } | SHARED_CANCEL_CASES | SHARED_RESUME_CASES else []
+        } | SHARED_CANCEL_CASES | SHARED_RESUME_CASES | IDLE_CASES else []
         if case in {"answered-gates", "shared-input"}:
             answers_file = root / "answers.json"
             expected = json.loads(expected_path.read_text())
@@ -476,6 +517,10 @@ def verify(binary, corpus, mode, case):
     if case in SHARED_RESUME_CASES:
         assert "LIVE REPLAY ENVELOPES: 2" in lines
         assert "COMPLETED REPLAY ENVELOPES: 1" in lines
+        assert shutdowns == 1 and replay_complete
+        return
+    if case in IDLE_CASES:
+        assert "RECOVERED TERMINAL ENVELOPES: 1" in lines
         assert shutdowns == 1 and replay_complete
         return
     if case == "shared-input":

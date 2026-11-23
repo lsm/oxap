@@ -571,6 +571,9 @@ fn shared_submit(
         return shared_cancel(session.as_ref(), request, state_dir);
     }
     if mode == "--shared-resume" {
+        if let Ok(case) = std::fs::read_to_string(state_dir.join("idle-case")) {
+            return shared_idle(session.as_ref(), request, state_dir, &case);
+        }
         return shared_resume(session.as_ref(), request, state_dir);
     }
     let mut unsupported = request.clone();
@@ -743,6 +746,89 @@ fn shared_resume(
     block_on(session.close())?;
     assert!(matches!(resume(0), Err(Error::SessionClosed)));
     println!("COMPLETED REPLAY ENVELOPES: 1\ngateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_idle(
+    session: &dyn oxap_adapter::Session,
+    request: oxap_adapter::SubmitRequest,
+    state_dir: &std::path::Path,
+    case: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Error, ResumeRequest};
+    use oxap_protocol::SessionStatus;
+    use std::time::{Duration, Instant};
+
+    let (receipt, stream) = block_on(session.submit(request.clone()))?;
+    let original = replay_wires(stream)?;
+    assert_eq!(block_on(session.state())?.status, SessionStatus::IDLE);
+    let terminal: serde_json::Value = serde_json::from_str(original.last().unwrap())?;
+    assert_eq!(terminal["type"], "run.completed");
+    let sequence = terminal["sequence"].as_u64().unwrap();
+    let resume = || {
+        block_on(session.resume(ResumeRequest {
+            run_id: receipt.run_id.clone().unwrap(),
+            after_sequence: sequence - 1,
+        }))
+    };
+
+    std::fs::write(state_dir.join("release-idle"), "")?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !state_dir.join("idle-sent").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "gateway did not send idle observations"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if case == "reconciliation" {
+        let (_, stream) = block_on(session.submit(request))?;
+        let second = replay_wires(stream)?;
+        assert_eq!(second.len(), 2);
+        for (index, kind) in ["run.started", "run.completed"].into_iter().enumerate() {
+            let event: serde_json::Value = serde_json::from_str(&second[index])?;
+            assert_eq!(event["type"], kind);
+            assert_eq!(event["sequence"], index + 1);
+        }
+        assert_eq!(block_on(session.state())?.status, SessionStatus::IDLE);
+        println!("IDLE METADATA PRESERVED THE NEXT RUN");
+    } else {
+        while !matches!(block_on(session.state()), Err(Error::SessionClosed)) {
+            assert!(
+                Instant::now() < deadline,
+                "idle {case} did not retire the session"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(matches!(
+            block_on(session.submit(request)),
+            Err(Error::SessionClosed)
+        ));
+        println!("IDLE {case} RETIRED THE SESSION");
+    }
+    let (recovery, recovered) = resume()?;
+    assert_eq!(recovery.state.status, SessionStatus::IDLE);
+    assert_eq!(replay_wires(recovered)?, original[original.len() - 1..]);
+    assert!(matches!(
+        block_on(session.resume(ResumeRequest {
+            run_id: "never-admitted".into(),
+            after_sequence: 0
+        })),
+        Err(Error::RunNotFound)
+    ));
+    if case == "replay-epoch" {
+        assert!(matches!(
+            block_on(session.resume(ResumeRequest {
+                run_id: receipt.run_id.unwrap(),
+                after_sequence: 0
+            })),
+            Err(Error::ReplayGap(_))
+        ));
+    }
+    block_on(session.close())?;
+    println!("RECOVERED TERMINAL ENVELOPES: 1\ngateway exited cleanly");
     Ok(())
 }
 
