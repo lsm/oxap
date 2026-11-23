@@ -16,9 +16,11 @@ frames = [json.loads(line) for line in Path(os.environ["FIXTURE"]).read_text().s
 
 
 def exchange(expected, reply, refuse=False, observation=None):
-    actual = json.loads(sys.stdin.readline())
-    expected["request_id"] = actual["request_id"]
-    assert actual == expected, actual
+    line = sys.stdin.readline()
+    actual = json.loads(line)
+    wire = {"request": dict(sorted(expected["request"].items())),
+            "request_id": actual["request_id"], "type": expected["type"]}
+    assert line == json.dumps(wire, separators=(",", ":")) + "\n", line
     reply["response"]["request_id"] = actual["request_id"]
     if refuse:
         reply["response"].update(subtype="error", error="fixture refusal")
