@@ -1374,3 +1374,18 @@ func TestAnEmptyModelOutranksAnUnsatisfiableOutputSchema(t *testing.T) {
 		t.Fatalf("got %v, want model_not_found ahead of the schema refusal", err)
 	}
 }
+
+func TestAnAgentMessageWithModerationFailsTheRun(t *testing.T) {
+	client, session, descriptor := openFake(t)
+	admission, stream := submitFake(t, session)
+	client.send(t, native.MethodTurnStarted, native.TurnStartedNotification{ThreadID: client.threadID, Turn: native.Turn{ID: client.turnID, Status: native.TurnInProgress}})
+	client.send(t, native.MethodAgentDelta, native.AgentMessageDeltaNotification{ThreadID: client.threadID, TurnID: client.turnID, ItemID: "m", Delta: "already streamed"})
+	client.send(t, native.MethodItemCompleted, native.ItemNotification{ThreadID: client.threadID, TurnID: client.turnID, Item: native.Item{Type: "agentMessage", ID: "m", Text: "restricted", Moderation: json.RawMessage(`{"moderated":true}`)}})
+	events := drainClosed(t, stream)
+	adaptertest.AssertTypes(t, events, protocol.TypeRunStarted, protocol.TypeContentDelta, protocol.TypeRunFailed)
+	adaptertest.AssertProtocolValidWithSubmit(t, fakeSubmit, admission, descriptor, events, adaptertest.Opened(adapter.OpenRequest{Participant: protocol.Participant{ID: "user"}}))
+	var failed protocol.RunFailedPayload
+	if err := events[2].DecodePayload(&failed); err != nil || failed.Error.Code != "unsupported_moderation" {
+		t.Fatalf("failed=%+v err=%v", failed, err)
+	}
+}

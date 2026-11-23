@@ -227,6 +227,8 @@ pub struct Item {
     pub id: String,
     #[serde(default, deserialize_with = "zero")]
     pub text: String,
+    #[serde(default)]
+    pub moderation: Option<Box<RawValue>>,
     #[serde(default, deserialize_with = "zero")]
     pub command: String,
     #[serde(default, deserialize_with = "zero")]

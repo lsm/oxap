@@ -204,3 +204,22 @@ fn an_undecodable_item_fails_the_active_run() {
         );
     }
 }
+
+#[test]
+fn a_completed_agent_message_with_moderation_fails_the_run() {
+    let events = run(None, |fake| {
+        start(fake);
+        fake.notify(
+            "item/completed",
+            r#"{"threadId":"t-1","turnId":"turn-1","item":{"type":"agentMessage","id":"m","text":"restricted","moderation":{"moderated":true}}}"#,
+        );
+    });
+    assert_eq!(
+        events.last().unwrap().envelope_type,
+        EnvelopeType::RUN_FAILED
+    );
+    assert_eq!(
+        payload(events.last().unwrap())["error"]["code"],
+        "unsupported_moderation"
+    );
+}

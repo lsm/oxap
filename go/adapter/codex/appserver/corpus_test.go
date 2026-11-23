@@ -21,12 +21,14 @@ import (
 	"github.com/lsm/oxap/go/adapter/adaptertest"
 	"github.com/lsm/oxap/go/adapter/codex/appserver/internal/rpc"
 	"github.com/lsm/oxap/go/protocol"
+	"github.com/lsm/oxap/harnesses"
 )
 
 var codexSchemaTreeSHA256 = pin.Artifact("codex", "any", "source-tree").SHA256
 
 var codexReducerFixtures = map[string]bool{
 	"completed-text":                  true,
+	"moderated-message":               true,
 	"command-completed":               true,
 	"file-change-completed":           true,
 	"mcp-completed":                   true,
@@ -118,9 +120,18 @@ type corpusCasePaths struct {
 }
 
 func TestCodexEvidenceCorpus(t *testing.T) {
-	root := corpusRoot(t)
+	runCodexEvidenceCorpus(t, corpusRoot(t), pin)
+}
+
+func TestCodexEvidenceFloor(t *testing.T) {
+	floor := harnesses.Versioned("codex-app-server", "floor")
+	root := filepath.Join(filepath.Dir(corpusRoot(t)), filepath.Base(floor.Corpus))
+	runCodexEvidenceCorpus(t, root, floor)
+}
+
+func runCodexEvidenceCorpus(t *testing.T, root string, version harnesses.Pin) {
 	manifest := loadJSON[corpusManifest](t, filepath.Join(root, "manifest.json"))
-	if manifest.Version != 1 || manifest.Adapter != "codex-appserver-stdio" || manifest.CodexCommit != CodexCommit || manifest.SchemaTreeSHA256 != codexSchemaTreeSHA256 {
+	if manifest.Version != 1 || manifest.Adapter != "codex-appserver-stdio" || manifest.CodexCommit != version.Source("codex").Commit || manifest.SchemaTreeSHA256 != version.Artifact("codex", "any", "source-tree").SHA256 {
 		t.Fatalf("corpus pin mismatch: %+v", manifest)
 	}
 	seenIDs := map[string]bool{}
@@ -145,6 +156,9 @@ func TestCodexEvidenceCorpus(t *testing.T) {
 		})
 	}
 	for fixture := range codexReducerFixtures {
+		if fixture == "moderated-message" && version.Status == "floor" {
+			continue
+		}
 		if !coveredFixtures[fixture] {
 			t.Errorf("ledger fixture %q has no reducer corpus case", fixture)
 		}

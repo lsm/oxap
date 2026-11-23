@@ -1,0 +1,2 @@
+{"direction":"server_to_client","kind":"notification","method":"turn/started","classification":"mapped","fidelity":"native","params":{"threadId":"native-thread","turn":{"id":"native-turn","status":"inProgress"}}}
+{"direction":"server_to_client","kind":"notification","method":"item/completed","classification":"mapped","fidelity":"lossy","params":{"threadId":"native-thread","turnId":"native-turn","item":{"type":"agentMessage","id":"m1","text":"restricted","moderation":{"moderated":true}}}}

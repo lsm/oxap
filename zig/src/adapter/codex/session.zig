@@ -957,6 +957,9 @@ pub const Reducer = struct {
         const run = self.runs.items[index];
         if (!run.started or run.terminal) return;
         if (!started and std.mem.eql(u8, native.text(params, &.{ "item", "type" }), "agentMessage")) {
+            if (native.pointer(params, &.{ "item", "moderation" })) |moderation| {
+                if (moderation != .null) return self.failRun(index, "unsupported_moderation", "Codex moderation cannot be represented by this adapter", "");
+            }
             self.runs.items[index].final_text = try self.allocator().dupe(u8, native.text(params, &.{ "item", "text" }));
             return;
         }
@@ -2254,4 +2257,13 @@ test "reported zero turn usage survives while unknown usage stays absent" {
     var unknown = try running(&arena);
     try feed(&unknown, terminal);
     try testing.expect(lastPayload(&unknown).get("usage") == null);
+}
+
+test "a completed moderated message fails the run" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var reducer = try running(&arena);
+    try feed(&reducer, "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"agentMessage\",\"id\":\"m\",\"text\":\"restricted\",\"moderation\":{\"moderated\":true}}}}");
+    try std.testing.expectEqualStrings("run.failed", lastType(&reducer));
+    try std.testing.expectEqualStrings("unsupported_moderation", errorCode(&reducer));
 }

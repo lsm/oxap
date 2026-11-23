@@ -849,6 +849,11 @@ func (session *session) onItem(method string, value native.ItemNotification) {
 		return
 	}
 	if method == native.MethodItemCompleted && value.Item.Type == "agentMessage" {
+		moderation := bytes.TrimSpace(value.Item.Moderation)
+		if len(moderation) != 0 && !bytes.Equal(moderation, []byte("null")) {
+			session.failRun(run, "unsupported_moderation", "Codex moderation cannot be represented by this adapter")
+			return
+		}
 		text := value.Item.Text
 		session.mu.Lock()
 		run.finalText = &text

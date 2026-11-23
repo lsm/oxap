@@ -1,6 +1,7 @@
 package appserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -200,7 +201,11 @@ func (implementation *Adapter) NativeRead(ctx context.Context, request adapter.N
 		if err != nil {
 			return nil, err
 		}
-		found = append(found, turnsOf(page)...)
+		turns, err := turnsOf(page)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, turns...)
 		if len(found) >= request.MaxTurns {
 			break
 		}
@@ -217,12 +222,12 @@ func (implementation *Adapter) NativeRead(ctx context.Context, request adapter.N
 	return found, nil
 }
 
-func turnsOf(page json.RawMessage) []adapter.NativeTurn {
+func turnsOf(page json.RawMessage) ([]adapter.NativeTurn, error) {
 	var body struct {
 		Data []json.RawMessage `json:"data"`
 	}
 	if json.Unmarshal(page, &body) != nil {
-		return nil
+		return nil, nil
 	}
 	var found []adapter.NativeTurn
 	for _, raw := range body.Data {
@@ -258,6 +263,9 @@ func turnsOf(page json.RawMessage) []adapter.NativeTurn {
 					said.WriteString(memberText(input, "text"))
 				}
 			case "agentMessage":
+				if rawModeration := bytes.TrimSpace(item["moderation"]); len(rawModeration) != 0 && !bytes.Equal(rawModeration, []byte("null")) {
+					return nil, errors.New("codex app-server adapter: cannot represent moderation in native history")
+				}
 				if text := memberText(item, "text"); text != "" {
 					reply = text
 				}
@@ -270,7 +278,7 @@ func turnsOf(page json.RawMessage) []adapter.NativeTurn {
 			found = append(found, adapter.NativeTurn{Role: "assistant", Text: reply, AtMS: memberSeconds(turn, "completedAt")})
 		}
 	}
-	return found
+	return found, nil
 }
 
 func memberText(object map[string]json.RawMessage, name string) string {

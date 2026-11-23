@@ -230,7 +230,10 @@ pub const Adapter = struct {
             try params.put(arena, "limit", .{ .integer = @intCast(turn_page) });
             if (cursor.len > 0) try params.put(arena, "cursor", .{ .string = cursor });
             const page = try self.ask(arena, "thread/turns/list", params, refusal) orelse break;
-            try turnsOf(arena, page, &found);
+            turnsOf(arena, page, &found) catch |err| switch (err) {
+                error.ModeratedHistory => return refusal.fail(error.BackendFailed, "codex app-server adapter: cannot represent moderation in native history"),
+                error.OutOfMemory => return error.OutOfMemory,
+            };
             if (found.items.len >= request.max_turns) break;
             cursor = if (page == .object) textOf(page, "nextCursor") else "";
             if (cursor.len == 0) break;
@@ -259,6 +262,9 @@ pub const Adapter = struct {
                         try said.appendSlice(arena, textOf(input, "text"));
                     }
                 } else if (std.mem.eql(u8, kind, "agentMessage")) {
+                    if (item.object.get("moderation")) |moderation| {
+                        if (moderation != .null) return error.ModeratedHistory;
+                    }
                     const text = textOf(item, "text");
                     if (text.len > 0) reply = text;
                 }
@@ -1665,4 +1671,15 @@ test "a thread/list answer becomes native sessions, titled by name or the previe
     try std.testing.expectEqualStrings("codex://threads/t2", listed[1].link);
     const long = repeat("a", 119) ++ "\u{00e9}" ++ "b";
     try std.testing.expectEqual(@as(usize, 119), Adapter.titleCut(long, 120));
+}
+
+test "native history refuses moderated messages" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const page = try std.json.parseFromSliceLeaky(std.json.Value, arena.allocator(),
+        \\{"data":[{"items":[{"type":"agentMessage","text":"restricted","moderation":{"moderated":true}}]}]}
+    , .{});
+    var found: std.ArrayList(contract.NativeTurn) = .empty;
+    try std.testing.expectError(error.ModeratedHistory, Adapter.turnsOf(arena.allocator(), page, &found));
+    try std.testing.expectEqual(@as(usize, 0), found.items.len);
 }

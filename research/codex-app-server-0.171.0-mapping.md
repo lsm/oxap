@@ -1,9 +1,37 @@
 # Codex app-server 0.171.0 mapping
 
-This comparison is in progress. The upstream tag `rust-v0.171.0` resolves to commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e` in https://github.com/openai/codex. The release notes describe remote execution on an existing app server and changes to approval handling. The generated app-server schema and adapter behavior still need comparison.
+The `rust-v0.171.0` release in https://github.com/openai/codex resolves to
+commit `ccf9be8cc458bd6b8336fe84d68d8893f2691a5e`, tree
+`df2295d59618a37eaca4d41ef5efe6740b23e0b1`. The generated app-server schema
+contains 1,131 files and has sorted-path SHA-256
+`b609a546ecb28431cdccf93934875c58780b70717a43b29f2ffe44dc5b594687` using the
+recipe in the preceding ledger. The same recipe reproduced the v0.167.2 digest.
+The published macOS arm64 archive is 117221737 bytes with SHA-256
+`9414c8c967f110b11e8324c0cfa2b20f012094ef890110a561c92ee535a2681a`; the Linux
+x64 musl archive is 122664925 bytes with SHA-256
+`01baa2e47809f8597be5b2f8abd4e4dfe3fb5bcb6e504c2fbaaad97056c15e8d`. Both
+archives were hashed independently.
 
-The catalog pin and corpus have not yet been updated. No new harness process has been run.
+The generated schema differs in 129 files from v0.167.2. It adds
+`thread/search/partial`, which the adapters do not project, and optional
+`agentMessage.moderation`, whose display can describe `show`, `hide` or `block`.
+Codex's source describes that display instruction for a recovered answer;
+OAP native history cannot represent it. Go and Zig refuse a native history
+containing any non-null moderation rather than silently return its text. Go,
+Rust and Zig fail an active run if an item completion contains non-null
+moderation, because the adapters cannot project its presentation instruction.
 
-The generated app-server schema differs in 129 files from 0.167.2. `ItemCompletedNotification` and `TurnCompletedNotification` include new agent-message moderation and display definitions. Their effects on emitted content and recovery must be reviewed alongside notification handling before updating the pin. This is a source comparison, not a process check.
+The app server can stream text deltas before it sends an item completion. Such
+deltas are forwarded as received and cannot be recalled if moderation later
+arrives. This adapter therefore does not claim to enforce Codex's moderation
+presentation policy on live streamed text. A consumer needing that policy must
+not treat the adapter's streamed output as an enforcement boundary. The
+recovery and live behavior are a recorded loss of fidelity, not a claim that
+OAP implements Codex's presentation contract.
 
-The schema tree contains 1,131 files and hashes to `b609a546ecb28431cdccf93934875c58780b70717a43b29f2ffe44dc5b594687` using the existing sorted-path SHA-256 recipe. The same recipe reproduces the 0.167.2 catalog digest. The new `agentMessage.moderation` field can describe `show`, `hide` or `block` for a recovered answer. The existing adapters take message text without reading that field, so replay and live delivery semantics must be settled before repinning. The `thread/search/partial` notification is also added.
+The v0.167.2 corpus remains a regression floor with its original native frames;
+its expected revision is the current descriptor. The v0.171.0 corpus is a
+synthetic adaptation of those examples against the new schema, including a
+constructed moderated item; it is not a trace recorded from v0.171.0. A credential-free Linux process probe of the candidate
+merged with main initialized OAP and opened a session with the v0.171.0 binary;
+the endpoint exited 0. It did not submit a prompt or exercise moderation.

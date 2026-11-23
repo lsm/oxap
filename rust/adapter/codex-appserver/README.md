@@ -2,7 +2,7 @@
 
 The Rust port of `go/adapter/codex/appserver`: an OAP adapter over the Codex
 app-server's JSON-RPC on stdio, pinned by `harnesses/codex-app-server.json` and
-judged by the corpus in `fixtures/adapters/codex-appserver-0.167.2`.
+judged by the corpus in `fixtures/adapters/codex-appserver-0.171.0`.
 
 So far it holds the adapter's configuration, its descriptor, and the
 `thread/start` config an open carries: `adapter::thread_config` sends the
