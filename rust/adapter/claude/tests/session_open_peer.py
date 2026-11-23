@@ -90,6 +90,8 @@ if mode.startswith("run-"):
             assert time.monotonic() < deadline, "caller never received admission"
             time.sleep(0.01)
 
+    disconnect_cases = {"run-process-exit", "run-malformed",
+                        "run-native-wins", "run-native-buffered", "run-aborted"}
     run_index = 0
     for entry in frames[2:]:
         action, raw = entry["action"], entry["raw"]
@@ -106,14 +108,29 @@ if mode.startswith("run-"):
             if raw["type"] == "result":
                 for echo in buffered:
                     send(echo, corpus_uuid, native_uuid)
-                wait_for_host(run_index)
+                if mode != "run-native-buffered":
+                    wait_for_host(run_index)
                 send(dict(raw, user_message_uuid="", user_message_uuids=[]), corpus_uuid, native_uuid)
+                if mode == "run-native-wins":
+                    raw = dict(raw, structured_output={"findings": [{"line": 3}]})
+                if mode == "run-native-buffered":
+                    raw = dict(raw, structured_output=None)
+                if mode == "run-aborted":
+                    raw = dict(raw, subtype="error_max_turns", terminal_reason="aborted_tools",
+                               errors=["fixture abort"])
             send(raw, corpus_uuid, native_uuid)
-            if mode == "run-streaming" and raw.get("event", {}).get("type") == "message_start":
+            if (mode == "run-streaming" or mode in disconnect_cases - {"run-native-buffered"}) and raw.get("event", {}).get("type") == "message_start":
                 wait_for_host(run_index)
             if raw["type"] == "result":
                 send(raw, corpus_uuid, native_uuid)
                 run_index += 1
+        elif action == "decode-error":
+            print(raw, flush=True)
+            break
+        elif action == "process-exit":
+            break
+    if mode in disconnect_cases:
+        sys.exit(1)
     if select.select([sys.stdin], [], [], 5)[0]:
         assert not sys.stdin.readline(), "extra native input"
         Path("eof").touch()

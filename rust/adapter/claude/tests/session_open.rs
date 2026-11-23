@@ -37,6 +37,11 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "catalog" => "tools-catalog-sources/native.jsonl",
         "run-streaming" | "run-buffered" => "streaming-provenance/native.jsonl",
         "run-settlement" => "settlement-statuses/native.jsonl",
+        "run-process-exit" => "process-exit/native.jsonl",
+        "run-malformed" => "malformed-stdout/native.jsonl",
+        "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
+            "hygiene-recovery/native.jsonl"
+        }
         mode if mode.starts_with("admission-") => "admission-corroboration/native.jsonl",
         _ => "initialize-lifecycle/native.jsonl",
     });
@@ -314,11 +319,7 @@ fn claude_admission_refuses_a_closed_session_after_corroboration() {
     wait_for_turn(directory.path());
     fs::write(directory.path().join("release-turn"), []).unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !matches!(block_on(session.state()), Err(Error::SessionClosed)) {
-        assert!(Instant::now() < deadline, "transport did not close");
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait_until_closed(session.as_ref());
     assert!(directory.path().join("echo-drained").is_file());
     assert!(
         matches!(block_on(submission), Err(Error::SessionClosed)),
@@ -334,6 +335,7 @@ fn claude_run_replays_streaming_and_settlement() {
         ("run-streaming", "streaming-provenance"),
         ("run-buffered", "streaming-provenance"),
         ("run-settlement", "settlement-statuses"),
+        ("run-hygiene", "hygiene-recovery"),
     ] {
         let (adapter, directory, frames) = fixture(mode);
         let session = block_on(adapter.open(OpenRequest {
@@ -341,17 +343,7 @@ fn claude_run_replays_streaming_and_settlement() {
             ..Default::default()
         }))
         .unwrap();
-        let expected: Vec<Value> = serde_json::from_str(
-            &fs::read_to_string(
-                Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../..")
-                    .join(&pin().corpus)
-                    .join(case)
-                    .join("expected-oap.json"),
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        let expected = expected_run_events(case);
         let runs: Vec<_> = expected
             .split_inclusive(|event| {
                 matches!(event["type"].as_str(), Some("run.completed" | "run.failed"))
@@ -373,44 +365,12 @@ fn claude_run_replays_streaming_and_settlement() {
                 .into_iter()
                 .collect::<Result<Vec<Envelope>, _>>()
                 .unwrap();
-            assert_eq!(
-                actual
-                    .iter()
-                    .map(|event| event.envelope_type.as_str())
-                    .collect::<Vec<_>>(),
-                expected
-                    .iter()
-                    .map(|event| event["type"].as_str().unwrap())
-                    .collect::<Vec<_>>(),
-                "{mode} run {index}"
+            assert_run_events(
+                &admission,
+                &actual,
+                expected,
+                &format!("{mode} run {index}"),
             );
-            for (event, expected) in actual.iter().zip(*expected) {
-                let mut event = serde_json::to_value(event).unwrap();
-                assert_eq!(event["run_id"], admission.run_id.as_ref().unwrap().as_str());
-                assert_eq!(event["payload"]["run_id"], event["run_id"]);
-                let message = &event["payload"]["message_id"];
-                if !message.is_null() {
-                    assert_eq!(message, admission.message_ids[0].as_str());
-                    event["payload"]["message_id"] = expected["payload"]["message_id"].clone();
-                }
-                let final_id = &event["payload"]["final_response"]["id"];
-                if !final_id.is_null() {
-                    assert_eq!(final_id, admission.message_ids[0].as_str());
-                    event["payload"]["final_response"]["id"] =
-                        expected["payload"]["final_response"]["id"].clone();
-                }
-                assert!(event["timestamp_ms"].as_i64().unwrap() > 0);
-                event["timestamp_ms"] = expected["timestamp_ms"].clone();
-                event["id"] = expected["id"].clone();
-                event["run_id"] = expected["run_id"].clone();
-                event["payload"]["run_id"] = expected["payload"]["run_id"].clone();
-                if event["type"] == "run.started" {
-                    assert!(event["payload"]["started_at_ms"].as_i64().unwrap() > 0);
-                    event["payload"]["started_at_ms"] =
-                        expected["payload"]["started_at_ms"].clone();
-                }
-                assert_eq!(&event, expected, "{mode} run {index}");
-            }
             let idle = block_on(session.state()).unwrap();
             assert_eq!(idle.status.as_str(), "idle");
             assert!(idle.active_run_id.is_none());
@@ -424,6 +384,124 @@ fn claude_run_replays_streaming_and_settlement() {
             runs.len(),
             expected.len()
         );
+    }
+}
+
+fn expected_run_events(case: &str) -> Vec<Value> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join(&pin().corpus)
+        .join(case)
+        .join("expected-oap.json");
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+fn assert_run_events(
+    admission: &oxap_protocol::MessageSubmitResponse,
+    actual: &[Envelope],
+    expected: &[Value],
+    label: &str,
+) {
+    assert_eq!(
+        actual
+            .iter()
+            .map(|event| event.envelope_type.as_str())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|event| event["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        "{label}"
+    );
+    for (event, expected) in actual.iter().zip(expected) {
+        let mut event = serde_json::to_value(event).unwrap();
+        assert_eq!(event["run_id"], admission.run_id.as_ref().unwrap().as_str());
+        assert_eq!(event["payload"]["run_id"], event["run_id"]);
+        let message = &event["payload"]["message_id"];
+        if !message.is_null() {
+            assert_eq!(message, admission.message_ids[0].as_str());
+            event["payload"]["message_id"] = expected["payload"]["message_id"].clone();
+        }
+        let final_id = &event["payload"]["final_response"]["id"];
+        if !final_id.is_null() {
+            assert_eq!(final_id, admission.message_ids[0].as_str());
+            event["payload"]["final_response"]["id"] =
+                expected["payload"]["final_response"]["id"].clone();
+        }
+        assert!(event["timestamp_ms"].as_i64().unwrap() > 0);
+        event["timestamp_ms"] = expected["timestamp_ms"].clone();
+        event["id"] = expected["id"].clone();
+        event["run_id"] = expected["run_id"].clone();
+        event["payload"]["run_id"] = expected["payload"]["run_id"].clone();
+        if event["type"] == "run.started" {
+            assert!(event["payload"]["started_at_ms"].as_i64().unwrap() > 0);
+            event["payload"]["started_at_ms"] = expected["payload"]["started_at_ms"].clone();
+        }
+        assert_eq!(&event, expected, "{label}");
+    }
+}
+
+#[test]
+fn claude_arbitration_drains_stdout_before_settling() {
+    for (mode, case) in [
+        ("run-process-exit", "process-exit"),
+        ("run-malformed", "malformed-stdout"),
+        ("run-native-wins", "hygiene-recovery"),
+        ("run-native-buffered", "hygiene-recovery"),
+        ("run-aborted", "hygiene-recovery"),
+    ] {
+        let (adapter, directory, _) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut submission = session.submit(text_submit("hello"));
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(submission.as_mut().poll(&mut context).is_pending());
+        if mode == "run-native-buffered" {
+            wait_until_closed(session.as_ref());
+        }
+        let (admission, stream) = block_on(submission).expect(mode);
+        fs::write(directory.path().join("continue-0"), []).unwrap();
+        let actual = block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .collect::<Result<Vec<Envelope>, _>>()
+            .unwrap();
+        let mut expected = expected_run_events(case);
+        if mode == "run-native-wins" {
+            expected[2]["extensions"]["com.anthropic.claude-code.structured_output"] =
+                json!({"findings": [{"line": 3}]});
+        }
+        if mode == "run-aborted" {
+            let terminal = &mut expected[2];
+            terminal["type"] = json!("run.failed");
+            let payload = terminal["payload"].as_object_mut().unwrap();
+            payload.remove("final_response");
+            payload.remove("stop_reason");
+            payload.insert(
+                "error".into(),
+                json!({
+                    "code": "claude_aborted_tools", "message": "fixture abort"
+                }),
+            );
+        }
+        assert_run_events(&admission, &actual, &expected, mode);
+        wait_until_closed(session.as_ref());
+        assert!(matches!(
+            block_on(session.submit(text_submit("retry"))),
+            Err(Error::SessionClosed)
+        ));
+        block_on(session.close()).unwrap();
+        println!("PASS {mode}: {} envelopes and one terminal", actual.len());
+    }
+}
+
+fn wait_until_closed(session: &dyn oxap_adapter::Session) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !matches!(block_on(session.state()), Err(Error::SessionClosed)) {
+        assert!(Instant::now() < deadline, "transport did not close");
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
