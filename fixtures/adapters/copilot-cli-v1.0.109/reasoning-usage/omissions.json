@@ -1,0 +1,6 @@
+[
+  {
+    "native": "assistant.reasoning",
+    "reason": "The streamed assistant.reasoning_delta carries the reasoning; the full message adds nothing to publish."
+  }
+]

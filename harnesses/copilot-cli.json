@@ -43,7 +43,8 @@
     },
     {
       "label": "v1.0.109",
-      "status": "retired",
+      "status": "floor",
+      "corpus": "fixtures/adapters/copilot-cli-v1.0.109",
       "ledgers": [
         "research/copilot-cli-1.0.109-mapping.md",
         "research/copilot-cli-1.0.107-mapping.md",

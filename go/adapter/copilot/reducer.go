@@ -145,7 +145,7 @@ func (r *reducer) observe(event native.Event) error {
 		if r.current != nil {
 			r.current.usage.observe(event.Data)
 		}
-	case "tool.execution_start", "tool.execution_partial_result", "tool.shell_output", "tool.execution_complete":
+	case "tool.execution_start", "tool.execution_partial_result", "tool.execution_progress", "tool.shell_output", "tool.execution_complete":
 		return r.observeTool(event)
 	}
 	return nil

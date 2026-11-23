@@ -186,6 +186,7 @@ impl Reducer {
             }
             "tool.execution_start"
             | "tool.execution_partial_result"
+            | "tool.execution_progress"
             | "tool.shell_output"
             | "tool.execution_complete" => self.observe_tool(event),
             _ => Ok(()),

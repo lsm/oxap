@@ -89,6 +89,7 @@ pub const EventType = enum {
     usage,
     tool_start,
     tool_partial,
+    tool_progress,
     shell_output,
     tool_complete,
     permission_requested,
@@ -101,13 +102,13 @@ pub const EventType = enum {
     model_change,
 
     const names = [_][]const u8{
-        "user.message",                  "assistant.turn_start", "assistant.turn_end",
-        "assistant.message_delta",       "assistant.message",    "assistant.reasoning_delta",
-        "assistant.reasoning",           "assistant.usage",      "tool.execution_start",
-        "tool.execution_partial_result", "tool.shell_output",    "tool.execution_complete",
-        "permission.requested",          "permission.completed", "user_input.requested",
-        "user_input.completed",          "assistant.idle",       "session.idle",
-        "session.error",                 "session.model_change",
+        "user.message",                  "assistant.turn_start",    "assistant.turn_end",
+        "assistant.message_delta",       "assistant.message",       "assistant.reasoning_delta",
+        "assistant.reasoning",           "assistant.usage",         "tool.execution_start",
+        "tool.execution_partial_result", "tool.execution_progress", "tool.shell_output",
+        "tool.execution_complete",       "permission.requested",    "permission.completed",
+        "user_input.requested",          "user_input.completed",    "assistant.idle",
+        "session.idle",                  "session.error",           "session.model_change",
     };
 
     pub fn wire(self: EventType) []const u8 {

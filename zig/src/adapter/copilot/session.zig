@@ -259,11 +259,13 @@ pub const Reducer = struct {
                 try self.complete(run);
             },
             .tool_start => try self.startTool(event.data),
-            .tool_partial, .shell_output => {
+            .tool_partial, .tool_progress, .shell_output => {
                 const run = self.current orelse return;
                 const tool = self.findTool(run, native.text(event.data, "toolCallId")) orelse return;
                 if (tool.terminal) return;
-                const said = if (native.text(event.data, "partialOutput").len > 0) native.text(event.data, "partialOutput") else native.text(event.data, "text");
+                const partial = native.text(event.data, "partialOutput");
+                const output = native.text(event.data, "text");
+                const said = if (partial.len > 0) partial else if (output.len > 0) output else native.text(event.data, "progressMessage");
                 var payload = try self.toolPayload(tool);
                 try payload.put(self.allocator(), "progress", .{ .string = try self.allocator().dupe(u8, said) });
                 _ = try self.record(run, "action.call.progress", payload, false, tool.started_event);

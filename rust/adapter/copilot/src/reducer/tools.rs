@@ -72,7 +72,7 @@ impl Reducer {
                 }
                 Ok(())
             }
-            "tool.execution_partial_result" | "tool.shell_output" => {
+            "tool.execution_partial_result" | "tool.execution_progress" | "tool.shell_output" => {
                 let Some(tool) = found.map(|found| &self.runs[index].tools[found]) else {
                     return Ok(());
                 };
@@ -82,6 +82,9 @@ impl Reducer {
                 let mut progress = text(&event.data, "partialOutput");
                 if progress.is_empty() {
                     progress = text(&event.data, "text");
+                }
+                if progress.is_empty() {
+                    progress = text(&event.data, "progressMessage");
                 }
                 let (mut body, reply) = (payload(tool), tool.started.clone());
                 body.insert("progress", json(&progress));

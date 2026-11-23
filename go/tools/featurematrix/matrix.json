@@ -173,9 +173,9 @@
         },
         {
           "column": "tool-observation",
-          "claim": "a tool execution start, progress and completion are observed; Copilot executes its own tools",
+          "claim": "a tool execution start, status progress and completion are observed; Copilot executes its own tools",
           "evidence": [
-            { "package": "go/adapter/copilot", "test": "TestToolCorpus/tool-success", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/tool-success" }
+            { "package": "go/adapter/copilot", "test": "TestToolCorpus/tool-progress", "kind": "positive", "fixture": "fixtures/adapters/copilot-cli-v1.0.114/tool-progress" }
           ]
         }
       ]

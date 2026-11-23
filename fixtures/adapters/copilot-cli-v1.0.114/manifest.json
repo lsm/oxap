@@ -22,12 +22,12 @@
       "path": "queued-busy-period"
     },
     {
-      "id": "tool-success",
-      "path": "tool-success"
+      "id": "tool-progress",
+      "path": "tool-progress"
     },
     {
-      "id": "tool-denied",
-      "path": "tool-denied"
+      "id": "tool-denied-progress",
+      "path": "tool-denied-progress"
     },
     {
       "id": "session-error",
@@ -78,8 +78,8 @@
       "path": "tool-incomplete"
     },
     {
-      "id": "tool-duplicate-end",
-      "path": "tool-duplicate-end"
+      "id": "tool-progress-duplicate-end",
+      "path": "tool-progress-duplicate-end"
     },
     {
       "id": "usage-negative-zero",
@@ -104,6 +104,10 @@
     {
       "id": "metadata-107",
       "path": "metadata-107"
+    },
+    {
+      "id": "child-agent-observed",
+      "path": "child-agent-observed"
     }
   ]
 }
