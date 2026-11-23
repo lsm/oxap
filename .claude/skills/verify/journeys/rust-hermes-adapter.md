@@ -160,6 +160,19 @@ Expect four native replies and 31 OAP envelopes matching the pinned fixture
 byte for byte, and one clean shutdown. The sudo and secret answers are fixture
 strings. The gateway replay executes no tools and receives no credentials.
 
+Replay those same requests through the shared Session API:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --shared-input shared-input
+```
+
+Expect four byte-matched native replies, 31 corpus-matched envelopes after
+normalizing generated identities, the caller's participant ID and clocks,
+and one clean gateway EOF. The caller checks waiting state before answering,
+rejects a wrong responder and invalid answers, and cannot answer a gate
+twice. The linked tool results and run terminal stay on the original stream.
+
 Replay the stored-session reload and the auto-continue refusal:
 
 ```sh

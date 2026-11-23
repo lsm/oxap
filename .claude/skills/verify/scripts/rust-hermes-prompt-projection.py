@@ -311,7 +311,7 @@ def verify(binary, corpus, mode, case):
             print(mismatch.read_text(), file=sys.stderr)
     if mode == "--shared-submit":
         print("\n".join(line for line in result.stdout.splitlines() if not line.startswith("envelope: ")))
-    elif case not in GATE_CHECKS and case != "answered-gates" and case not in REOPEN_CASES:
+    elif case not in GATE_CHECKS and case not in {"answered-gates", "shared-input"} and case not in REOPEN_CASES:
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
@@ -333,7 +333,7 @@ def verify(binary, corpus, mode, case):
         for observed, fixture in zip(actual, expected):
             identities[fixture["id"]] = observed["id"]
             identities[fixture["run_id"]] = observed["run_id"]
-            for key in ("turn_id", "call_id"):
+            for key in ("turn_id", "tool_call_id"):
                 if key in fixture:
                     identities[fixture[key]] = observed[key]
         for observed, fixture in zip(actual, expected):
@@ -342,6 +342,7 @@ def verify(binary, corpus, mode, case):
                 found = observed["payload"] if path == "payload" else observed["payload"].get(path, {})
                 if key in raw:
                     identities[raw[key]] = found[key]
+        assert len(set(identities.values())) == len(identities)
 
         def normalized(value, ids):
             if isinstance(value, dict):

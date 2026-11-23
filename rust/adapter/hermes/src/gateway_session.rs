@@ -1,8 +1,9 @@
 use std::{collections::VecDeque, sync::Arc, time::Instant};
 
-use crossbeam_channel::{bounded, select_biased, Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender};
+use futures_channel::oneshot;
 use oxap_adapter::gojson::{go_quote, zero};
-use oxap_adapter::{Error, UnsupportedControl, CONTROL_UNSATISFIABLE};
+use oxap_adapter::{Error, InteractionResolution, UnsupportedControl, CONTROL_UNSATISFIABLE};
 use oxap_protocol::{
     ReasoningLevel, RecoveryMetadata, SessionId, SessionState, SessionStatus, FEATURE_OPEN_REOPEN,
     FEATURE_SESSION_REASONING,
@@ -90,6 +91,12 @@ pub enum Observation {
 pub(crate) enum ObservationError {
     Transport(String),
     Other(Error),
+    Input(Box<InputCommand>),
+}
+
+pub(crate) struct InputCommand {
+    pub resolution: InteractionResolution,
+    pub reply: oneshot::Sender<Result<(), Error>>,
 }
 
 impl From<Error> for ObservationError {
@@ -103,6 +110,7 @@ impl From<ObservationError> for Error {
         match error {
             ObservationError::Transport(reason) => Self::harness(reason),
             ObservationError::Other(error) => error,
+            ObservationError::Input(_) => Self::InteractionNotFound,
         }
     }
 }
@@ -131,6 +139,7 @@ pub struct GatewaySession {
     _stop_relay: Sender<()>,
     pub(crate) process: Arc<Process>,
     pub(crate) observed_settlement: bool,
+    pub(crate) input: Receiver<InputCommand>,
     inbound: Receiver<Inbound>,
     buffered_observations: VecDeque<Observation>,
     runtime_id: String,
@@ -247,6 +256,7 @@ impl GatewaySession {
             observed_settlement: false,
             inbound,
             buffered_observations: VecDeque::new(),
+            input: never(),
             runtime_id,
             stored_id,
             last_seq: 0,
@@ -295,14 +305,15 @@ impl GatewaySession {
         if let Some(error) = &self.observation_error {
             return Err(error.clone().into());
         }
+        let timeout = deadline.map_or_else(never, at);
         loop {
-            let inbound = match deadline {
-                Some(deadline) if Instant::now() >= deadline => Err(RecvTimeoutError::Timeout),
-                Some(deadline) => self.inbound.recv_deadline(deadline),
-                None => self
-                    .inbound
-                    .recv()
-                    .map_err(|_| RecvTimeoutError::Disconnected),
+            let inbound = select_biased! {
+                recv(timeout) -> _ => Err(RecvTimeoutError::Timeout),
+                recv(self.inbound) -> message => message.map_err(|_| RecvTimeoutError::Disconnected),
+                recv(self.input) -> command => return match command {
+                    Ok(command) => Err(ObservationError::Input(Box::new(command))),
+                    Err(_) => Err(Error::SessionClosed.into()),
+                },
             };
             match inbound {
                 Ok(Inbound::Notification(notification)) => {
