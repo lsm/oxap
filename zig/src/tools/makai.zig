@@ -5341,12 +5341,9 @@ fn runOapMode(
     return runOapxServe(allocator, stdin, stdout, stderr, serve_provider, parsed.answers_specimens, default_model_id, if (remote_config) |*config| config else null);
 }
 
-const served_auth_features = [_]adapter_contract.Feature{
+const served_features = [_]adapter_contract.Feature{
     .{ .key = "auth.providers", .level = .native },
     .{ .key = "auth.login", .level = .native },
-};
-
-const served_features = served_auth_features ++ [_]adapter_contract.Feature{
     .{ .key = adapter_contract.feature_models_list, .level = .native, .reason = "the catalog the endpoint loaded at start" },
 };
 
@@ -6418,7 +6415,7 @@ fn runRawAgent(
     var auth_state: StdioAgentAuth = undefined;
     const auth = if (configured) enabled: {
         const built = registry.builtins.getLastOrNull() orelse break :enabled null;
-        try built.advertise(&served_auth_features);
+        try built.advertise(&served_features);
         auth_state.init(allocator);
         break :enabled &auth_state;
     } else null;

@@ -29,4 +29,6 @@ loopback. The test Provider is synthetic and anonymous. The HTTP Provider
 discloses no grant channel and the Agent profile refuses Provider grants.
 The scripts record settled counts and exit codes.
 
+The built-in Agent model catalog is readable without a degraded-feature opt-in.
+
 The schema check shares invalid configurations with the CLI journey.
