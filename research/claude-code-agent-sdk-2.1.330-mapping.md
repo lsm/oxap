@@ -32,6 +32,8 @@ main-turn activity from child or injected activity. The Rust process replay
 exercises both combinations with synthetic frames. The pinned corpus leaves
 both combinations unverified.
 
-Go includes non-null native `structured_output` in the terminal envelope
-extension `com.anthropic.claude-code.structured_output`. The Rust port
-defers that projection to the result arbitration and hygiene slice.
+The Go adapter projects an aborted native result as `run.cancelled`. At
+this Rust port stage, caller cancellation is unavailable. The Rust adapter
+projects such a result as an observed `run.failed` with the native abort
+reason, preserving the protocol requirement for an accepted cancel exchange
+before `run.cancelled`.

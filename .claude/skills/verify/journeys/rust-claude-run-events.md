@@ -22,5 +22,6 @@ confirm the public state cursor follows the emitted sequence. Each settled
 session returns to idle and accepts the next submit.
 
 The buffered variant sends streaming deltas before the matching echo. The
-live variant sends them after the public submit returns. Disconnect inference,
-interrupts, and queued continuations are covered by later slices.
+live variant sends them after the public submit returns. The result arbitration
+journey covers disconnect inference. Interrupts and queued continuations are
+covered by later slices.
