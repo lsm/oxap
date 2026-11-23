@@ -459,8 +459,8 @@ fn shared_input(
         assert_eq!(state.status, SessionStatus::WAITING_FOR_INPUT);
         assert_eq!(state.active_runs[0].status, RunStatus::WAITING_FOR_INPUT);
         assert_eq!(
-            state.active_runs[0].pending_interactions,
-            [input.interaction_id.clone()]
+            state.active_runs[0].pending_interactions.as_slice(),
+            std::slice::from_ref(&input.interaction_id)
         );
         let resolution = InteractionResolution {
             run_id: input.run_id,
