@@ -96,3 +96,13 @@ uses the built-in source. A scoped list requires degraded opt-in and
 publishes the source attribution for subsequent calls. Until a scoped
 response serves an observed catalog, only built-in attribution is available.
 An unscoped list exposes only the built-in source.
+
+Session submission accepts one user message with automatic delivery. Text
+parts are joined with newlines. `Config::expand_prompts` permits native prompt
+expansion. By default the user frame is marked client-composed. Before writing
+the frame the session reserves one pending turn, which blocks another submit
+or close. Sending a frame does not admit a run. This port stage fails a pending
+submit on transport loss and leaves native admission and event publication to
+later slices. Hosts can set their own admission deadline. On timeout, drop
+the submit future and close the retired session. Per-run tool selection is
+unavailable until permission handling can enforce it.
