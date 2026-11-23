@@ -61,7 +61,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>|--shared-settings|--shared-settings-reopen <stored-id>|--native-list]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>|--shared-settings|--shared-settings-reopen <stored-id>|--native-list|--native-list-reuse]"
                     .into(),
             );
         }
@@ -337,6 +337,7 @@ fn native_list(
             },
         ]
     );
+    block_on(adapter.close_listing_gateway())?;
     println!("NATIVE SESSIONS: {}\ngateway exited cleanly", listed.len());
     Ok(())
 }
@@ -354,7 +355,7 @@ fn native_list_reuse(
         time::{Duration, Instant},
     };
 
-    let adapter = oxap_adapter_hermes::Adapter::new(config, "configured".into());
+    let adapter = oxap_adapter_hermes::Adapter::new(config.clone(), "configured".into());
     let lister = adapter.native_lister().ok_or("missing native lister")?;
     let list = || {
         lister.native_list(NativeListRequest {
@@ -379,10 +380,21 @@ fn native_list_reuse(
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(block_on(list())?[0].native_id, "stored-2");
+    assert!(state_dir.join("listing-eof-2").exists());
     std::fs::write(state_dir.join("release-listing"), "")?;
     assert_eq!(block_on(held)?[0].native_id, "stored-1");
     assert_eq!(block_on(list())?[0].native_id, "stored-3");
     drop(adapter);
+    assert!(state_dir.join("listing-eof-3").exists());
+    let fresh = oxap_adapter_hermes::Adapter::new(config, "configured".into());
+    let lister = fresh.native_lister().ok_or("missing native lister")?;
+    assert!(matches!(
+        block_on(lister.native_list(NativeListRequest {
+            limit: 1,
+            ..NativeListRequest::default()
+        })),
+        Err(Error::Harness(_))
+    ));
     println!("REUSED, ISOLATED, AND RETRIED LISTING");
     Ok(())
 }

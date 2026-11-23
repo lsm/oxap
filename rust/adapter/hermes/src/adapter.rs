@@ -24,11 +24,13 @@ use oxap_protocol::{
 use crate::{
     gateway_session::{interrupt, set_reasoning, InputCommand, ObservationError, PromptStartError},
     native::METHOD_SESSION_INTERRUPT,
+    native_list::ListingGateways,
     process::{Process, ProcessConfig},
     GatewayRun, GatewaySession, Observation, RunObservation,
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const LIST_TIMEOUT: Duration = Duration::from_secs(60);
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 
 pub struct Adapter {
@@ -36,6 +38,7 @@ pub struct Adapter {
     model: String,
     runtime: Runtime,
     journal_capacity: usize,
+    listings: Arc<ListingGateways>,
 }
 
 impl Adapter {
@@ -45,6 +48,7 @@ impl Adapter {
             model,
             runtime: Runtime::default(),
             journal_capacity: DEFAULT_JOURNAL_CAPACITY,
+            listings: Arc::new(ListingGateways::default()),
         }
     }
 
@@ -55,6 +59,11 @@ impl Adapter {
             capacity
         };
         self
+    }
+
+    pub fn close_listing_gateway(&self) -> BoxFuture<'_, ()> {
+        let listings = self.listings.clone();
+        background(move || listings.close())
     }
 
     fn descriptor(&self) -> Descriptor {
@@ -217,9 +226,8 @@ impl AdapterContract for Adapter {
 impl NativeLister for Adapter {
     fn native_list(&self, request: NativeListRequest) -> BoxFuture<'_, Vec<NativeListing>> {
         let process = self.process.clone();
-        background(move || {
-            crate::native_list::list(&process, request.limit, Instant::now() + RPC_TIMEOUT)
-        })
+        let listings = self.listings.clone();
+        background(move || listings.list(&process, request.limit, Instant::now() + LIST_TIMEOUT))
     }
 }
 
