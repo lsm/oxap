@@ -1,5 +1,19 @@
 use oxap_adapter::Adapter;
 use oxap_adapter_claude::{Adapter as ClaudeAdapter, Config, ToolPosture};
+
+#[test]
+fn rejects_nul_in_the_launch_environment_before_startup() {
+    let error = ClaudeAdapter::new(Config {
+        executable: Some("unused".into()),
+        tools: ToolPosture::Unrestricted,
+        environment: vec!["LAUNCH_VALUE=invalid\0value".into()],
+        ..Default::default()
+    })
+    .err()
+    .expect("invalid environment must be refused before opening a session");
+    assert!(error.to_string().contains("environment entry carries NUL"));
+    assert!(!error.to_string().contains("invalid"));
+}
 use oxap_protocol::{CompactionKind, CompactionPolicy, ReasoningLevel};
 
 fn descriptor(adapter: &ClaudeAdapter) -> oxap_adapter::Descriptor {
