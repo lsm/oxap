@@ -10,6 +10,11 @@ reopening, inspecting and closing Hermes sessions. Construct it with a
 and returns an owned OAP run stream after admission. Its state is queued
 while admission is pending, running after the gateway opens a turn, and
 idle again after a turn settles or the gateway expressly refuses admission.
+While idle, matching session metadata and usage leave the session idle.
+A native sequence reset, a foreign session event, or an unowned run event
+retires the session. State and submit then return `SessionClosed`.
+The previous run remains recoverable from the journal until explicit close.
+
 Cancel an admitted run through the shared session. The response acknowledges
 the interrupt request. Native settlement determines the terminal event, and
 retrying an accepted cancel during the same run returns its receipt again.
