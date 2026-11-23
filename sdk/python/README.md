@@ -3,7 +3,7 @@
 `oxap-sdk` (imported as `oxap_sdk`) uses one combined OAP 0.1 stdio endpoint by default:
 
 ```text
-oapx serve agent,provider --stdio
+oxap serve --config <generated-server.json>
 ```
 
 It multiplexes `agent-control-core` and `model-provider-core` profiles over that connection. The public `MakaiClient` name remains for source compatibility.
@@ -94,7 +94,7 @@ await client.auth.login("anthropic", handlers)
 
 ## Configuration and errors
 
-`connect()` accepts `command`, `args`, `cwd`, `env`, a `BinaryResolverOptions`, `auth`, and timeouts in seconds. `response_timeout` bounds each request's reply, the acceptance of a run or inference included, and never a running run; `idle_timeout`, off by default, cancels a run or inference that sends no event for that long. The default args are `("serve", "agent,provider", "--stdio")`. Binary resolution honors `OXAP_SDK_BINARY_PATH` and then the legacy `OAP_SDK_BINARY_PATH`, an explicit path or checksum-verified URL, local `zig-out/bin/oxap` and `zig/zig-out/bin/oxap` before the `oapx` names, then `oxap` and then `oapx` on `PATH`. An `OXAP_SDK_BINARY_URL` likewise outranks `OAP_SDK_BINARY_URL`, and each environment URL takes the checksum written beside it, so a checksum is never borrowed across the two pairs; `checksum_sha256` from the options is the fallback for any URL. The legacy names stay read-compatible.
+`connect()` accepts `command`, `args`, `cwd`, `env`, a `BinaryResolverOptions`, `auth`, and timeouts in seconds. `response_timeout` bounds each request's reply, the acceptance of a run or inference included, and never a running run; `idle_timeout`, off by default, cancels a run or inference that sends no event for that long. The default launcher owns a temporary config through initialization. Explicit `args` are passed through as supplied. Binary resolution honors `OXAP_SDK_BINARY_PATH` and then the legacy `OAP_SDK_BINARY_PATH`, an explicit path or checksum-verified URL, local `zig-out/bin/oxap` and `zig/zig-out/bin/oxap` before the `oapx` names, then `oxap` and then `oapx` on `PATH`. An `OXAP_SDK_BINARY_URL` likewise outranks `OAP_SDK_BINARY_URL`, and each environment URL takes the checksum written beside it, so a checksum is never borrowed across the two pairs; `checksum_sha256` from the options is the fallback for any URL. The legacy names stay read-compatible.
 
 `oxap_sdk.connect_sync()` supplies the same API through a blocking wrapper for scripts; do not call it inside a running event loop. The async and sync clients own their child process and should be closed.
 

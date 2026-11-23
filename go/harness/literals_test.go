@@ -36,6 +36,20 @@ func TestAPinSpelledInSourceFails(t *testing.T) {
 		tree := fstest.MapFS{"zig/build.zig": {Data: []byte(fmt.Sprintf("const pin = %q;\n", revision))}}
 		assertOnly(t, CheckLiterals(tree, catalog), CodePinLiteral, "zig/build.zig:1")
 	})
+	t.Run("rust", func(t *testing.T) {
+		tree := fstest.MapFS{"rust/adapter/pi/src/lib.rs": {Data: []byte(fmt.Sprintf("\nconst REVISION: &str = %q;\n", revision))}}
+		assertOnly(t, CheckLiterals(tree, catalog), CodePinLiteral, "rust/adapter/pi/src/lib.rs:2")
+	})
+	t.Run("rust raw", func(t *testing.T) {
+		tree := fstest.MapFS{"rust/adapter/claude/tests/corpus.rs": {Data: []byte(`const DIGEST: &str = r###"` + digest + `"###;`)}}
+		assertOnly(t, CheckLiterals(tree, catalog), CodePinLiteral, "artifact digest")
+	})
+	t.Run("rust escapes", func(t *testing.T) {
+		for _, text := range []string{`\x70`, `\u{7_0}`, "p\\\n    "} {
+			tree := fstest.MapFS{"rust/adapter/pi/src/lib.rs": {Data: []byte(`const REVISION: &str = "` + text + revision[1:] + `";`)}}
+			assertOnly(t, CheckLiterals(tree, catalog), CodePinLiteral, "rust/adapter/pi/src/lib.rs:1")
+		}
+	})
 }
 
 func TestAPinInsideALargerStringPasses(t *testing.T) {
@@ -49,4 +63,21 @@ func TestAPinInsideALargerStringPasses(t *testing.T) {
 	if findings := CheckLiterals(tree, catalog); len(findings) != 0 {
 		t.Fatalf("want no finding, got %v", findings)
 	}
+}
+
+func TestRustPinCheckReadsSourceStrings(t *testing.T) {
+	catalog := loadCatalog(t)
+	revision := currentOf(t, &catalog, "pi").CapabilityRevision
+	tree := fstest.MapFS{
+		"rust/adapter/pi/tests/source.rs": {Data: []byte(fmt.Sprintf(`
+/* outer /* inner */ %q */
+// %q
+const QUOTE: char = '"';
+fn choose<'a>(text: &'a str) -> &'a str { text }
+const FRAME: &str = r#"{"revision":%q}"#;
+const REVISION: &str = %q;
+`, revision, revision, revision, revision))},
+		"rust/target/generated.rs": {Data: []byte(fmt.Sprintf("const PIN: &str = %q;", revision))},
+	}
+	assertOnly(t, CheckLiterals(tree, catalog), CodePinLiteral, "rust/adapter/pi/tests/source.rs:7")
 }

@@ -218,6 +218,12 @@ func TestTheEventsV0231AddsAreAdmittedAsObserved(t *testing.T) {
 	}
 }
 
+func TestGroupChangesAreAdmittedAsObserved(t *testing.T) {
+	if _, err := decodeEvent(t, `{"type":"groups.changed","session_id":"s","seq":4,"payload":{"room_ids":["room"],"broadcast_id":"broadcast"}}`); err != nil {
+		t.Fatalf("groups.changed rejected: %v", err)
+	}
+}
+
 func TestAV023DeltaCarriesTurnIdentityAndANullTextBoundary(t *testing.T) {
 	event, err := decodeEvent(t, `{"type":"message.delta","session_id":"s","seq":4,"payload":{"text":null,"turn_id":"t1","segment":2,"offset":18}}`)
 	if err != nil {

@@ -1762,6 +1762,32 @@ fn settings(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
     serde_json::to_value(&response).map_err(|err| wire("internal", err))
 }
 
+fn model_switch(hub: &Hub, request: &Request, ids: &Ids) -> Answer {
+    use oxap_protocol::EnvelopeType;
+    let envelope = gate_request(
+        request.request.as_deref(),
+        &[EnvelopeType::SESSION_MODEL_SWITCH_REQUEST],
+    )?;
+    let asked: oxap_protocol::SessionModelSwitchRequest = payload(&envelope)?;
+    let id = request.session_id.as_str().into();
+    if asked.session_id != id || envelope.session_id.as_ref() != Some(&id) {
+        return Err(wire(
+            "scope_mismatch",
+            "session_id does not match the addressed session",
+        ));
+    }
+    let entry = session(hub, &request.session_id)?;
+    let (switched, state) = block_on(entry.switch_model(asked)).map_err(submit_refusal)?;
+    entry.record_model(&state);
+    session_reply(
+        EnvelopeType::SESSION_MODEL_SWITCH_RESPONSE,
+        &envelope,
+        entry.id(),
+        &switched,
+        ids,
+    )
+}
+
 fn catalog_refusal(err: HubError, otherwise: &'static str) -> WireError {
     if let Some(refused) = refusal(&err) {
         return refused;
@@ -2369,6 +2395,10 @@ pub(crate) fn dispatch(hub: &Hub, request: &Request, ids: &Ids, limit: usize) ->
         "settings" => {
             request.only(&["session_id", "request"])?;
             settings(hub, request, ids)
+        }
+        oxap_protocol::FEATURE_SESSION_MODEL_SWITCH => {
+            request.only(&["session_id", "request"])?;
+            model_switch(hub, request, ids)
         }
         "cancel" => {
             request.only(&["session_id", "request"])?;

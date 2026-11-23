@@ -364,7 +364,7 @@ the run the fire triggers names it in `trigger.task_id`.
     `tasks_truncated: true` says so.
   - The state document is authoritative, as for runs.
   - In oapx a session holding any task record does not park, so a reopen
-    never loses an ended task. See [parking](hub.md#parking); carrying task
+    never loses an ended task. See [parking](agent-service.md#parking); carrying task
     records across a park is a later decision.
 - **`session.task.cancel.request {session_id, task_id}`** answers
   `{outcome: "requested" | "already_ended" | "not_cancellable"}`.
@@ -504,7 +504,7 @@ open question answered here:
 Each step below is one or more pull requests.
 
 1. **Session-event channel:** the adapter push in both trees, the endpoint
-   publishing, and the hub's following subscription, with `drafts/hub.md`
+   publishing, and the hub's following subscription, with `drafts/agent-service.md`
    updated in the same change and the memory adapters driving it in tests.
 2. **Wire and validator:**
    - schema members and events: `run.started.trigger`, `activeRun.trigger`,

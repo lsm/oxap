@@ -39,6 +39,7 @@ func TestHubStdioDeepSeekWorkStatusLink(t *testing.T) {
 			c.response(1)
 			c.send(`{"id":2,"op":"open","adapter":"deepseek","request":{` + openEnvelopeFields + `"id":"o2","payload":{"session_id":"s2"}}}`)
 			c.response(2)
+			links := map[string]string{}
 			for i, session := range []string{"s1", "s2", "s1"} {
 				id := int64(i + 3)
 				c.send(`{"id":%d,"op":"work.status","session_id":%q}`, id, session)
@@ -49,9 +50,17 @@ func TestHubStdioDeepSeekWorkStatusLink(t *testing.T) {
 				if err := json.Unmarshal(result, &status); err != nil {
 					t.Fatal(err)
 				}
-				if want := "deepseek://sessions/" + session; status.Link != want {
-					t.Errorf("work.status link = %q, want %q (result %s)", status.Link, want, result)
+				native, found := strings.CutPrefix(status.Link, "deepseek://sessions/")
+				if !found || native == "" || native == session {
+					t.Errorf("work.status link = %q, want a native session of its own for %s (result %s)", status.Link, session, result)
 				}
+				if earlier, seen := links[session]; seen && earlier != status.Link {
+					t.Errorf("work.status link for %s moved from %q to %q", session, earlier, status.Link)
+				}
+				links[session] = status.Link
+			}
+			if links["s1"] == links["s2"] {
+				t.Errorf("s1 and s2 share the native session %q", links["s1"])
 			}
 		})
 	}

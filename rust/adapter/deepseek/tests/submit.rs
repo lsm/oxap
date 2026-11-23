@@ -145,6 +145,7 @@ done"#
             provider: "deepseek".into(),
             model: "m".into(),
             runtime: Runtime::new(|| 42, |kind| format!("{kind}-minted")),
+            native_session_id: Some(|id: &str| id.to_owned()),
             ..Config::default()
         })
         .unwrap()
@@ -641,7 +642,7 @@ fn reply(seq: i64, step: i64) -> String {
         seq,
         "assistant/message",
         &format!(
-            r#"{{"turn":1,"step":{step},"message":{{"id":"a","role":"assistant","content":[{{"type":"text","text":"hi"}}],"source":{{"kind":"model","provider":"p","model":"m"}}}},"stream":[{{"type":"text-chunks","time0":0,"index":0,"dt":[5],"texts":["h","i"]}}],"usage":{{"inputTokens":3,"outputTokens":2}}}}"#
+            r#"{{"turn":1,"step":{step},"message":{{"id":"a","role":"assistant","content":[{{"type":"text","text":"hi"}}],"source":{{"kind":"model","provider":"p","model":"m"}}}},"stream":[{{"type":"chunk","time":0,"chunk":{{"type":"text-delta","index":0,"text":"h"}}}},{{"type":"chunk","time":5,"chunk":{{"type":"text-delta","index":0,"text":"i"}}}}],"usage":{{"inputTokens":3,"outputTokens":2}}}}"#
         ),
     )
 }

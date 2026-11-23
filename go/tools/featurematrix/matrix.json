@@ -183,7 +183,7 @@
     {
       "harness": "deepseek-harness",
       "pin": "dsh-v0.2.2-rc.5",
-      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v3",
+      "capability_revision": "deepseek-harness-dsh-v0.2.2-rc.5-oap-v4",
       "corpus": "fixtures/adapters/deepseek-harness-dsh-v0.2.2-rc.5",
       "cells": [
         {
@@ -209,9 +209,9 @@
         },
         {
           "column": "reopen",
-          "claim": "reopen is declined before the runtime starts",
+          "claim": "reopen resumes the bound native session after initialize",
           "evidence": [
-            { "package": "go/adapter/deepseek", "test": "TestReopenIsDeclinedBeforeTheRuntimeStarts", "kind": "refusal" }
+            { "package": "go/adapter/deepseek", "test": "TestReopenResumesTheBoundNativeSessionAndReportsItRecovered", "kind": "positive" }
           ]
         },
         {
@@ -225,22 +225,22 @@
     },
     {
       "harness": "hermes",
-      "pin": "v0.23.1",
-      "capability_revision": "hermes-v0.23.1-oap-v1",
-      "corpus": "fixtures/adapters/hermes-v0.23.1",
+      "pin": "v0.23.3",
+      "capability_revision": "hermes-v0.23.3-oap-v1",
+      "corpus": "fixtures/adapters/hermes-v0.23.3",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a submitted prompt streams provenance-tagged deltas and completes",
           "evidence": [
-            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.1/streaming-provenance" }
+            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.3/streaming-provenance" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "three provenance-tagged content.delta envelopes",
           "evidence": [
-            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.1/streaming-provenance" }
+            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/streaming-provenance", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.3/streaming-provenance" }
           ]
         },
         {
@@ -261,29 +261,29 @@
           "column": "tool-observation",
           "claim": "two completed tool calls are observed",
           "evidence": [
-            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.1/tool-lifecycle" }
+            { "package": "go/adapter/hermes", "test": "TestHermesEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/hermes-v0.23.3/tool-lifecycle" }
           ]
         }
       ]
     },
     {
       "harness": "opencode",
-      "pin": "v2.2.7",
-      "capability_revision": "opencode-v2.2.7-oap-v5",
-      "corpus": "fixtures/adapters/opencode-v2.2.7",
+      "pin": "v2.3.2",
+      "capability_revision": "opencode-v2.3.2-oap-v5",
+      "corpus": "fixtures/adapters/opencode-v2.3.2",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a prompt is admitted and the run completes",
           "evidence": [
-            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.2.7/completed-text" }
+            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.3.2/completed-text" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "text parts stream as four content.delta envelopes",
           "evidence": [
-            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/text-streaming", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.2.7/text-streaming" }
+            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/text-streaming", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.3.2/text-streaming" }
           ]
         },
         {
@@ -304,7 +304,7 @@
           "column": "tool-observation",
           "claim": "call progress and completion are observed",
           "evidence": [
-            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.2.7/tool-lifecycle" }
+            { "package": "go/adapter/opencode", "test": "TestOpenCodeEvidenceCorpus/tool-lifecycle", "kind": "positive", "fixture": "fixtures/adapters/opencode-v2.3.2/tool-lifecycle" }
           ]
         }
       ]

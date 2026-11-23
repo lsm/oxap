@@ -26,3 +26,22 @@ frames carrying `reasoningEffort: high`, one per model, and a `shutdown` to
 the first runtime only after the second has answered. A `--- PASS` line for
 the subtest is the result; a skip means `OAP_OAPX_BIN` was not set and proves
 nothing.
+
+All three stdio hubs expose a separate transport operation for a held
+session. Run the same scenario against each binary:
+
+```sh
+go build -o "$EVIDENCE/goap" ./go/cmd/goap
+CARGO_TARGET_DIR="$EVIDENCE/rust" cargo build --locked --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
+python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py "$EVIDENCE/oapx/bin/oxap"
+python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py "$EVIDENCE/goap"
+python3 .claude/skills/verify/scripts/stdio-deepseek-model-switch.py "$EVIDENCE/rust/debug/oap-rust-hub" --verb serve
+```
+
+The fixture opens a Pro session, switches it to Flash, and completes its
+first turn. The switch response, session state, and latest history binding
+must name Flash. The runtime must initialize first with Pro and then with
+Flash. Mismatched session IDs and a different model after the turn are
+refused. Repeating the current model succeeds without adding a history
+record, and closing the session records it as closed on Flash. The fixture
+uses an isolated home and history file and no provider credentials.

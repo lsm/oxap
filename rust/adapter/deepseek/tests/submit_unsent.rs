@@ -83,6 +83,7 @@ fn a_submit_dropped_before_its_prompt_is_sent_never_sends_it() {
         provider: "deepseek".into(),
         model: "m".into(),
         runtime: Runtime::new(|| 42, |kind| format!("{kind}-minted")),
+        native_session_id: Some(|id: &str| id.to_owned()),
         ..Config::default()
     })
     .unwrap()

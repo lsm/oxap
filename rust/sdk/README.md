@@ -1,6 +1,6 @@
 # OAP Rust SDK
 
-Rust SDK published as `oxap-sdk`. By default it starts `oapx serve agent,provider --stdio` and speaks OAP v0.1 on both profiles. Provider inference and catalog discovery use `model-provider-core`; agent sessions and authentication use `agent-control-core`.
+Rust SDK published as `oxap-sdk`. By default it starts `oxap serve --config <generated-server.json>` and speaks OAP v0.1 on both profiles. Provider inference and catalog discovery use `model-provider-core`; agent sessions and authentication use `agent-control-core`.
 
 It mirrors the [TypeScript SDK](../../sdk/typescript/README.md): same protocol, same namespaces, same error taxonomy.
 

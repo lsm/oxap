@@ -218,13 +218,14 @@ pub const Reducer = struct {
         const kind = event.kind orelse return;
         switch (kind) {
             .user_message => try self.userMessage(event.data),
-            .message_delta => {
+            .message_delta, .reasoning_delta => {
                 const run = self.current orelse return;
                 const text = native.text(event.data, "deltaContent");
                 if (text.len == 0) return;
+                const part_type = if (kind == .reasoning_delta) "reasoning" else "text";
                 var part: std.json.ObjectMap = .empty;
-                try part.put(self.allocator(), "type", .{ .string = "text" });
-                try part.put(self.allocator(), "text", .{ .string = try self.allocator().dupe(u8, text) });
+                try part.put(self.allocator(), "type", .{ .string = part_type });
+                try part.put(self.allocator(), part_type, .{ .string = try self.allocator().dupe(u8, text) });
                 var payload = try self.scoped(run);
                 try payload.put(self.allocator(), "message_id", .{ .string = run.message_id });
                 try payload.put(self.allocator(), "part", .{ .object = part });

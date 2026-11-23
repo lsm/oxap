@@ -10,7 +10,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../fixtures/adapters/claude-code-2.1.330")
+    let pin = oxap_harness::current("claude-code").unwrap();
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join(&pin.corpus)
 }
 
 fn traces() -> Vec<PathBuf> {

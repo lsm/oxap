@@ -1,6 +1,6 @@
 # OAP TypeScript SDK
 
-TypeScript SDK published as `@oxap/sdk`. The default client spawns `oapx serve agent,provider --stdio` and speaks OAP v0.1 on both profiles: agent sessions and authentication on `agent-control-core`, direct inference and provider model discovery on `model-provider-core`.
+TypeScript SDK published as `@oxap/sdk`. The default client spawns `oxap serve --config <generated-server.json>` and speaks OAP v0.1 on both profiles: agent sessions and authentication on `agent-control-core`, direct inference and provider model discovery on `model-provider-core`.
 
 `createOapClient()` is the preferred entry point. `createMakaiClient()` remains an alias for it.
 

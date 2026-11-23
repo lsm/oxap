@@ -1,6 +1,6 @@
 [
   {
-    "native": "assistant.reasoning_delta / assistant.reasoning",
-    "reason": "The pinned reducer observes but does not publish reasoning; do not invent a reasoning capability."
+    "native": "assistant.reasoning",
+    "reason": "The streamed assistant.reasoning_delta carries the reasoning; the full message adds nothing to publish."
   }
 ]

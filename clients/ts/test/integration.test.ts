@@ -2,13 +2,13 @@
 import assert from 'node:assert/strict';
 import { spawn, spawnSync, type ChildProcessByStdio } from 'node:child_process';
 import type { Readable } from 'node:stream';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, type TestContext } from 'node:test';
-import { dial, type FetchLike, type FetchResponse, type StreamReader } from '../src/client.js';
+import { AgentServiceClient, dial, type FetchLike, type FetchResponse, type StreamReader } from '../src/index.js';
 import { finalText, OapSession } from '../src/session.js';
 import {
   EnvelopeType,
@@ -39,7 +39,8 @@ function findGo(): GoToolchain | null {
   return null;
 }
 
-const hub = process.env.OAP_TS_HUB ?? '';
+const configured = process.env.OAP_TS_AGENT_SERVICE;
+const hub = configured ?? process.env.OAP_TS_HUB ?? '';
 const go = process.env.OAP_TS_SKIP_INTEGRATION === '1' || hub !== '' ? null : findGo();
 const skip =
   process.env.OAP_TS_SKIP_INTEGRATION === '1'
@@ -48,7 +49,7 @@ const skip =
       ? 'go toolchain not available (set OAP_TS_SKIP_INTEGRATION=1 to silence)'
       : false;
 
-async function startHub(t: TestContext): Promise<string> {
+async function startAgentService(t: TestContext): Promise<string> {
   let binary = hub;
   if (binary === '') {
     assert.ok(go);
@@ -62,26 +63,44 @@ async function startHub(t: TestContext): Promise<string> {
     });
     assert.equal(build.status, 0, `go build failed: ${build.stderr}`);
   }
-  const daemon = spawn(binary, ['serve', '--addr', '127.0.0.1:0', '--session-history='], {
+  const workdir = mkdtempSync(join(tmpdir(), 'oap-agent-service-'));
+  const config = join(workdir, 'server.json');
+  const args = configured
+    ? ['serve', '--config', config]
+    : ['serve', '--addr', '127.0.0.1:0', '--session-history='];
+  if (configured) {
+    writeFileSync(config, JSON.stringify({ agent: {
+      http: '127.0.0.1:0', adapters: { memory: { type: 'memory' } },
+    } }));
+  }
+  const daemon = spawn(binary, args, {
+    env: configured ? { HOME: workdir, PATH: process.env.PATH, NODE_ENV: 'test' } : undefined,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   t.after(async () => {
-    if (daemon.exitCode !== null || daemon.signalCode !== null) return;
-    const exited = new Promise<void>((resolve) => daemon.once('exit', () => resolve()));
-    daemon.kill('SIGTERM');
-    const forced = setTimeout(() => daemon.kill('SIGTERM'), 2000);
-    await exited;
-    clearTimeout(forced);
+    try {
+      if (daemon.exitCode === null && daemon.signalCode === null) {
+        const exited = new Promise<void>((resolve) => daemon.once('exit', () => resolve()));
+        daemon.kill('SIGTERM');
+        const forced = setTimeout(() => daemon.kill('SIGTERM'), 2000);
+        await exited;
+        clearTimeout(forced);
+      }
+      assert.equal(daemon.exitCode, 0, `Agent Service exit signal: ${daemon.signalCode}`);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
   });
   return waitForListening(daemon);
 }
 
 test(
-  'integration: full lifecycle against the hub',
+  'integration: full lifecycle against the Agent Service',
   { skip },
   async (t) => {
-    const address = await startHub(t);
+    const address = await startAgentService(t);
     const client = dial(address);
+    assert.ok(client instanceof AgentServiceClient);
 
     const adapters = await client.adapters();
     assert.ok(adapters.some((adapter) => adapter.name === 'memory'));
@@ -201,7 +220,7 @@ test(
   'integration: a dropped connection resumes from the cursor with no duplicates',
   { skip },
   async (t) => {
-    const address = await startHub(t);
+    const address = await startAgentService(t);
 
     const sabotage = sabotagedEventsFetch();
     const client = dial(address, { fetch: sabotage.fetch });
@@ -229,7 +248,7 @@ test(
   'integration: a request body cut short by a half-close is refused request_read',
   { skip },
   async (t) => {
-    const address = new URL(await startHub(t));
+    const address = new URL(await startAgentService(t));
     const answer = await new Promise<string>((resolve, reject) => {
       const socket = connect(Number(address.port), address.hostname);
       let received = '';
@@ -361,7 +380,7 @@ test(
   'integration: the work profile starts, reads, sends to, lists and stops a session',
   { skip },
   async (t) => {
-    const client = dial(await startHub(t));
+    const client = dial(await startAgentService(t));
 
     const started = await client.workStart('memory', { message: 'hello there', title: 'first task' });
     assert.equal(started.ref.adapter, 'memory');

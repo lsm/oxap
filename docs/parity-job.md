@@ -1,16 +1,14 @@
 # What the parity job is for
 
-Two trees implement OAP: `oapx`, the Zig runtime, and this repository's Go
-tree. Neither is the oracle — when they disagree, a decision, a draft or a
-corpus decides (Decision 0032). The parity job is the **last check before
-that rule has to be used by hand**: it drives the same requests through both
-trees and fails when the bytes that cross the pipe differ.
+The parity job drives the same requests through the Zig, Go and Rust
+endpoints where their adapter support overlaps. When they disagree, a
+decision, a draft or a corpus decides (Decision 0032).
 
 `goap check` already covers the fixtures, the schemas and the reference
 adapter, and the per-harness corpora already cover each adapter's native wire
 against recorded frames. So the job is not "does each tree work". It is the
-narrower question those cannot answer: **given the same request, do the two
-trees emit the same answer, in the same order, with the same refusals?**
+narrower question those cannot answer: **given the same request, do the
+endpoints emit the same answer, in the same order, with the same refusals?**
 
 ## What it catches, and what covers it instead
 
@@ -35,10 +33,11 @@ and the fix is cheaper there.
 | fixture | the divergence it is the last check on |
 | --- | --- |
 | `acp`, `claude`, `codex`, `copilot`, `deepseek`, `hermes`, `opencode`, `pi` | that tree's adapter translates this harness's frames the same way the other tree's does |
+| `deepseek-switch` | a session model change restarts the adapter process and subsequent output reflects the change |
 | `pi-two-open-calls` | that two calls open **at once** are closed in the same order in both trees — the contested settlement, the one case `memory` structurally cannot reach |
 | `memory` | that a whole run's event stream — from the permission gate through the tool call and the input gate to the terminal, both interactions in sequence — comes out identical and in the same order |
 
-The nine harness fixtures share one shape: a fixed `scenario.jsonl`, a
+The harness fixtures share one shape: a fixed `scenario.jsonl`, a
 `registry.json` naming the adapter, and a `child.sh` that answers
 deterministically. (`opencode` has no `child.sh` and answers the in-test fake
 HTTP server the harness starts for it when its registry carries `@URL@`.) A
@@ -81,11 +80,11 @@ sweep order is read out of `settleRun` (`go/adapter/pi/session.go`), which sorts
 the open children by `order`, and out of its Zig counterpart; sorting that sweep
 the other way round makes this fixture fail, which is what makes it worth having.
 
-**Two tests, and only one of them looks at order.** `TestBackendsMatchOapx`
-runs the harness fixtures and `memory` with a content diff **and** the
-ordered comparison. It skips a fixture naming a type oapx does not serve, which
-today is `copilot`: only goap and the Rust hub serve it, so
-`TestBackendsMatchRustHub` is the comparison it gets.
+**The served backend tests compare content, run order and child messages.**
+`TestBackendsMatchOapx` uses a single Go exchange per fixture and compares
+it with Zig and, when available, Rust. The three-way fixtures are `acp`,
+`codex`, `deepseek`, `deepseek-switch` and `memory`. `copilot` is covered
+by the Go and Rust job's `TestBackendsMatchRustHub`.
 `TestMemoryBackendMatchesOapx` compares the memory backend's output as a
 *sorted* set, so it is order-blind by construction: it answers "do the two
 trees emit the same envelopes", not "in what order". The order claim belongs to
@@ -120,16 +119,19 @@ never `sequence`.
 
 ```sh
 zig build --build-file zig/build.zig install --prefix /tmp/oapx
+cargo build --locked --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
+OAP_OAPX_BIN=/tmp/oapx/bin/oxap OAP_RUST_HUB_BIN="$PWD/rust/target/debug/oap-rust-hub" \
+  bash .claude/skills/verify/scripts/backend-parity.sh
 OAP_OAPX_BIN=/tmp/oapx/bin/oxap go test ./go/cmd/goap/ \
-  -run 'TestBackendsMatchOapx|TestMemoryBackendMatchesOapx'
+  -run TestMemoryBackendMatchesOapx
 OAP_OAPX_BIN=/tmp/oapx/bin/oxap go test ./go/internal/inferenceserve/ \
   -run TestInferenceTracesMatchOapx
 ```
 
-All three tests, or you have run part of the job. Without `OAP_OAPX_BIN` they
-skip, so an ordinary `go test ./go/...` stays fast and the jobs are the only
-things that pay for it. CI builds `oapx` and runs them on every change in three
-jobs: `backend-parity` for the fixtures and the provider traces, `memory-conformance` for the memory
+Without `OAP_OAPX_BIN` the tests skip. `TestBackendsMatchOapx` can also run
+with Zig and Go alone. The verifier requires both binaries and a passing Rust
+comparison for each three-way fixture. CI covers these tests in three jobs:
+`backend-parity` for the fixtures and the provider traces, `memory-conformance` for the memory
 backend, and `pi-parity-repeat`, which runs the `pi` fixture twenty times
 because that scenario must not depend on goroutine scheduling. It selects that
 one fixture by its directory name, which is what a subtest is called, so

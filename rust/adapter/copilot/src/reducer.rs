@@ -124,7 +124,7 @@ impl Reducer {
         }
         match event.kind.as_str() {
             "user.message" => self.start(event),
-            "assistant.message_delta" => {
+            "assistant.message_delta" | "assistant.reasoning_delta" => {
                 let Some(current) = self.current else {
                     return Ok(());
                 };
@@ -132,9 +132,18 @@ impl Reducer {
                 if delta.is_empty() {
                     return Ok(());
                 }
+                let part = if event.kind == "assistant.reasoning_delta" {
+                    ContentPart {
+                        part_type: ContentPartType::REASONING,
+                        reasoning: delta,
+                        ..ContentPart::default()
+                    }
+                } else {
+                    text_part(delta)
+                };
                 let payload = Payload::from([
                     ("message_id", json(&self.runs[current].message_id)),
-                    ("part", json(&text_part(delta))),
+                    ("part", json(&part)),
                 ]);
                 self.emit(current, EnvelopeType::CONTENT_DELTA, payload, false)
             }

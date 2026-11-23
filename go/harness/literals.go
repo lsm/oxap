@@ -14,7 +14,7 @@ import (
 
 const CodePinLiteral Code = "pin_literal"
 
-var LiteralRoots = []string{"go", "zig/src", "zig/build.zig"}
+var LiteralRoots = []string{"go", "zig/src", "zig/build.zig", "rust"}
 
 type pinValue struct {
 	harness string
@@ -27,7 +27,13 @@ func CheckLiterals(tree fs.FS, catalog Catalog) []Finding {
 	var findings []Finding
 	for _, root := range LiteralRoots {
 		_ = fs.WalkDir(tree, root, func(name string, entry fs.DirEntry, err error) error {
-			if err != nil || entry.IsDir() {
+			if err != nil {
+				return nil
+			}
+			if entry.IsDir() {
+				if name == "rust/target" {
+					return fs.SkipDir
+				}
 				return nil
 			}
 			var literals []sourceLiteral
@@ -36,6 +42,8 @@ func CheckLiterals(tree fs.FS, catalog Catalog) []Finding {
 				literals = goLiterals(tree, name)
 			case ".zig":
 				literals = zigLiterals(tree, name)
+			case ".rs":
+				literals = rustLiterals(tree, name)
 			default:
 				return nil
 			}

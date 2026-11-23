@@ -56,6 +56,10 @@ fn drain() void {
     }
 }
 
+pub fn requestShutdown() void {
+    if (signalled.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null) wake();
+}
+
 fn onSignal(signal: std.posix.SIG) callconv(.c) void {
     _ = signal;
     const saved_errno = if (builtin.link_libc) std.c._errno().* else 0;
@@ -63,6 +67,11 @@ fn onSignal(signal: std.posix.SIG) callconv(.c) void {
         std.c._errno().* = saved_errno;
     };
     _ = signalled.fetchAdd(1, .acq_rel);
+    wake();
+}
+
+fn wake() void {
+    if (comptime is_windows) return;
     if (wake_pipe) |pipe| {
         const byte = [_]u8{1};
         while (std.posix.errno(std.posix.system.write(pipe[1], &byte, 1)) == .INTR) {}

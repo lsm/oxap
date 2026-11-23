@@ -6,9 +6,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 
 pub use events::{decode_notification, is_run_scoped, MessageStartPayload, OBSERVED_EVENTS};
+pub(crate) use requests::PromptSubmitResult;
 pub use requests::{
     decode_server_request, request_session_id, ApprovalRequestParams, ApprovalResult,
-    ClarifyAnswersResult, ClarifyQuestion, ClarifyRequestParams, ErrorPayload,
+    ClarifyAnswersResult, ClarifyQuestion, ClarifyRequestParams, ErrorPayload, InterruptResult,
     RequestCancelPayload, SecretRequestParams, ServerRequest, SessionInfoPayload, SubagentPayload,
     SudoRequestParams, TaskCompletePayload, ValueResult, INVALID,
 };

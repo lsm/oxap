@@ -140,6 +140,10 @@ impl Journal {
             .then(|| inner.latest.get(run).copied().unwrap_or(0))
     }
 
+    pub fn latest(&self, run: &str) -> Option<u64> {
+        self.lock().latest.get(run).copied()
+    }
+
     pub fn resume(
         &self,
         state: SessionState,

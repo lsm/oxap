@@ -35,6 +35,7 @@ const (
 	opCancel       = "cancel"
 	opTaskOutput   = "task_output"
 	opSettings     = "settings"
+	opModelSwitch  = protocol.FeatureSessionModelSwitch
 	opClose        = "close"
 	opTools        = "tools"
 
@@ -274,7 +275,7 @@ func (s *Server) dispatch(ctx context.Context, request requestLine) (json.RawMes
 			return nil, werr
 		}
 		return s.modelsOp(ctx, request)
-	case opSubmit, opResolve, opCancel, opTaskOutput, opSettings:
+	case opSubmit, opResolve, opCancel, opTaskOutput, opSettings, opModelSwitch:
 		if werr := request.only(paramSession, paramRequest); werr != nil {
 			return nil, werr
 		}
@@ -285,6 +286,8 @@ func (s *Server) dispatch(ctx context.Context, request requestLine) (json.RawMes
 			return s.resolveOp(ctx, request)
 		case opSettings:
 			return s.settingsOp(ctx, request)
+		case opModelSwitch:
+			return s.modelSwitchOp(ctx, request)
 		case opTaskOutput:
 			return s.taskOutputOp(ctx, request)
 		default:
@@ -955,6 +958,35 @@ func (s *Server) settingsOp(ctx context.Context, request requestLine) (json.RawM
 	response.InReplyTo = envelope.ID
 	response.SessionID = updated.SessionID
 	response.CapabilityRevision = envelope.CapabilityRevision
+	return envelopeResult(response)
+}
+
+func (s *Server) modelSwitchOp(ctx context.Context, request requestLine) (json.RawMessage, *wireError) {
+	envelope, werr := s.gateRequest(request.Request, protocol.TypeSessionModelSwitchRequest)
+	if werr != nil {
+		return nil, werr
+	}
+	var payload protocol.SessionModelSwitchRequest
+	if err := envelope.DecodePayload(&payload); err != nil {
+		return nil, &wireError{Code: "invalid_payload", Message: trimMessage(err.Error())}
+	}
+	id := protocol.SessionID(request.SessionID)
+	if payload.SessionID != id || envelope.SessionID != id {
+		return nil, &wireError{Code: "scope_mismatch", Message: "session_id does not match the addressed session"}
+	}
+	entry, werr := s.lookupSession(request.SessionID)
+	if werr != nil {
+		return nil, werr
+	}
+	switched, _, err := entry.SwitchModel(ctx, payload)
+	if err != nil {
+		return nil, submitError(err)
+	}
+	response, err := protocol.NewEnvelope(protocol.TypeSessionModelSwitchResponse, protocol.EnvelopeID(s.nextID("response")), switched)
+	if err != nil {
+		return nil, internalError(err)
+	}
+	response.InReplyTo, response.SessionID, response.CapabilityRevision = envelope.ID, switched.SessionID, envelope.CapabilityRevision
 	return envelopeResult(response)
 }
 

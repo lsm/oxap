@@ -2,6 +2,7 @@
 export {
   dial,
   OapClient,
+  OapClient as AgentServiceClient,
   DEFAULT_PARTICIPANT,
   type AdapterInfo,
   type Capabilities,

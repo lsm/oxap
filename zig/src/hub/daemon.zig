@@ -79,6 +79,13 @@ pub const Daemon = struct {
     signal_readable: ?std.Io.File.Handle = null,
     streams: std.atomic.Value(usize) = .init(0),
     quiet_limit_ms: u64 = keepalive_ms,
+    redact_json: ?*const fn (*const anyopaque, std.mem.Allocator, []const u8) std.mem.Allocator.Error![]const u8 = null,
+    redaction_context: *const anyopaque = undefined,
+
+    fn redact(self: *const Daemon, arena: std.mem.Allocator, bytes: []const u8) ![]const u8 {
+        const filter = self.redact_json orelse return bytes;
+        return filter(self.redaction_context, arena, bytes);
+    }
 
     pub fn init(allocator: std.mem.Allocator, core: *hubmod.Hub, allow: []const []const u8, outer: hub_http.KeepGoing) !Daemon {
         const frontend = try hub_stdio.Frontend.init(allocator, core, .{ .context = &discard.context, .write = discard.write }, .{});
@@ -397,7 +404,11 @@ pub const Daemon = struct {
     pub fn fill(self: *Daemon, out: *std.ArrayList(u8), subscription: *hubmod.Subscription, budget: usize) !Fill {
         while (out.items.len < budget) {
             const delivered = subscription.next() orelse break;
-            try appendEnvelope(self.allocator, out, delivered);
+            var scratch = std.heap.ArenaAllocator.init(self.allocator);
+            defer scratch.deinit();
+            var filtered = delivered;
+            filtered.line = try self.redact(scratch.allocator(), delivered.line);
+            try appendEnvelope(self.allocator, out, filtered);
         }
         if (out.items.len >= budget) return .open;
         switch (subscription.ending) {
@@ -894,7 +905,11 @@ pub const Connection = struct {
                 self.awaiting = deferred;
                 self.phase = .awaiting;
             },
-            .answer => |given| self.queue(render(arena, given, self.body_allowed) catch ""),
+            .answer => |given| {
+                var filtered = given;
+                filtered.body = self.daemon.redact(arena, given.body) catch "";
+                self.queue(render(arena, filtered, self.body_allowed) catch "");
+            },
             .no_content => self.queue(no_content_head),
             .gap => |gap| {
                 self.queue(sse_head);
@@ -1077,6 +1092,17 @@ fn serveWindows(daemon: *Daemon, listener: *compat.net.Server, poll_ms: i32) ?st
         }
     }
     return null;
+}
+
+pub fn listenerReadyWithin(allocator: std.mem.Allocator, listener: *compat.net.Server, timeout_ms: u32) !bool {
+    const handle = compat.net.serverHandle(listener);
+    if (comptime hub_http.pollable) return compat.net.readableWithin(handle, @intCast(timeout_ms));
+    var poll = afd_poll.Poll.init(allocator);
+    defer poll.deinit();
+    try poll.arm(handle, &.{.{ .handle = handle, .events = .{ .accept = true } }});
+    waitCycle(&poll, true, @as(u64, timeout_ms) * std.time.ns_per_ms);
+    if (poll.state != .done) return false;
+    return (try poll.ready()).?.len > 0;
 }
 
 fn waitCycle(poll: *const afd_poll.Poll, armed: bool, cycle_ns: u64) void {

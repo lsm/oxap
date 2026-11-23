@@ -1508,6 +1508,27 @@ pub const Hub = struct {
         return updated.response;
     }
 
+    pub fn switchModel(self: *Hub, arena: std.mem.Allocator, session_id: []const u8, request: *const oap_types.SessionModelSwitchRequest, refusal: *contract.Refusal) Failure!oap_types.SessionModelSwitchResponse {
+        const entry = try self.awake(arena, session_id);
+        const switcher = entry.session.vtable.switch_model orelse return refusal.unsupported(contract.feature_model_switch, contract.reason_unadvertised);
+        const switched = switcher(entry.session.ptr, arena, request, refusal) catch |err| switch (err) {
+            error.SessionClosed => {
+                self.releaseSession(entry);
+                return error.SessionClosed;
+            },
+            else => |failure| return failure,
+        };
+        const bound = self.findBound(session_id).?;
+        const model = switched.response.model_id;
+        if (!std.mem.eql(u8, bound.model, model)) {
+            const owned_model = try self.allocator.dupe(u8, model);
+            self.allocator.free(bound.model);
+            bound.model = owned_model;
+            self.recordBinding(.opened, session_id, switched.state.updated_at_ms orelse @intCast(self.clock() / std.time.ns_per_ms));
+        }
+        return switched.response;
+    }
+
     pub fn state(self: *Hub, arena: std.mem.Allocator, session_id: []const u8) Failure!oap_types.SessionState {
         const entry = self.findSession(session_id) orelse return error.UnknownSession;
         if (entry.parked_state) |kept| return keepState(arena, kept.state);
