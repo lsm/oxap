@@ -6,7 +6,10 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicI64, AtomicU32, Ordering},
+        Arc,
+    },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -14,6 +17,7 @@ use std::{
 use futures_executor::block_on;
 use oxap_adapter::{
     gojson::go_marshal,
+    runtime::Runtime,
     testkit::{drain, next},
     Adapter as _, Error, EventStream, InteractionResolution, OpenRequest, ResumeRequest, Session,
     SubmitRequest,
@@ -103,14 +107,15 @@ impl Peer {
         }
     }
 
-    fn receive(&mut self) -> String {
+    fn receive(&mut self) -> Option<String> {
         let mut line = String::new();
-        self.0.read_line(&mut line).unwrap();
-        serde_json::from_str(&line).unwrap()
+        (self.0.read_line(&mut line).unwrap() != 0).then(|| serde_json::from_str(&line).unwrap())
     }
 
     fn expect(&mut self, frame: &Frame) {
-        let actual = self.receive();
+        let actual = self
+            .receive()
+            .expect("gateway exited before the native write");
         match frame.raw.as_str() {
             Some(raw) => assert_eq!(actual, raw),
             None => assert_eq!(serde_json::from_str::<Value>(&actual).unwrap(), frame.raw),
@@ -301,7 +306,17 @@ impl Replay {
                 if status == "idle" {
                     self.finish();
                 }
-                assert_eq!(block_on(session.state()).unwrap().status.as_str(), status);
+                let state = block_on(session.state()).unwrap();
+                assert_eq!(state.status.as_str(), status);
+                if status == "idle" {
+                    if let Some(terminal) = self.events.last() {
+                        assert_eq!(state.updated_at_ms, terminal.timestamp_ms.unwrap());
+                        assert_eq!(
+                            state.transcript_cursor,
+                            terminal.sequence.unwrap().to_string()
+                        );
+                    }
+                }
             }
             "resume" => {
                 let after = data["after"].as_u64().unwrap_or_default();
@@ -396,14 +411,25 @@ fn replay(root: &Path, entry: &Entry) -> usize {
         ]),
         ..Default::default()
     };
+    let clock = AtomicI64::new(0);
+    let ids = AtomicU32::new(u32::from('a'));
+    let runtime = Runtime::new(
+        move || clock.fetch_add(1, Ordering::Relaxed) + 1,
+        move |kind| {
+            format!(
+                "{kind}-{}",
+                char::from_u32(ids.fetch_add(1, Ordering::Relaxed)).unwrap()
+            )
+        },
+    );
     let adapter = Arc::new(
-        Adapter::new(process, "hermes-test".into()).with_journal_capacity(
-            if case.journal_capacity == 0 {
+        Adapter::new(process, "hermes-test".into())
+            .with_runtime(runtime)
+            .with_journal_capacity(if case.journal_capacity == 0 {
                 64
             } else {
                 case.journal_capacity
-            },
-        ),
+            }),
     );
     let descriptor = block_on(adapter.probe()).unwrap();
     for (feature, level) in case.advertised_capabilities {
@@ -443,7 +469,7 @@ fn replay(root: &Path, entry: &Entry) -> usize {
             Err(error) => panic!("reopen failed: {error:?}"),
         };
         assert_eq!(actual, compact(&expected));
-        assert!(peer.receive().is_empty());
+        assert_eq!(peer.receive().as_deref(), Some(""));
         return 0;
     }
     let mut frames = frames.iter().peekable();
@@ -475,18 +501,19 @@ fn replay(root: &Path, entry: &Entry) -> usize {
         .unwrap();
         peer.send(&handshake);
         assert_eq!(
-            peer.receive(),
-            r#"{"id":1,"jsonrpc":"2.0","method":"session.create","params":{"model":"hermes-test"}}"#
+            peer.receive().as_deref(),
+            Some(
+                r#"{"id":1,"jsonrpc":"2.0","method":"session.create","params":{"model":"hermes-test"}}"#
+            )
         );
         peer.command("send", json!({"jsonrpc":"2.0","id":1,"result":{"session_id":native_id,"stored_session_id":"stored"}}).to_string());
     }
     let result = opening.join().unwrap();
     if case.open_error {
-        assert!(
-            matches!(result, Err(Error::Harness(ref message)) if message.contains("gateway.ready"))
-        );
+        assert!(matches!(result, Err(Error::Harness(ref message))
+                if message.contains("first observation was \"message.delta\", not gateway.ready")));
         assert_eq!(compact(&expected), "null");
-        assert!(peer.receive().is_empty());
+        assert!(peer.receive().as_deref().unwrap_or_default().is_empty());
         return 0;
     }
     let session = result.unwrap();
@@ -537,7 +564,7 @@ fn replay(root: &Path, entry: &Entry) -> usize {
         expected = expected.replace("\"message\":\"gateway died\"", "\"message\":\"EOF\"");
     }
     assert_eq!(actual, expected);
-    assert!(peer.receive().is_empty());
+    assert_eq!(peer.receive().as_deref(), Some(""));
     replay.events.len()
 }
 
