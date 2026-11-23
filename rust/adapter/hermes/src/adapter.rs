@@ -52,6 +52,11 @@ impl Adapter {
         }
     }
 
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     pub fn with_journal_capacity(mut self, capacity: usize) -> Self {
         self.journal_capacity = if capacity == 0 {
             DEFAULT_JOURNAL_CAPACITY
@@ -69,11 +74,14 @@ impl Adapter {
     fn descriptor(&self) -> Descriptor {
         let pin = oxap_harness::current("hermes").expect("embedded catalog pins Hermes");
         let features = [
+            ("protocol.initialize", SupportLevel::NATIVE),
             ("session.open", SupportLevel::NATIVE),
             (FEATURE_OPEN_REOPEN, SupportLevel::NATIVE),
-            ("session.state", SupportLevel::EMULATED),
+            ("session.state", SupportLevel::DEGRADED),
             ("session.message.submit", SupportLevel::DEGRADED),
             ("session.message.delivery.auto", SupportLevel::DEGRADED),
+            ("session.message.delivery.queue", SupportLevel::UNAVAILABLE),
+            ("session.message.delivery.steer", SupportLevel::UNAVAILABLE),
             ("run.streaming", SupportLevel::NATIVE),
             ("run.cancel", SupportLevel::DEGRADED),
             ("run.status", SupportLevel::EMULATED),
@@ -82,6 +90,7 @@ impl Adapter {
             ("run.reconciliation", SupportLevel::DEGRADED),
             ("user_input", SupportLevel::NATIVE),
             ("action.tools", SupportLevel::DEGRADED),
+            ("action.permissions", SupportLevel::DEGRADED),
         ]
         .into_iter()
         .map(|(feature, level)| {
@@ -291,12 +300,7 @@ impl SessionSlot {
         }
     }
 
-    fn settle(
-        &mut self,
-        mut gateway: Option<GatewaySession>,
-        runtime: &Runtime,
-        wake_idle: &Sender<()>,
-    ) {
+    fn settle(&mut self, mut gateway: Option<GatewaySession>, wake_idle: &Sender<()>) {
         if self.state.status == SessionStatus::CLOSED {
             return;
         }
@@ -307,7 +311,6 @@ impl SessionSlot {
         if let Some(gateway) = &mut gateway {
             gateway.input = never();
         }
-        self.state.updated_at_ms = runtime.now_ms();
         self.state.status = if gateway.is_some() {
             SessionStatus::IDLE
         } else {
@@ -331,6 +334,17 @@ impl SessionSlot {
             accepted: true,
             status: RunStatus::CANCELLING,
         })
+    }
+
+    fn record_event(&mut self, event: &Envelope, terminal: bool) {
+        if self.state.status != SessionStatus::CLOSED {
+            self.state.updated_at_ms = event.timestamp_ms.expect("Hermes event has a timestamp");
+            self.state.transcript_cursor = event
+                .sequence
+                .expect("Hermes event has a sequence")
+                .to_string();
+        }
+        self.journal.append(event.clone(), terminal);
     }
 
     fn project_input(&mut self, event: &Envelope) {
@@ -359,7 +373,6 @@ impl SessionSlot {
             )
         };
         active.as_of_sequence = event.sequence;
-        self.state.updated_at_ms = event.timestamp_ms.unwrap_or(self.state.updated_at_ms);
     }
 }
 
@@ -457,7 +470,6 @@ impl Session for OpenedSession {
                         return;
                     }
                     slot.state.status = SessionStatus::QUEUED;
-                    slot.state.updated_at_ms = runtime.now_ms();
                     (
                         slot.gateway
                             .take()
@@ -480,7 +492,7 @@ impl Session for OpenedSession {
                     Err(error) => {
                         let reusable = matches!(error, PromptStartError::Refused(_))
                             && gateway.client().err().is_none();
-                        lock(&slot).settle(reusable.then_some(gateway), &runtime, &wake_idle);
+                        lock(&slot).settle(reusable.then_some(gateway), &wake_idle);
                         let _ = reply.send(Err(error.into()));
                         return;
                     }
@@ -499,7 +511,6 @@ impl Session for OpenedSession {
                         .collect(),
                     ..ActiveRun::default()
                 }];
-                state.updated_at_ms = runtime.now_ms();
                 let started = run.take_started();
                 {
                     let mut slot = lock(&slot);
@@ -508,7 +519,7 @@ impl Session for OpenedSession {
                     }
                     slot.state = state;
                     slot.input = Some(input);
-                    slot.journal.append(started.clone(), false);
+                    slot.record_event(&started, false);
                 }
                 let (events, stream) = mpsc::unbounded();
                 let stream: EventStream = Box::pin(stream);
@@ -518,12 +529,12 @@ impl Session for OpenedSession {
                 {
                     let mut slot = lock(&slot);
                     if let Some(event) = &terminal {
-                        slot.journal.append(event.clone(), true);
+                        slot.record_event(event, true);
                     } else {
                         slot.journal.close();
                     }
                     let reusable = terminal.is_some() && gateway.observed_settlement;
-                    slot.settle(reusable.then_some(gateway), &runtime, &wake_idle);
+                    slot.settle(reusable.then_some(gateway), &wake_idle);
                 }
                 if let Some(event) = terminal {
                     let _ = events.unbounded_send(Ok(event));
@@ -680,7 +691,7 @@ fn forward_run(
                 {
                     let mut slot = lock(slot);
                     slot.project_input(&event);
-                    slot.journal.append((*event).clone(), false);
+                    slot.record_event(&event, false);
                 }
                 let _ = events.unbounded_send(Ok(*event));
                 if let Some(reply) = resolved.take() {
