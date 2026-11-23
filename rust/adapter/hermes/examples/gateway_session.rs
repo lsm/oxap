@@ -280,6 +280,7 @@ fn shared_submit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::future::poll_fn;
     use std::path::Path;
+    use std::task::{Context, Poll, Waker};
 
     use futures_executor::block_on;
     use oxap_adapter::{Adapter, Error, OpenRequest, SubmitRequest};
@@ -316,6 +317,45 @@ fn shared_submit(
         block_on(session.submit(unsupported)),
         Err(Error::UnsupportedControl(_))
     ));
+    let state_dir = Path::new(state_dir);
+    let mut pending = session.submit(request.clone());
+    assert!(matches!(
+        pending
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !state_dir.join("prompt-received").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "gateway did not receive prompt"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let state = block_on(session.state())?;
+    assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
+    assert!(matches!(
+        block_on(session.submit(request.clone())),
+        Err(Error::RunActive)
+    ));
+    std::fs::write(state_dir.join("release-refusal"), "")?;
+    assert!(matches!(block_on(pending), Err(Error::Harness(_))));
+    assert_eq!(
+        (state.status, block_on(session.state())?.status),
+        (SessionStatus::QUEUED, SessionStatus::IDLE)
+    );
+    println!("PENDING ADMISSION: queued");
+    for expected in ["queued", "voice session active"] {
+        let Err(error) = block_on(session.submit(request.clone())) else {
+            panic!("gateway refusal admitted a run");
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::IDLE);
+        assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
+    }
+    println!("REFUSALS RETURNED TO IDLE: 3");
     for index in 1..=2 {
         let (admission, mut stream) = block_on(session.submit(request.clone()))?;
         let run_id = admission.run_id.clone().ok_or("missing admitted run")?;
@@ -336,10 +376,7 @@ fn shared_submit(
             .ok_or("missing run.started")??;
         assert_eq!(first.envelope_type, EnvelopeType::RUN_STARTED);
         println!("envelope: {}", serde_json::to_string(&first)?);
-        std::fs::write(
-            Path::new(state_dir).join(format!("release-run-{index}")),
-            "",
-        )?;
+        std::fs::write(state_dir.join(format!("release-run-{index}")), "")?;
         while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
             println!("envelope: {}", serde_json::to_string(&event?)?);
         }

@@ -61,14 +61,16 @@ REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 
 def shared_submit_frames(corpus):
     native_path = corpus / "streaming-provenance/native.jsonl"
-    replay = frames(native_path)
-    for frame in frames(native_path):
-        raw = frame["raw"]
-        if "id" in raw:
-            raw["id"] += 1
-        if "seq" in raw.get("params", {}):
-            raw["params"]["seq"] += 7
-        replay.append(frame)
+    replay = [frame for frame in frames(corpus / "admission-busy/native.jsonl")
+              if frame["direction"] != "harness-control"]
+    for index in range(2):
+        for frame in frames(native_path):
+            raw = frame["raw"]
+            if "id" in raw:
+                raw["id"] += 3 + index
+            if "seq" in raw.get("params", {}):
+                raw["params"]["seq"] += 7 * index
+            replay.append(frame)
     return replay
 
 
@@ -132,6 +134,12 @@ def gateway(corpus, case):
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
             raw = frame["raw"]
+            if shared_submit and raw.get("id") == 2:
+                Path("prompt-received").touch()
+                deadline = time.monotonic() + 10
+                while not Path("release-refusal").exists():
+                    assert time.monotonic() < deadline, "consumer did not inspect admission"
+                    assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
             send(raw)
             if shared_submit and raw.get("params", {}).get("type") == "message.start":
                 pending_start = True
@@ -296,6 +304,8 @@ def verify(binary, corpus, mode, case):
         print("MATCHED SHARED CREATED STATE: 1\nGATEWAY EOF: 1")
         return
     if mode == "--shared-submit":
+        assert "PENDING ADMISSION: queued" in lines
+        assert "REFUSALS RETURNED TO IDLE: 3" in lines
         admissions = [json.loads(line[11:]) for line in lines if line.startswith("admission: ")]
         events = [json.loads(line[10:]) for line in lines if line.startswith("envelope: ")]
         expected = json.loads(expected_path.read_text())
