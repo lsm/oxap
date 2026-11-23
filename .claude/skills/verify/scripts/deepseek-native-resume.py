@@ -155,7 +155,7 @@ class Hub:
                 event = line.get("envelope") or {}
                 if event.get("type") == "run.completed" and event.get("payload", {}).get("session_id") == session:
                     self.seen.remove(line)
-                    return event["payload"]["final_response"]["content"]
+                    return event
             line = self.lines.get(timeout=30)
             assert line is not None, "hub exited before the turn completed"
             self.seen.append(line)
@@ -211,9 +211,11 @@ def submit(hub, session, text, model):
     assert reply["ok"] and reply["result"]["payload"]["model_id"] == model, reply
 
 
-def turn(hub, session, text, model):
+def turn(hub, session, text, model, revision):
     submit(hub, session, text, model)
-    content = hub.completed(session)
+    completed = hub.completed(session)
+    assert completed["capability_revision"] == revision, (completed["capability_revision"], revision)
+    content = completed["payload"]["final_response"]["content"]
     return "".join(part.get("text", "") for part in content) if isinstance(content, list) else content
 
 
@@ -260,7 +262,7 @@ def verify(name, command, root, cleanup):
     switched = switch(first, "s1", revision)
     assert switched["ok"] and switched["result"]["payload"]["previous_model_id"] == PRO, switched
     assert first.call("events", session_id="s1")["ok"]
-    reply = turn(first, "s1", "remember ZEBRA", FLASH)
+    reply = turn(first, "s1", "remember ZEBRA", FLASH, revision)
     assert reply == 'history=["remember ZEBRA"]', reply
     submit(first, "s1", INTERRUPTED, FLASH)
     deadline = time.monotonic() + 10
@@ -288,7 +290,7 @@ def verify(name, command, root, cleanup):
     assert switched["ok"] and switched["result"]["payload"]["previous_model_id"] == FLASH, (initialized, switched)
     assert state["current_model_id"] == FLASH and initialized == [PRO, FLASH, FLASH], (state, initialized)
     assert second.call("events", session_id="s1")["ok"]
-    reply = turn(second, "s1", "which word?", FLASH)
+    reply = turn(second, "s1", "which word?", FLASH, revision)
     assert reply == 'history=["remember ZEBRA", "run three tools", "which word?"]', f"{name}: the reopened turn lost the conversation: {reply}"
     assert opened(second, "s2")["current_model_id"] == PRO
     fresh = link(second, "s2")
