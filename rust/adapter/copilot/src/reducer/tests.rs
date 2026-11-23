@@ -651,3 +651,24 @@ fn tool_events_without_an_open_run_are_ignored() {
         .unwrap();
     assert!(reducer.events.is_empty());
 }
+
+#[test]
+fn subagent_events_do_not_enter_the_root_run() {
+    let mut reducer = reducer();
+    started(&mut reducer, "m1", "");
+    let mut child = event(
+        "native-1",
+        "assistant.message_delta",
+        json!({"deltaContent": "child"}),
+    );
+    child.agent_id = "child".into();
+    reducer.observe(&child).unwrap();
+    reducer
+        .observe(&event(
+            "native-1",
+            "assistant.message_delta",
+            json!({"deltaContent": "root"}),
+        ))
+        .unwrap();
+    assert_eq!(kinds(&reducer), vec!["run.started", "content.delta"]);
+}

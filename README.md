@@ -1348,7 +1348,7 @@ production reducer, so codec and reducer regressions are caught without any
 external process.
 
 Go callers can use `go/adapter/copilot.New`, and goap or the Rust hub can serve the
-configuration [`examples/oap-serve-go-copilot.json`](examples/oap-serve-go-copilot.json). The adapter pins CLI 1.0.109 over headless stdio,
+configuration [`examples/oap-serve-go-copilot.json`](examples/oap-serve-go-copilot.json). The adapter pins CLI 1.0.114 over headless stdio,
 checks the reported version/protocol before opening, and supports text auto/queue
 delivery, streaming, state, bounded in-memory replay and Copilot-owned tools.
 Reopen, portable cancellation and interactive answers are not advertised.

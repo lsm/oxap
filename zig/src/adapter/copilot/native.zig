@@ -89,6 +89,7 @@ pub const EventType = enum {
     usage,
     tool_start,
     tool_partial,
+    tool_progress,
     shell_output,
     tool_complete,
     permission_requested,
@@ -101,13 +102,13 @@ pub const EventType = enum {
     model_change,
 
     const names = [_][]const u8{
-        "user.message",                  "assistant.turn_start", "assistant.turn_end",
-        "assistant.message_delta",       "assistant.message",    "assistant.reasoning_delta",
-        "assistant.reasoning",           "assistant.usage",      "tool.execution_start",
-        "tool.execution_partial_result", "tool.shell_output",    "tool.execution_complete",
-        "permission.requested",          "permission.completed", "user_input.requested",
-        "user_input.completed",          "assistant.idle",       "session.idle",
-        "session.error",                 "session.model_change",
+        "user.message",                  "assistant.turn_start",    "assistant.turn_end",
+        "assistant.message_delta",       "assistant.message",       "assistant.reasoning_delta",
+        "assistant.reasoning",           "assistant.usage",         "tool.execution_start",
+        "tool.execution_partial_result", "tool.execution_progress", "tool.shell_output",
+        "tool.execution_complete",       "permission.requested",    "permission.completed",
+        "user_input.requested",          "user_input.completed",    "assistant.idle",
+        "session.idle",                  "session.error",           "session.model_change",
     };
 
     pub fn wire(self: EventType) []const u8 {
@@ -124,6 +125,7 @@ pub const EventType = enum {
 
 pub const Event = struct {
     session_id: []const u8,
+    agent_id: []const u8 = "",
     type_name: []const u8,
     kind: ?EventType,
     ephemeral: bool,
@@ -144,6 +146,7 @@ pub fn decodeEvent(message: Message) Error!?Event {
     const ephemeral = event.object.get("ephemeral");
     return .{
         .session_id = session_id,
+        .agent_id = text(event.object, "agentId"),
         .type_name = type_name,
         .kind = EventType.parse(type_name),
         .ephemeral = ephemeral != null and ephemeral.? == .bool and ephemeral.?.bool,
@@ -163,7 +166,7 @@ test "a response, a failure, a notification and a request each parse as what the
     defer arena.deinit();
     const scratch = arena.allocator();
 
-    const pong = try parseMessage(scratch, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"version\":\"" ++ harness_pins.copilot_cli_endpoint_version ++ "\",\"protocolVersion\":3}}");
+    const pong = try parseMessage(scratch, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"version\":\"" ++ harness_pins.copilot_cli_endpoint_version ++ "\",\"protocolVersion\":4}}");
     try testing.expectEqual(Kind.response, pong.kind);
     try testing.expectEqual(@as(i64, 1), pong.id.?.integer);
     try testing.expectEqualStrings(harness_pins.copilot_cli_endpoint_version, text(pong.result.?.object, "version"));

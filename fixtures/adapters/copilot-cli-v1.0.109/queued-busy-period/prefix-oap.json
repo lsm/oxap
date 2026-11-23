@@ -14,7 +14,7 @@
     "type": "capabilities.response",
     "id": "capr",
     "in_reply_to": "capq",
-    "capability_revision": "copilot-cli-1.0.109-oap-v1",
+    "capability_revision": "copilot-cli-1.0.114-oap-v1",
     "payload": {
       "endpoint": {
         "id": "copilot.headless"

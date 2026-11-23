@@ -4,6 +4,7 @@ import "encoding/json"
 
 type Event struct {
 	SessionID string
+	AgentID   string
 	Type      string
 	Ephemeral bool
 	Data      map[string]json.RawMessage
@@ -17,7 +18,7 @@ func DecodeEvent(m Message) (*Event, error) {
 	if json.Unmarshal(m.Params, &params) != nil || params == nil || json.Unmarshal(params["event"], &event) != nil || event == nil {
 		return nil, ErrWire
 	}
-	e := &Event{SessionID: Text(params, "sessionId"), Type: Text(event, "type")}
+	e := &Event{SessionID: Text(params, "sessionId"), AgentID: Text(event, "agentId"), Type: Text(event, "type")}
 	if e.SessionID == "" || e.Type == "" || json.Unmarshal(event["data"], &e.Data) != nil || e.Data == nil {
 		return nil, ErrWire
 	}

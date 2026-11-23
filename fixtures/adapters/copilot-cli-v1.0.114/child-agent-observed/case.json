@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "id": "child-agent-observed",
+  "native": "native.jsonl",
+  "expected_oap": "expected-oap.json",
+  "mapping": "mapping.json",
+  "omissions": "omissions.json",
+  "provenance": {
+    "repository": "https://github.com/github/copilot-cli",
+    "tag": "v1.0.114",
+    "commit": "a9b36a75fd67e99da321b0088202dd7c19c3c492",
+    "commit_tree": "dada69076c35dc32310c2022e5feff0b18bbf705",
+    "kind": "synthetic",
+    "basis": "research/copilot-cli-v1.0.114-mapping.md; constructed from the published schema"
+  },
+  "identity_map": {
+    "native.sessionId": "private native session binding; s1 is OAP id",
+    "native.messageId": "private admission binding; run-1 is OAP id"
+  },
+  "advertised_capabilities": {
+    "run.streaming": "native"
+  },
+  "prefix_oap": "prefix-oap.json"
+}

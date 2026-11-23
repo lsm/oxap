@@ -11,8 +11,9 @@ use super::Reducer;
 use crate::native::{decode_event, parse, text, Kind, Object};
 use crate::CORPUS_DIRECTORY;
 
-const LIFECYCLE: [&str; 6] = [
+const LIFECYCLE: [&str; 7] = [
     "completed-text",
+    "child-agent-observed",
     "metadata-107",
     "queued-busy-period",
     "unknown-event",
@@ -33,11 +34,11 @@ const USAGE: [&str; 11] = [
     "cost-partial",
 ];
 const TOOLS: [&str; 5] = [
-    "tool-success",
-    "tool-denied",
+    "tool-progress",
+    "tool-denied-progress",
     "tool-orphan",
     "tool-incomplete",
-    "tool-duplicate-end",
+    "tool-progress-duplicate-end",
 ];
 const CODEC: [&str; 2] = ["invalid-wire", "invalid-event"];
 

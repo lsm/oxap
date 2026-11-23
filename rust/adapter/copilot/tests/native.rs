@@ -125,3 +125,10 @@ fn a_lone_surrogate_escape_reads_as_the_replacement_character_as_go_s_decoder_re
     let message = parse(br#"{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"s","event":{"type":"t","data":{}}},"note":"\ud800"}"#).unwrap();
     assert_eq!(decode_event(&message).unwrap().unwrap().kind, "t");
 }
+
+#[test]
+fn event_decoder_retains_subagent_identity() {
+    let frame = br#"{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"ses","event":{"type":"assistant.message_delta","agentId":"child","data":{"deltaContent":"child"}}}}"#;
+    let event = decode_event(&parse(frame).unwrap()).unwrap().unwrap();
+    assert_eq!(event.agent_id, "child");
+}

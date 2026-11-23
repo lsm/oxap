@@ -1,0 +1,6 @@
+[
+  {
+    "native": "assistant.message_delta",
+    "reason": "Child agent output is not projected into the root run."
+  }
+]

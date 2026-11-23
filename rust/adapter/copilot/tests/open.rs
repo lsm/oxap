@@ -38,7 +38,7 @@ while True:
     message = read()
     method = message["method"]
     if method == "ping":
-        reply(message, None if mode == "null" else {"protocolVersion": 2 if mode == "old-protocol" else 3})
+        reply(message, None if mode == "null" else {"protocolVersion": 2 if mode == "old-protocol" else 4})
     elif method == "status.get":
         reply(message, {"version": "0.0.0" if mode == "old-version" else os.environ["VERSION"]})
     elif method == "session.create":
@@ -159,7 +159,7 @@ fn open_refuses_a_server_off_the_pinned_protocol_or_version() {
     for mode in ["old-protocol", "null"] {
         assert_eq!(
             refusal(mode, ""),
-            "copilot: server does not speak pinned protocol 3"
+            "copilot: server does not speak pinned protocol 4"
         );
     }
     assert_eq!(

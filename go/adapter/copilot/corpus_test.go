@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/lsm/oxap/go/adapter/copilot/internal/native"
+	"github.com/lsm/oxap/harnesses"
 )
 
 type corpusIDs struct{ n int }
@@ -58,7 +59,12 @@ func exactNumbers(value any) any {
 
 func replay(t *testing.T, name string) {
 	t.Helper()
-	dir := filepath.Join("..", "..", "..", filepath.FromSlash(CorpusDirectory), name)
+	replayFrom(t, CorpusDirectory, name)
+}
+
+func replayFrom(t *testing.T, corpus, name string) {
+	t.Helper()
+	dir := filepath.Join("..", "..", "..", filepath.FromSlash(corpus), name)
 	r := newReducer("s1", "ses", &corpusIDs{}, &corpusClock{})
 	file, err := os.Open(filepath.Join(dir, "native.jsonl"))
 	if err != nil {
@@ -93,10 +99,30 @@ func replay(t *testing.T, name string) {
 	}
 }
 
-var lifecycleCases = []string{"completed-text", "metadata-107", "queued-busy-period", "unknown-event", "session-error", "foreign-session"}
+var lifecycleCases = []string{"completed-text", "child-agent-observed", "metadata-107", "queued-busy-period", "unknown-event", "session-error", "foreign-session"}
 var usageCases = []string{"reasoning-usage", "usage-sparse", "usage-precision", "usage-wide", "usage-partial-call", "usage-overflow", "usage-negative-zero", "cost-wide", "cost-unrepresentable", "cost-unknown", "cost-partial"}
-var toolCases = []string{"tool-success", "tool-denied", "tool-orphan", "tool-incomplete", "tool-duplicate-end"}
+var toolCases = []string{"tool-progress", "tool-denied-progress", "tool-orphan", "tool-incomplete", "tool-progress-duplicate-end"}
 var codecCases = []string{"invalid-wire", "invalid-event"}
+
+func TestCopilotEvidenceFloor(t *testing.T) {
+	floor := harnesses.Versioned("copilot-cli", "floor")
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", filepath.FromSlash(floor.Corpus), "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Cases []struct{ ID string } `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Cases) == 0 {
+		t.Fatal("empty floor corpus")
+	}
+	for _, entry := range manifest.Cases {
+		t.Run(entry.ID, func(t *testing.T) { replayFrom(t, floor.Corpus, entry.ID) })
+	}
+}
 
 func TestLifecycleCorpus(t *testing.T) {
 	for _, name := range lifecycleCases {

@@ -115,6 +115,9 @@ impl Reducer {
             }
             return Ok(());
         }
+        if !event.agent_id.is_empty() {
+            return Ok(());
+        }
         let interaction = text(&event.data, "interactionId");
         let foreign = self
             .current
@@ -183,6 +186,7 @@ impl Reducer {
             }
             "tool.execution_start"
             | "tool.execution_partial_result"
+            | "tool.execution_progress"
             | "tool.shell_output"
             | "tool.execution_complete" => self.observe_tool(event),
             _ => Ok(()),

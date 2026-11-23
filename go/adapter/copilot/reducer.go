@@ -75,6 +75,9 @@ func (r *reducer) observe(event native.Event) error {
 		}
 		return nil
 	}
+	if event.AgentID != "" {
+		return nil
+	}
 	if id := native.Text(event.Data, "interactionId"); event.Type != "user.message" && id != "" && (r.current == nil || r.current.interaction != id) {
 		return nil
 	}
@@ -142,7 +145,7 @@ func (r *reducer) observe(event native.Event) error {
 		if r.current != nil {
 			r.current.usage.observe(event.Data)
 		}
-	case "tool.execution_start", "tool.execution_partial_result", "tool.shell_output", "tool.execution_complete":
+	case "tool.execution_start", "tool.execution_partial_result", "tool.execution_progress", "tool.shell_output", "tool.execution_complete":
 		return r.observeTool(event)
 	}
 	return nil

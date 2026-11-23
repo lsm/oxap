@@ -49,13 +49,16 @@ func (r *reducer) observeTool(event native.Event) error {
 		}
 		t.started, err = r.emit(run, "action.call.started", toolPayload(t), false, asked)
 		return err
-	case "tool.execution_partial_result", "tool.shell_output":
+	case "tool.execution_partial_result", "tool.execution_progress", "tool.shell_output":
 		if found == nil || found.terminal {
 			return nil
 		}
 		text := native.Text(event.Data, "partialOutput")
 		if text == "" {
 			text = native.Text(event.Data, "text")
+		}
+		if text == "" {
+			text = native.Text(event.Data, "progressMessage")
 		}
 		payload := toolPayload(found)
 		payload["progress"] = text
