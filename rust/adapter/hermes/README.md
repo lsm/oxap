@@ -68,9 +68,10 @@ to the matching gateway request. A successful reply produces a linked
 `user.input.resolved` and returns the run to running or to its remaining
 input gate. Gateway withdrawals cancel the linked input and update the run status.
 Run settlement cancels any remaining input requests. On disconnect, the run
-drains queued observations before surfacing an inferred `run.failed` with
-the child exit error or, on a clean exit, the reader's diagnostic. A read
-deadline allows the caller to retry. Unknown reverse methods with string IDs
+drains queued observations before surfacing an inferred `run.failed`. The
+adapter waits up to the configured exit timeout for a child exit error, then
+uses the reader's diagnostic if no exit error is available. A read deadline
+allows the caller to retry. Unknown reverse methods with string IDs
 receive JSON-RPC error `-32601`. Other native observations pass through
 without consuming a sequence number.
 Reading ends after settlement. To interrupt a running turn, use

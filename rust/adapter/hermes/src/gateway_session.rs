@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 use crossbeam_channel::{
-    at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender, TryRecvError,
+    after, at, bounded, never, select_biased, Receiver, RecvTimeoutError, Sender, TryRecvError,
 };
 use futures_channel::oneshot;
 use oxap_adapter::gojson::{go_quote, zero};
@@ -150,6 +150,7 @@ pub struct GatewaySession {
     stored_id: String,
     last_seq: i64,
     observation_error: Option<Error>,
+    disconnected_at: Option<Instant>,
 }
 
 impl GatewaySession {
@@ -243,6 +244,7 @@ impl GatewaySession {
             stored_id,
             last_seq: 0,
             observation_error: None,
+            disconnected_at: None,
         };
         Ok((session, result))
     }
@@ -305,13 +307,19 @@ impl GatewaySession {
                 }
                 Err(RecvTimeoutError::Timeout) => return Err(observation_timeout().into()),
                 Err(RecvTimeoutError::Disconnected) => {
+                    let disconnected_at = self.disconnected_at.get_or_insert_with(Instant::now);
+                    let grace = after(
+                        self.process
+                            .exit_timeout()
+                            .saturating_sub(disconnected_at.elapsed()),
+                    );
                     let exited = self.process.exited();
-                    return select_biased! {
-                        recv(timeout) -> _ => Err(observation_timeout().into()),
-                        recv(exited) -> _ => Err(ObservationError::Transport(
-                            self.process.transport_error(),
-                        )),
-                    };
+                    select_biased! {
+                        recv(timeout) -> _ => return Err(observation_timeout().into()),
+                        recv(exited) -> _ => {},
+                        recv(grace) -> _ => {},
+                    }
+                    return Err(ObservationError::Transport(self.process.transport_error()));
                 }
             }
         }

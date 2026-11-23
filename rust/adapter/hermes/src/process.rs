@@ -177,6 +177,10 @@ impl Process {
         wait_error(self.child.exit_status())
     }
 
+    pub(crate) fn exit_timeout(&self) -> Duration {
+        self.timeout
+    }
+
     pub(crate) fn transport_error(&self) -> String {
         self.wait_error()
             .or_else(|| self.client.reader_error())

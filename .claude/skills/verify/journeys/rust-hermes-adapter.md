@@ -279,8 +279,8 @@ Check an unknown native ID, future and terminal cursors, and explicit close.
 Repeat with one retained envelope and with an inferred failure after gateway
 exit. In the stalled case, the gateway sends the corpus's malformed frame
 and stays alive until the shared stream and replay deliver the same terminal
-with the frame diagnostic. The burst case checks the default 256-envelope window, the gap before
-that window, and exact replay of the retained suffix. The gateway expects
+with the frame diagnostic. The burst case checks the default 256-envelope
+window, the gap before it, and exact replay of the retained suffix. The gateway expects
 only prompt writes and reaches EOF without a native replay call.
 
 Check reasoning settings and native session listing through the shared API:
