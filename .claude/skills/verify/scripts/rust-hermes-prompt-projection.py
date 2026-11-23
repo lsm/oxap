@@ -59,6 +59,7 @@ REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
 REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 SHARED_BACKLOG = 300
 SHARED_CANCEL_CASES = {"shared-cancel", "shared-cancel-race"}
+SHARED_RESUME_CASES = {"shared-resume", "shared-resume-tiny", "shared-resume-exit"}
 
 
 def shared_cancel_gateway(corpus, read, send, race):
@@ -147,12 +148,13 @@ def gateway(corpus, case):
         Path("resume-received").touch()
         assert sys.stdin.read() == ""
         return
-    shared_submit = case == "shared-submit"
+    shared_submit = case in {"shared-submit", "shared-resume-window"}
     if case != "malformed-frame" and case not in REOPEN_CASES:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create",
                           "params": {"model": "hermes-test"}
-                          if shared_submit or case == "shared-input" or case in SHARED_CANCEL_CASES else {}}
+                          if shared_submit or case == "shared-input"
+                          or case in SHARED_CANCEL_CASES | SHARED_RESUME_CASES else {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
@@ -165,6 +167,8 @@ def gateway(corpus, case):
         replay = gate_frames(corpus, case)
     elif shared_submit:
         replay = shared_submit_frames(corpus)
+    elif case in SHARED_RESUME_CASES:
+        replay = frames(corpus / "recovery-journal/native.jsonl")
     else:
         replay = frames(corpus / case / "native.jsonl")
     pending_start = False
@@ -183,6 +187,10 @@ def gateway(corpus, case):
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
             raw = frame["raw"]
+            event_type = raw.get("params", {}).get("type") if isinstance(raw, dict) else None
+            if case == "shared-resume-exit" and event_type == "message.complete":
+                Path("replay-complete").touch()
+                return
             if shared_submit and raw.get("id") == 2:
                 Path("prompt-received").touch()
                 deadline = time.monotonic() + 10
@@ -190,7 +198,7 @@ def gateway(corpus, case):
                     assert time.monotonic() < deadline, "consumer did not inspect admission"
                     assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
             send(raw)
-            if shared_submit and raw.get("params", {}).get("type") == "message.start":
+            if (shared_submit or case in SHARED_RESUME_CASES) and event_type == "message.start":
                 pending_start = True
         elif frame["action"] == "wait-submit" and pending_start:
             pending_start = False
@@ -203,7 +211,7 @@ def gateway(corpus, case):
         elif frame["action"] == "process-exit":
             return
     assert sys.stdin.read() == ""
-    if case in REOPEN_CASES or shared_submit or case == "shared-input":
+    if case in REOPEN_CASES | SHARED_RESUME_CASES or shared_submit or case == "shared-input":
         Path("replay-complete").touch()
 
 
@@ -267,7 +275,9 @@ GATE_CHECKS = {
 
 def verify(binary, corpus, mode, case):
     fixture = "interaction-gates" if case in {"answered-gates", "shared-input"} else case
-    if case == "shared-submit":
+    if case in SHARED_RESUME_CASES:
+        fixture = "recovery-journal"
+    if case in {"shared-submit", "shared-resume-window"}:
         fixture = "streaming-provenance"
     if case in REOPEN_TIMEOUT_CASES:
         fixture = "session-reopen"
@@ -278,6 +288,10 @@ def verify(binary, corpus, mode, case):
         stored_id = request["params"]["session_id"]
     with tempfile.TemporaryDirectory(prefix="hermes-projection-") as directory:
         root = Path(directory)
+        if case == "shared-resume-window":
+            (root / "check-resume-window").touch()
+        if case in {"shared-resume-tiny", "shared-resume-exit"}:
+            (root / case).touch()
         if case == "shared-cancel-race":
             (root / "cancel-race").touch()
         module = root / "tui_gateway"
@@ -288,7 +302,9 @@ def verify(binary, corpus, mode, case):
             f"from pathlib import Path\n"
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
-        model = ["hermes-test"] if case in {"malformed-frame", "shared-submit"} | SHARED_CANCEL_CASES else []
+        model = ["hermes-test"] if case in {
+            "malformed-frame", "shared-submit", "shared-resume-window",
+        } | SHARED_CANCEL_CASES | SHARED_RESUME_CASES else []
         if case in {"answered-gates", "shared-input"}:
             answers_file = root / "answers.json"
             expected = json.loads(expected_path.read_text())
@@ -332,6 +348,11 @@ def verify(binary, corpus, mode, case):
     result.check_returncode()
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
+    if case in SHARED_RESUME_CASES:
+        assert "LIVE REPLAY ENVELOPES: 2" in lines
+        assert "COMPLETED REPLAY ENVELOPES: 1" in lines
+        assert shutdowns == 1 and replay_complete
+        return
     if case == "shared-input":
         actual = [json.loads(line[10:]) for line in lines if line.startswith("envelope: ")]
         expected = json.loads(expected_path.read_text())
@@ -398,6 +419,8 @@ def verify(binary, corpus, mode, case):
         print("MATCHED SHARED CREATED STATE: 1\nGATEWAY EOF: 1")
         return
     if mode == "--shared-submit":
+        if case == "shared-resume-window":
+            assert "REPLAY WINDOW: 256" in lines
         assert "PENDING ADMISSION: queued" in lines
         assert "REFUSALS RETURNED TO IDLE: 3" in lines
         admissions = [json.loads(line[11:]) for line in lines if line.startswith("admission: ")]

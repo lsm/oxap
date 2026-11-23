@@ -6,10 +6,10 @@ use std::{
 use crossbeam_channel::{never, unbounded, Sender};
 use futures_channel::{mpsc, oneshot};
 use oxap_adapter::{
-    refuse_unadvertised_controls, refuse_unadvertised_settings, refuse_unadvertised_tool_sources,
-    refuse_unadvertised_tools, runtime::Runtime, Adapter as AdapterContract, BoxFuture, Descriptor,
-    Error, EventStream, InteractionResolution, OpenRequest, Recovery, ResumeRequest, Session,
-    SubmitRequest,
+    journal::Journal, refuse_unadvertised_controls, refuse_unadvertised_settings,
+    refuse_unadvertised_tool_sources, refuse_unadvertised_tools, runtime::Runtime,
+    Adapter as AdapterContract, BoxFuture, Descriptor, Error, EventStream, InteractionResolution,
+    JournalDescriptor, OpenRequest, Recovery, ResumeRequest, Session, SubmitRequest,
 };
 use oxap_protocol::{
     ActiveRun, CapabilityDescriptor, ContentPartType, EndpointDescriptor, Envelope, EnvelopeType,
@@ -26,11 +26,13 @@ use crate::{
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_JOURNAL_CAPACITY: usize = 256;
 
 pub struct Adapter {
     process: ProcessConfig,
     model: String,
     runtime: Runtime,
+    journal_capacity: usize,
 }
 
 impl Adapter {
@@ -39,10 +41,20 @@ impl Adapter {
             process,
             model,
             runtime: Runtime::default(),
+            journal_capacity: DEFAULT_JOURNAL_CAPACITY,
         }
     }
 
-    fn descriptor() -> Descriptor {
+    pub fn with_journal_capacity(mut self, capacity: usize) -> Self {
+        self.journal_capacity = if capacity == 0 {
+            DEFAULT_JOURNAL_CAPACITY
+        } else {
+            capacity
+        };
+        self
+    }
+
+    fn descriptor(&self) -> Descriptor {
         let pin = oxap_harness::current("hermes").expect("embedded catalog pins Hermes");
         let features = [
             ("session.open", SupportLevel::NATIVE),
@@ -53,6 +65,8 @@ impl Adapter {
             ("run.streaming", SupportLevel::NATIVE),
             ("run.cancel", SupportLevel::DEGRADED),
             ("run.status", SupportLevel::EMULATED),
+            ("run.resume", SupportLevel::DEGRADED),
+            ("run.replay", SupportLevel::DEGRADED),
             ("user_input", SupportLevel::NATIVE),
             ("action.tools", SupportLevel::DEGRADED),
         ]
@@ -81,25 +95,30 @@ impl Adapter {
                 ..CapabilityDescriptor::default()
             },
             capability_revision: pin.capability_revision.clone(),
+            journal: JournalDescriptor {
+                scope: "session".into(),
+                persistence: "process_memory".into(),
+                replay: SupportLevel::DEGRADED,
+                capacity: self.journal_capacity,
+            },
             max_active_runs_per_session: 1,
             interactive_gates: true,
             cancellation_target: "session".into(),
             cancellation_implementation: METHOD_SESSION_INTERRUPT.into(),
-            ..Descriptor::default()
         }
     }
 }
 
 impl AdapterContract for Adapter {
     fn probe(&self) -> BoxFuture<'_, Descriptor> {
-        Box::pin(async { Ok(Self::descriptor()) })
+        Box::pin(async { Ok(self.descriptor()) })
     }
 
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn Session>> {
         Box::pin(async move {
             refuse_unadvertised_tool_sources(&request, &[])?;
             refuse_unadvertised_tools(&request, &[])?;
-            refuse_unadvertised_settings(&request, &Self::descriptor().capabilities)?;
+            refuse_unadvertised_settings(&request, &self.descriptor().capabilities)?;
 
             let deadline = Some(Instant::now() + RPC_TIMEOUT);
             let session_id = if request.session_id.as_str().is_empty() {
@@ -148,6 +167,7 @@ impl AdapterContract for Adapter {
                     state,
                     cancel_accepted: false,
                     input: None,
+                    journal: Journal::new(self.journal_capacity),
                 })),
                 runtime: self.runtime.clone(),
             }) as Box<dyn Session>)
@@ -170,6 +190,7 @@ struct SessionSlot {
     state: SessionState,
     cancel_accepted: bool,
     input: Option<Sender<InputCommand>>,
+    journal: Journal,
 }
 
 impl SessionSlot {
@@ -249,13 +270,6 @@ impl OpenedSession {
             return Err(Error::SessionClosed);
         }
         Ok(slot)
-    }
-
-    fn while_open<'a, T: Send + 'a>(&'a self, result: Result<T, Error>) -> BoxFuture<'a, T> {
-        Box::pin(async move {
-            drop(self.open_slot()?);
-            result
-        })
     }
 
     fn shutdown(&self) -> Result<(), Error> {
@@ -345,6 +359,7 @@ impl Session for OpenedSession {
                     ..ActiveRun::default()
                 }];
                 state.updated_at_ms = runtime.now_ms();
+                let started = run.take_started();
                 {
                     let mut slot = lock(&slot);
                     if slot.state.status == SessionStatus::CLOSED {
@@ -352,14 +367,24 @@ impl Session for OpenedSession {
                     }
                     slot.state = state;
                     slot.input = Some(input);
+                    slot.journal.append(started.clone(), false);
                 }
                 let (events, stream) = mpsc::unbounded();
                 let stream: EventStream = Box::pin(stream);
+                let _ = events.unbounded_send(Ok(started));
                 let _ = reply.send(Ok((response, stream)));
-                let terminal = forward_run(&events, &mut run, &slot);
-                let gateway = gateway.observed_settlement.then_some(gateway);
-                lock(&slot).settle(gateway, &runtime);
-                if let Ok(Some(event)) = terminal {
+                let terminal = forward_run(&events, &mut run, &slot).ok().flatten();
+                {
+                    let mut slot = lock(&slot);
+                    if let Some(event) = &terminal {
+                        slot.journal.append(event.clone(), true);
+                    } else {
+                        slot.journal.close();
+                    }
+                    let reusable = terminal.is_some() && gateway.observed_settlement;
+                    slot.settle(reusable.then_some(gateway), &runtime);
+                }
+                if let Some(event) = terminal {
                     let _ = events.unbounded_send(Ok(event));
                 }
             });
@@ -430,8 +455,22 @@ impl Session for OpenedSession {
         })
     }
 
-    fn resume(&self, _: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
-        self.while_open(Err(Error::RunNotFound))
+    fn resume(&self, request: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
+        Box::pin(async move {
+            let slot = self.open_slot()?;
+            let run = request.run_id.as_str();
+            let latest = slot.journal.latest(run).ok_or(Error::RunNotFound)?;
+            if request.after_sequence > latest {
+                return Err(Error::ReplayCursorFuture);
+            }
+            let (recovery, stream) =
+                slot.journal
+                    .resume(slot.state.clone(), run, request.after_sequence, latest);
+            if let Some(gap) = recovery.replay_gap {
+                return Err(Error::ReplayGap(gap));
+            }
+            Ok((recovery, stream))
+        })
     }
 }
 
@@ -449,8 +488,10 @@ fn forward_run(
                 {
                     return Ok(Some(*event));
                 }
-                if event.turn_id.is_some() {
-                    lock(slot).project_input(&event);
+                {
+                    let mut slot = lock(slot);
+                    slot.project_input(&event);
+                    slot.journal.append((*event).clone(), false);
                 }
                 let _ = events.unbounded_send(Ok(*event));
                 if let Some(reply) = resolved.take() {
