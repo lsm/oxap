@@ -120,6 +120,49 @@ def shared_submit_frames(corpus):
     return replay
 
 
+def settings_gateway(corpus, case, read, send):
+    def call(request_id, method, params, result=None, error=None):
+        assert read() == {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        reply = {"result": result} if error is None else {"error": error}
+        send({"jsonrpc": "2.0", "id": request_id, **reply})
+
+    def setting(request_id, session_id, value, error=None):
+        call(request_id, "config.set", {"session_id": session_id, "key": "reasoning", "value": value},
+             {"key": "reasoning", "value": value}, error)
+
+    if case == "native-list":
+        call(1, "session.list", {"limit": 2}, {"sessions": [
+            None, {"title": "missing id"}, {"id": "stored-a", "title": "Named", "started_at": 1.25},
+            {"id": "stored-b", "title": "", "preview": "first words", "started_at": 2},
+            {"id": "stored-c", "preview": "past the limit"},
+        ]})
+    elif case == "shared-settings-reopen":
+        _, request, reply = frames(corpus / "session-reopen/native.jsonl")
+        assert sys.stdin.readline() == request["raw"] + "\n"
+        send(reply["raw"])
+        setting(2, json.loads(reply["raw"])["result"]["session_id"], "none")
+    else:
+        call(1, "session.create", {"model": "configured", "reasoning_effort": "none"},
+             {"session_id": "runtime", "stored_session_id": "stored"})
+        setting(2, "runtime", "none")
+        setting(3, "runtime", "high", {"code": -32000, "message": "effort rejected"})
+        setting(4, "runtime", "low")
+        call(5, "prompt.submit", {"session_id": "runtime", "text": "hello"}, {"status": "streaming"})
+        send({"jsonrpc": "2.0", "method": "event", "params": {
+            "type": "message.start", "session_id": "runtime", "seq": 1,
+        }})
+        deadline = time.monotonic() + 10
+        while not Path("release-settings-run").exists():
+            assert time.monotonic() < deadline, "consumer did not check the active update refusal"
+            assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+        send({"jsonrpc": "2.0", "method": "event", "params": {
+            "type": "message.complete", "session_id": "runtime", "seq": 2,
+            "payload": {"status": "complete", "text": "done"},
+        }})
+    assert sys.stdin.read() == ""
+    Path("replay-complete").touch()
+
+
 def gateway(corpus, case):
     def read():
         return json.loads(sys.stdin.readline())
@@ -127,6 +170,10 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
+    if case in {"shared-settings", "shared-settings-reopen", "native-list"}:
+        send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
+        settings_gateway(corpus, case, read, send)
+        return
     if case == "shared-open":
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {
@@ -279,10 +326,10 @@ def verify(binary, corpus, mode, case):
         fixture = "recovery-journal"
     if case in {"shared-submit", "shared-resume-window"}:
         fixture = "streaming-provenance"
-    if case in REOPEN_TIMEOUT_CASES:
+    if case in REOPEN_TIMEOUT_CASES or case == "shared-settings-reopen":
         fixture = "session-reopen"
     expected_path = corpus / fixture / "expected-oap.json"
-    if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES:
+    if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES or case == "shared-settings-reopen":
         native = frames(corpus / fixture / "native.jsonl")
         request = next(json.loads(frame["raw"]) for frame in native if frame["action"] == "expect-write")
         stored_id = request["params"]["session_id"]
@@ -313,7 +360,7 @@ def verify(binary, corpus, mode, case):
                 for event in expected if event["type"] == "user.input.resolved"
             ]))
             model = ["hermes-test" if case == "shared-input" else "", str(answers_file)]
-        if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES:
+        if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES or case == "shared-settings-reopen":
             model = [stored_id]
         command = [binary, sys.executable, directory, directory, mode]
         environment = {"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"}
@@ -348,6 +395,10 @@ def verify(binary, corpus, mode, case):
     result.check_returncode()
     lines = result.stdout.split("\n")
     shutdowns = lines.count("gateway exited cleanly")
+    if case in {"shared-settings", "shared-settings-reopen", "native-list"}:
+        assert replay_complete and shutdowns == 1
+        print("GATEWAY EOF: 1")
+        return
     if case in SHARED_RESUME_CASES:
         assert "LIVE REPLAY ENVELOPES: 2" in lines
         assert "COMPLETED REPLAY ENVELOPES: 1" in lines

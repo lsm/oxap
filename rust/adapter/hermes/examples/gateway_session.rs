@@ -38,6 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | "--shared-submit"
                     | "--shared-cancel"
                     | "--shared-resume"
+                    | "--shared-settings-reopen"
             ) =>
         {
             (python, source, state, mode.as_str(), model.as_str(), None)
@@ -45,7 +46,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [python, source, state, mode]
             if matches!(
                 mode.as_str(),
-                "--prompt" | "--observe" | "--start" | "--project" | "--run" | "--shared-open"
+                "--prompt"
+                    | "--observe"
+                    | "--start"
+                    | "--project"
+                    | "--run"
+                    | "--shared-open"
+                    | "--shared-settings"
+                    | "--native-list"
             ) =>
         {
             (python, source, state, mode.as_str(), "", None)
@@ -81,6 +89,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ]),
         ..ProcessConfig::default()
     };
+    if mode == "--native-list" {
+        return native_list(config);
+    }
+    if matches!(mode, "--shared-settings" | "--shared-settings-reopen") {
+        return shared_settings(
+            config,
+            state,
+            (mode == "--shared-settings-reopen").then_some(model),
+        );
+    }
     if matches!(mode, "--shared-open" | "--shared-reopen") {
         return shared_session(config, (mode == "--shared-reopen").then_some(model));
     }
@@ -282,6 +300,117 @@ fn shared_session(
         Err(Error::SessionClosed)
     ));
     println!("gateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn native_list(
+    config: oxap_adapter_hermes::process::ProcessConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Adapter, NativeListRequest, NativeListing};
+
+    let adapter = oxap_adapter_hermes::Adapter::new(config, "configured".into());
+    let lister = adapter.native_lister().ok_or("missing native lister")?;
+    let listed = block_on(lister.native_list(NativeListRequest {
+        limit: 2,
+        ..NativeListRequest::default()
+    }))?;
+    assert_eq!(
+        listed,
+        [
+            NativeListing {
+                native_id: "stored-a".into(),
+                title: "Named".into(),
+                updated_at_ms: 1250,
+                ..NativeListing::default()
+            },
+            NativeListing {
+                native_id: "stored-b".into(),
+                title: "first words".into(),
+                updated_at_ms: 2000,
+                ..NativeListing::default()
+            },
+        ]
+    );
+    println!("NATIVE SESSIONS: {}\ngateway exited cleanly", listed.len());
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_settings(
+    config: oxap_adapter_hermes::process::ProcessConfig,
+    state_dir: &str,
+    stored: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Adapter, Error, OpenRequest, SubmitRequest};
+    use oxap_protocol::{
+        Message, MessageContent, MessageRole, MessageSubmitRequest, ReasoningLevel,
+        SessionSettingsUpdateRequest,
+    };
+
+    let adapter = oxap_adapter_hermes::Adapter::new(config, "configured".into());
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        native_session_id: stored.unwrap_or_default().into(),
+        reopen: stored.is_some(),
+        reasoning_level: ReasoningLevel::OFF,
+        ..OpenRequest::default()
+    }))?;
+    assert_eq!(
+        block_on(session.state())?.reasoning_level,
+        ReasoningLevel::OFF
+    );
+    if stored.is_none() {
+        let settings = session
+            .settings_updater()
+            .ok_or("missing settings updater")?;
+        let set = |reasoning_level| {
+            block_on(settings.update_settings(SessionSettingsUpdateRequest {
+                session_id: "session".into(),
+                reasoning_level,
+                ..SessionSettingsUpdateRequest::default()
+            }))
+        };
+        assert!(
+            matches!(set(ReasoningLevel::HIGH), Err(Error::UnsupportedControl(refusal))
+            if refusal.detail.contains("effort rejected"))
+        );
+        assert_eq!(
+            block_on(session.state())?.reasoning_level,
+            ReasoningLevel::OFF
+        );
+        let (changed, state) = set(ReasoningLevel::LOW)?;
+        assert_eq!(changed.previous_reasoning_level, ReasoningLevel::OFF);
+        assert_eq!(changed.reasoning_level, ReasoningLevel::LOW);
+        assert_eq!(state.reasoning_level, ReasoningLevel::LOW);
+        let (_, stream) = block_on(session.submit(SubmitRequest {
+            request: MessageSubmitRequest {
+                session_id: "session".into(),
+                messages: vec![Message {
+                    content: MessageContent::from_text("hello"),
+                    role: MessageRole::USER,
+                    ..Message::default()
+                }],
+                ..MessageSubmitRequest::default()
+            },
+            ..SubmitRequest::default()
+        }))?;
+        assert!(matches!(set(ReasoningLevel::HIGH), Err(Error::RunActive)));
+        std::fs::write(
+            std::path::Path::new(state_dir).join("release-settings-run"),
+            "",
+        )?;
+        assert_eq!(replay_wires(stream)?.len(), 2);
+        assert_eq!(
+            block_on(session.state())?.reasoning_level,
+            ReasoningLevel::LOW
+        );
+        println!("LIVE UPDATES: 1\nREFUSED UPDATES: 2");
+    }
+    block_on(session.close())?;
+    println!("OPEN REASONING: off\ngateway exited cleanly");
     Ok(())
 }
 
