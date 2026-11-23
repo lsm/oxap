@@ -2,7 +2,9 @@
 import json
 import os
 from pathlib import Path
+import select
 import sys
+import time
 import uuid
 
 assert os.environ["NODE_ENV"] == "test"
@@ -33,7 +35,22 @@ def exchange(expected, reply, refuse=False, observation=None):
 init = next(frame["raw"] for frame in frames if isinstance(frame["raw"], dict)
             and frame["raw"].get("subtype") == "init")
 init["session_id"] = binding
-exchange(frames[0]["raw"], frames[1]["raw"], mode == "initialize-refusal", init)
+exchange(frames[0]["raw"], frames[1]["raw"], mode == "initialize-refusal",
+         None if mode == "catalog" else init)
+if mode == "catalog":
+    for step in ("publish-initial", "publish-refresh"):
+        deadline = time.monotonic() + 10
+        while not Path(step).exists():
+            if select.select([sys.stdin], [], [], 0.02)[0]:
+                assert not sys.stdin.readline()
+                sys.exit(0)
+            assert time.monotonic() < deadline, step
+        init["model"] = step
+        if step == "publish-refresh":
+            name = "mcp__files__nested__read"
+            init["tools"] = ["", name, name]
+            init["mcp_servers"] = [{"name": ""}, init["mcp_servers"][0], init["mcp_servers"][0]]
+        print(json.dumps(init), flush=True)
 if mode in {"settings", "settings-refusal"}:
     exchange(
         {"type": "control_request", "request": {

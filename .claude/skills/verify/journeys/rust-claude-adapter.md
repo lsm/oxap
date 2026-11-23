@@ -258,3 +258,14 @@ Check that an open without settings writes only initialize, that opening with
 an effort sends it after initialize, and that either control refusal closes
 the process before the adapter returns the error. Successful opens close on
 stdin EOF and reject later state queries.
+
+## Idle tool listing over stdio
+
+Under the same mutex, run the `session_open` command above and check for
+`PASS catalog`. The caller uses the public session tool lister before the
+first native init, then compares the initial catalog and tool sources with
+the pinned `tools-catalog-sources` expectations. A second idle init removes a
+server and changes the tool list. Check that the next scoped response reflects
+both changes, an unscoped request exposes only the built-in source, and a
+closed session refuses listing. The peer uses a temporary home and exits on
+stdin EOF.

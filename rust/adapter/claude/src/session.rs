@@ -5,12 +5,17 @@ use std::{
 
 use oxap_adapter::{
     BoxFuture, Error, EventStream, InteractionResolution, Recovery, ResumeRequest, Session,
-    SubmitRequest,
+    SubmitRequest, ToolCatalog, ToolLister,
 };
-use oxap_protocol::{MessageSubmitResponse, RunCancelResponse, RunId, SessionState, SessionStatus};
+use oxap_protocol::{
+    MessageSubmitResponse, RunCancelResponse, RunId, SessionState, SessionStatus, ToolsListRequest,
+    FEATURE_TOOLS_LIST,
+};
 use serde_json::value::to_raw_value;
 
 use crate::{
+    adapter::pin,
+    catalog::Catalog,
     native::{self, Observation},
     rpc::{Inbound, Process},
 };
@@ -19,12 +24,20 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) struct OpenedSession {
     process: Process,
-    state: Arc<Mutex<SessionState>>,
+    state: Arc<Mutex<IdleState>>,
+}
+
+struct IdleState {
+    session: SessionState,
+    catalog: Catalog,
 }
 
 impl OpenedSession {
     pub(crate) fn new(process: Process, state: SessionState) -> Result<Self, Error> {
-        let state = Arc::new(Mutex::new(state));
+        let state = Arc::new(Mutex::new(IdleState {
+            session: state,
+            catalog: Catalog::default(),
+        }));
         let session = Self { process, state };
         let inbound = session.process.client.inbound();
         let state = session.state.clone();
@@ -35,9 +48,10 @@ impl OpenedSession {
                         Inbound::Observation(observation) => {
                             if let Observation::Init(init) = observation.value {
                                 let mut state = state.lock().unwrap();
-                                state.current_model_id = init.model;
+                                state.catalog.observe(&init);
+                                state.session.current_model_id = init.model;
                                 if !init.session_id.is_empty() {
-                                    bind(&mut state, &init.session_id);
+                                    bind(&mut state.session, &init.session_id);
                                 }
                             }
                         }
@@ -48,7 +62,7 @@ impl OpenedSession {
                         _ => {}
                     }
                 }
-                state.lock().unwrap().status = SessionStatus::CLOSED;
+                state.lock().unwrap().session.status = SessionStatus::CLOSED;
             })
             .map_err(Error::harness)?;
         Ok(session)
@@ -86,21 +100,22 @@ impl Session for OpenedSession {
     fn state(&self) -> BoxFuture<'_, SessionState> {
         Box::pin(async {
             let state = self.state.lock().unwrap();
-            if state.status == SessionStatus::CLOSED {
+            if state.session.status == SessionStatus::CLOSED {
                 return Err(Error::SessionClosed);
             }
-            Ok(state.clone())
+            Ok(state.session.clone())
         })
     }
 
     fn native_session_id(&self) -> Option<String> {
         let state = self.state.lock().unwrap();
-        serde_json::from_str(state.metadata.get("claude_native_session_id")?.get()).ok()
+        let metadata = &state.session.metadata;
+        serde_json::from_str(metadata.get("claude_native_session_id")?.get()).ok()
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {
-            self.state.lock().unwrap().status = SessionStatus::CLOSED;
+            self.state.lock().unwrap().session.status = SessionStatus::CLOSED;
             self.process.close(None).map_err(Error::harness)
         })
     }
@@ -119,6 +134,33 @@ impl Session for OpenedSession {
 
     fn resume(&self, _: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
         Box::pin(async { Err(Error::RunNotFound) })
+    }
+
+    fn tool_lister(&self) -> Option<&dyn ToolLister> {
+        Some(self)
+    }
+}
+
+impl ToolLister for OpenedSession {
+    fn tools(&self, request: ToolsListRequest) -> BoxFuture<'_, ToolCatalog> {
+        Box::pin(async move {
+            let mut state = self.state.lock().unwrap();
+            if state.session.status == SessionStatus::CLOSED {
+                return Err(Error::SessionClosed);
+            }
+            let id = request.session_id.as_ref();
+            let id = id.filter(|id| !id.as_str().is_empty());
+            if id.is_some_and(|id| *id != state.session.session_id) {
+                return Err(Error::RunNotFound);
+            }
+            if !request.allows_degraded(FEATURE_TOOLS_LIST) {
+                return Err(Error::DegradedControl(FEATURE_TOOLS_LIST.into()));
+            }
+            Ok(ToolCatalog {
+                revision: pin().capability_revision.clone(),
+                tools: state.catalog.list(id.cloned()),
+            })
+        })
     }
 }
 
