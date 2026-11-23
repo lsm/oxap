@@ -102,8 +102,10 @@ def peer(kind):
         rpc(prompt, stopReason="end_turn")
 
     elif kind == "copilot":
-        rpc(request("ping"), protocolVersion=3)
-        rpc(request("status.get"), version="1.0.109")
+        catalog = json.loads((Path(__file__).resolve().parents[4] / "harnesses/copilot-cli.json").read_text())
+        version = next(item["endpoint_version"] for item in catalog["versions"] if item["status"] == "current")
+        rpc(request("ping"), protocolVersion=4)
+        rpc(request("status.get"), version=version)
         rpc(request("session.create"), sessionId=SESSION)
         prompt = request("session.send")
         rpc(prompt, messageId="m1")
