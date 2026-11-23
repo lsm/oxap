@@ -299,10 +299,19 @@ jobs:
       - name: Build the oapx binary for TS SDK E2E
         run: zig build --build-file zig/build.zig install --prefix /tmp/makai-smoke
 
+      - name: Prepare configured SDK launch verification
+        working-directory: .
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/ts-sdk-launch" /tmp/makai-smoke/bin/oxap
+
       - name: Run TS SDK unit + E2E tests
         env:
-          OAP_SDK_BINARY_PATH: /tmp/makai-smoke/bin/oxap
+          OAP_SDK_BINARY_PATH: ${{ runner.temp }}/ts-sdk-launch/oxap
         run: npm run test:sdk
+
+      - name: Verify SDK config cleanup
+        working-directory: .
+        if: always()
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py check "$RUNNER_TEMP/ts-sdk-launch"
 
       - name: Verify logger temporary-directory cleanup
         run: node --test scripts/logger-cleanup.test.mjs
@@ -586,7 +595,7 @@ jobs:
 
       - name: Run the clients/ts suite, the one ci.yml runs against goap serve, against oapx serve
         env:
-          OAP_TS_HUB: /tmp/oapx-hub/bin/oxap
+          OAP_TS_AGENT_SERVICE: /tmp/oapx-hub/bin/oxap
         run: npm test
 
   rust-sdk:
@@ -637,10 +646,19 @@ jobs:
         working-directory: .
         run: zig build --build-file zig/build.zig install --prefix /tmp/makai-rs
 
+      - name: Prepare configured SDK launch verification
+        working-directory: .
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/rust-sdk-launch" /tmp/makai-rs/bin/oxap
+
       - name: Run Rust SDK unit + E2E tests
         env:
-          OAP_SDK_BINARY_PATH: /tmp/makai-rs/bin/oxap
+          OAP_SDK_BINARY_PATH: ${{ runner.temp }}/rust-sdk-launch/oxap
         run: cargo test --all-features
+
+      - name: Verify SDK config cleanup
+        working-directory: .
+        if: always()
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py check "$RUNNER_TEMP/rust-sdk-launch"
 
       - name: Package the publishable crates at a version crates.io does not have
         working-directory: .
@@ -756,11 +774,21 @@ jobs:
       - name: Build the oapx binary for Python SDK E2E
         run: zig build --build-file zig/build.zig install --prefix /tmp/makai-py
 
+      - name: Prepare configured SDK launch verification
+        working-directory: .
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/python-sdk-launch" /tmp/makai-py/bin/oxap
+
       - name: Run Python SDK unit + E2E tests
         working-directory: sdk/python
         env:
-          OAP_SDK_BINARY_PATH: /tmp/makai-py/bin/oxap
-        run: python -m pytest -q
+          OAP_SDK_BINARY_PATH: ${{ runner.temp }}/python-sdk-launch/oxap
+          OAP_SDK_TEST_REAL_AUTH: "1"
+        run: python -m pytest -ra
+
+      - name: Verify SDK config cleanup
+        working-directory: .
+        if: always()
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py check "$RUNNER_TEMP/python-sdk-launch"
 
       - name: Tests leave no credential store in the checkout
         if: always()

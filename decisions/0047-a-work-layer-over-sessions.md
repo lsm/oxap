@@ -11,7 +11,7 @@ Leans on: [Decision 0039](0039-a-session-is-oaps-and-a-harness-is-where-it-runs.
 [Decision 0040](0040-a-session-reopens-through-its-own-binding.md) and
 [Decision 0046](0046-a-session-list-is-the-hosts-bindings.md), whose session
 list this record widens
-Amends: [the hub draft](../drafts/hub.md), whose name it retires
+Amends: [the hub draft](../drafts/agent-service.md), whose name it retires
 
 ## Context
 
@@ -183,7 +183,7 @@ prompts, so it is not a session.
 ### 4. `hub` becomes `serve`
 
 `oapx hub` and `goap hub` become `oapx serve` and `goap serve`; the
-single-session `oapx serve agent` keeps its name. `drafts/hub.md` becomes
+single-session `oapx serve agent` keeps its name. `drafts/agent-service.md` becomes
 `drafts/serve.md`. The work profile ships as `oapx work`. The old command
 stays as an alias for one release.
 
@@ -275,6 +275,6 @@ specification.
   both of its transports call, compared byte for byte against `oapx` on the
   stdio differential. Its adapters list and read no native sessions yet.
 - **The rename (decision 4)** landed for the commands (#913), not for the
-  draft: `drafts/hub.md` keeps its name rather than becoming
+  draft: `drafts/agent-service.md` keeps its name rather than becoming
   `drafts/serve.md`. The work verbs are served by `serve` itself, per owner
   answer 4, not by a separate command.

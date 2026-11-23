@@ -1,0 +1,8 @@
+{
+  "agent": {
+    "http": "127.0.0.1:6270",
+    "adapters": {
+      "memory": { "type": "memory" }
+    }
+  }
+}

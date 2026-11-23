@@ -397,7 +397,7 @@ The per-session journal, up to 65,536 events in memory, moves to disk with parki
 Replay then reads a file, which has to be designed together with subscription
 resume across runs.
 
-`drafts/hub.md` pins how events are saved, how the Hub wakes and how replay works,
+`drafts/agent-service.md` pins how events are saved, how the Hub wakes and how replay works,
 with named tests. Each pull request in stages 2 and 7 that changes one of these
 updates that draft and its tests in the same change.
 
@@ -423,7 +423,7 @@ stops blocking a park once the job table leaves the session, as
 
 ### Two levels of parking
 
-There are two kinds of park. The Parking section of `drafts/hub.md` is the rule's
+There are two kinds of park. The Parking section of `drafts/agent-service.md` is the rule's
 home, and run parking extends it rather than restating it:
 
 | Level | What it does | Condition |

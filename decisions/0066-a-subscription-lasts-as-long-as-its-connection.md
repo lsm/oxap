@@ -4,7 +4,7 @@ Status: accepted 2026-11-03
 Date: 2026-11-03
 Protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
-Amends: [Decision 0007](0007-queue-delivery.md), `drafts/hub.md`,
+Amends: [Decision 0007](0007-queue-delivery.md), `drafts/agent-service.md`,
 `drafts/triggered-runs.md`, `drafts/staged-units-graduation.md` and
 `drafts/harness-initiated-state.md`
 
@@ -82,5 +82,5 @@ Parking an idle session may no longer require that it has no subscriber, because
 an open client would then keep it from ever parking. The hub holds a
 subscription, not the harness, so a parked session keeps its streams.
 
-The trees reach this rule one pull request at a time; `drafts/hub.md` records
+The trees reach this rule one pull request at a time; `drafts/agent-service.md` records
 which have not in D36.

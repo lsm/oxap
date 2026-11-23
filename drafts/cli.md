@@ -27,14 +27,15 @@ not a second product.
 | `serve agent [--backend B] [--config F] [--stdio]` | one agent loop over `agent-control-core`, raw envelopes per [endpoint-stdio](endpoint-stdio.md); no `--backend` means the binary's own loop: the `oapx` adapter the terminal UI also runs (endpoint `oapx.agent`), with `auth.*` beside it; with `OAPX_PROVIDER_SERVICE_URL` set it takes its catalog and inference from that remote provider service | native loop; harness backends as they are wired | the Go adapters (today `goap endpoint --adapter`) |
 | `serve provider [--stdio \| --http ADDR] [--specimens]` | `model-provider-core` | yes | answers `unavailable` |
 | `serve agent,provider --stdio` | both profiles on one pipe (Decision 0027) | yes | answers `unavailable` |
-| `hub [--config F] [--addr ADDR \| --stdio]` | the multi-session daemon: an adapter registry, fan-out, cursor replay, HTTP+SSE or the stdio transport-object wire, per [hub](hub.md) | yes | yes |
+| `hub [--config F] [--addr ADDR \| --stdio]` | the multi-session daemon: an adapter registry, fan-out, cursor replay, HTTP+SSE or the stdio transport-object wire, per [Agent Service](agent-service.md) | yes | yes |
 | `validate [--format human\|json] [--mode strict\|tolerant] [--pack DIR]... [--provider] TRACE...` | judge traces: decode, schema, semantic | yes (packs, modes and some semantic rules still porting) | yes |
 | `conformance [--command CMD] [--format text\|json]` | drive an endpoint and judge what crossed the pipe | yes, first slice: the handshake and one submitted run; the interaction, tool, queue, model and auth groups are still to come | yes |
 | `check` | the repository's own schemas, fixtures and reference path | not yet | yes |
 | `run`, `auth`, the TUI (bare invocation) | the product's own loop and credentials | yes | — |
 
 For `oxap serve --config F`, the [service config schema](../schema/server.schema.json)
-defines the Agent and Provider bindings. Two `stdio: raw` sections share
+defines the Agent and Provider bindings. See the
+[server migration guide](../docs/server-config-migration.md) for the command mappings. Two `stdio: raw` sections share
 one pipe under [Decision 0027](../decisions/0027-composed-stdio-profiles.md).
 An Agent `stdio: multi_session` uses the pipe exclusively. The Agent HTTP
 listener writes its address to stderr when the Provider owns stdio.

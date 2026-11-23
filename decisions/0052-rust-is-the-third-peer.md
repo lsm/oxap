@@ -42,7 +42,7 @@ one 0032 lists. Differential tests that run Go against Zig take Rust as a third
 side once the piece they cover is ported, and a disagreement is a finding
 against whichever side the specification says is wrong. A divergence that
 cannot be fixed yet is recorded in the harness's ledger, as the Go and Zig ones
-are. `drafts/hub.md` names the Rust test pinning each rule beside the Go one.
+are. `drafts/agent-service.md` names the Rust test pinning each rule beside the Go one.
 
 A Go runtime quirk the corpora quote is reproduced in Rust exactly as Zig
 reproduces it, until 0032's normalization removes it from the corpus.
@@ -101,7 +101,7 @@ Each phase builds, passes and makes sense on its own, in small pull requests:
 2. `oap-protocol` and `oap-validation`, passing `fixtures/manifest.json`.
 3. `oap-harness`, `oap-binding` and `oap-client`.
 4. `oap-serve`: the hub, then its stdio and HTTP bindings, held to
-   `drafts/hub.md`.
+   `drafts/agent-service.md`.
 5. The adapters, one per pull request series, each replaying its corpus.
 6. `oap-agent` and `oap-provider`, then `oap-sdk` switched from `oapx` to them
    piece by piece, and `oap-conformance`.

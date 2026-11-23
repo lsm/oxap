@@ -129,6 +129,13 @@ func TestSmokeHandshakeAndClose(t *testing.T) {
 	if client.transport.cmd.Process == nil {
 		t.Fatal("expected a running runtime process")
 	}
+	request := providerFrame("provider.describe.request", map[string]any{})
+	sub := client.transport.subscribeStream(string(request.ID))
+	defer sub.close()
+	reply, err := providerRequest(testContext(t), client.transport, sub, 5*time.Second, request)
+	if err != nil || reply.Type != "provider.describe.response" {
+		t.Fatalf("describe provider: %s, %v", reply.Type, err)
+	}
 }
 
 func TestSmokeModelsList(t *testing.T) {

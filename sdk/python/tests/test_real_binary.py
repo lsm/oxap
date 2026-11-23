@@ -1,4 +1,4 @@
-"""End-to-end coverage against a real ``oapx serve agent,provider --stdio`` host.
+"""End-to-end coverage against a real ``oxap serve --config <generated-server.json>`` host.
 
 Every test here needs ``OAP_SDK_BINARY_PATH`` and skips without it, so a green
 ``pytest`` with the variable unset means **zero** real-runtime coverage. Build
@@ -83,6 +83,13 @@ async def test_handshake_against_the_real_host(real_binary: str) -> None:
     try:
         assert transport.connected
         assert transport.pid is not None
+        async with transport.route(request_id="describe") as route:
+            await transport.send({
+                "protocol": "open-agent-protocol", "version": "0.1",
+                "profile": "open-agent-protocol.model-provider-core",
+                "type": "provider.describe.request", "id": "describe", "payload": {},
+            })
+            assert (await route.next_frame(5.0))["type"] == "provider.describe.response"
     finally:
         await transport.close()
 
@@ -209,7 +216,7 @@ async def test_requests_after_close_fail_cleanly(real_binary: str) -> None:
 async def test_handshake_timeout_is_respected(real_binary: str) -> None:
     """An absurdly short handshake budget fails fast instead of hanging."""
     transport = StdioTransport(
-        command=real_binary, handshake_timeout=0.000_001
+        command=real_binary, env=smoke_env(), handshake_timeout=0.000_001
     )
     with pytest.raises(MakaiStreamError, match="handshake timed out"):
         await transport.connect()

@@ -3,7 +3,7 @@
 Status: proposed for OXAP 0.2.0
 Date: 2026-11-20
 Profiles: Agent Control and Model Provider; a separate messaging protocol is proposed
-Amends: [the CLI draft](../drafts/cli.md), the [multi-session binding](../drafts/hub.md),
+Amends: [the CLI draft](../drafts/cli.md), the [multi-session binding](../drafts/agent-service.md),
 the [raw stdio binding](../drafts/endpoint-stdio.md), the CLI form in
 [Decision 0027](0027-composed-stdio-profiles.md), the daemon naming and command
 in [Decision 0038](0038-one-released-binary-and-a-library-for-every-language.md),
@@ -44,7 +44,7 @@ listener keeps its single-user, loopback-only deployment contract.
 
 `agent.adapters` is the registry for the Agent service. It can include OXAP's
 own loop and adapters for external harnesses such as Codex and Claude Code.
-The [multi-session binding](../drafts/hub.md) uses that registry to resolve the
+The [multi-session binding](../drafts/agent-service.md) uses that registry to resolve the
 adapter selected at session open. The [raw stdio binding](../drafts/endpoint-stdio.md)
 takes an adapter name from its binding configuration and carries raw Agent
 Control envelopes. Both resolve adapters from `agent.adapters`. A raw binding
