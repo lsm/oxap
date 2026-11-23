@@ -153,8 +153,7 @@ impl SessionData {
                     message_id: Some(turn.message_id.clone()),
                     part,
                 };
-                let id = runtime.new_id("event");
-                Envelope::new(EnvelopeType::CONTENT_DELTA, id, &delta)
+                Envelope::new(EnvelopeType::CONTENT_DELTA, runtime.new_id("event"), &delta)
                     .expect("delta payload serializes")
             }
             Observation::Result(frame)
@@ -168,6 +167,7 @@ impl SessionData {
         };
         let sequence = self.session.active_runs[0].as_of_sequence.get_or_insert(1);
         *sequence += 1;
+        self.session.transcript_cursor = sequence.to_string();
         self.session.updated_at_ms = runtime.now_ms();
         event.sequence = Some(*sequence);
         event.timestamp_ms = Some(self.session.updated_at_ms);
@@ -212,6 +212,7 @@ impl SessionData {
         let events = Subscriber::new(DEFAULT_QUEUE_CAPACITY);
         events.offer(start, false);
         self.session.status = SessionStatus::RUNNING;
+        self.session.transcript_cursor = "1".into();
         self.session.updated_at_ms = now;
         self.session.active_run_id = Some(run_id.clone());
         self.session.active_runs = vec![ActiveRun {
@@ -344,11 +345,10 @@ impl ActiveTurn {
             Envelope::new(EnvelopeType::RUN_FAILED, id, &failed)
         }
         .expect("terminal payload serializes");
-        let total_cost = frame.total_cost_usd.and_then(|cost| {
-            oxap_adapter::gojson::go_float(cost)
-                .parse::<serde_json::Number>()
-                .ok()
-        });
+        let total_cost = frame
+            .total_cost_usd
+            .map(oxap_adapter::gojson::go_float)
+            .and_then(|cost| cost.parse::<serde_json::Number>().ok());
         let mut cost = serde_json::json!({
             "num_turns": frame.num_turns,
             "total_cost_usd": total_cost,

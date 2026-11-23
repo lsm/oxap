@@ -18,7 +18,8 @@ CLI peer replays the catalog-selected `streaming-provenance` and
 before each matching result and repeats the matching result. Compare the
 public stream with the corpus after normalizing generated IDs and timestamps.
 Check the sequence and shared assistant message ID through the terminal, and
-confirm each settled session returns to idle and accepts the next submit.
+confirm the public state cursor follows the emitted sequence. Each settled
+session returns to idle and accepts the next submit.
 
 The buffered variant sends streaming deltas before the matching echo. The
 live variant sends them after the public submit returns. Disconnect inference,
