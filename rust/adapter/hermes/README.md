@@ -6,9 +6,11 @@ the corpus in `fixtures/adapters/hermes-v0.23.3`.
 
 On Unix, `Adapter` implements the shared adapter contract for creating,
 reopening, inspecting and closing Hermes sessions. Construct it with a
-`ProcessConfig` and a configured model. The shared session exposes the
-stored Hermes binding and an idle OAP state. Use the gateway API below
-for prompt control, run streams and reasoning settings.
+`ProcessConfig` and a configured model. The shared session submits text
+and returns an owned OAP run stream after admission. Its state is queued
+while admission is pending, running after the gateway opens a turn, and
+idle again after a turn settles or the gateway expressly refuses admission.
+Use the gateway API below for input answers, interruption and reasoning settings.
 
 On Unix, `GatewaySession::create` starts the gateway, creates a native
 session, and keeps its runtime and stored identities. A requested reasoning

@@ -593,7 +593,7 @@ jobs:
     name: Rust SDK
     needs: [unit-tests]
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ github.event_name == 'push' && 25 || 15 }}
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: rust

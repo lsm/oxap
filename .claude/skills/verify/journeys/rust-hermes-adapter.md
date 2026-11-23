@@ -206,3 +206,21 @@ sends the recorded resume request and returns the restored model and binding.
 Both paths reject a reasoning setting the shared adapter has yet to
 advertise. After close, the gateway has reached EOF and the shared session
 returns `SessionClosed` to a state query.
+
+Replay recorded prompt refusals and two successful prompts through the same
+shared session and its owned event stream:
+
+```sh
+python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
+  "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --shared-submit shared-submit
+```
+
+Expect queued state with no run IDs while the gateway withholds its first
+receipt. A concurrent submit returns `RunActive`. Each of the three recorded
+refusals returns the session to idle. Expect two subsequent admissions, 310
+sequenced envelopes with independent run IDs, and one clean gateway EOF.
+The gateway withholds each run's deltas until the caller observes a running
+session and a busy refusal. The first run adds 300 deltas to the corpus
+replay. The caller waits for idle before draining them and checks every
+sequence through the terminal. The second run follows the original corpus.
+A model override must be refused before a gateway write.

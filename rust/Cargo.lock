@@ -1105,6 +1105,7 @@ name = "oxap-adapter-hermes"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "futures-channel",
  "futures-executor",
  "oxap-adapter",
  "oxap-harness",

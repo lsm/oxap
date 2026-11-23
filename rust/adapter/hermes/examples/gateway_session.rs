@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [python, source, state, mode, model]
             if matches!(
                 mode.as_str(),
-                "--run" | "--reopen" | "--reopen-deadline" | "--shared-reopen"
+                "--run" | "--reopen" | "--reopen-deadline" | "--shared-reopen" | "--shared-submit"
             ) =>
         {
             (python, source, state, mode.as_str(), model.as_str(), None)
@@ -42,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>]"
                     .into(),
             );
         }
@@ -73,6 +73,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if matches!(mode, "--shared-open" | "--shared-reopen") {
         return shared_session(config, (mode == "--shared-reopen").then_some(model));
+    }
+    if mode == "--shared-submit" {
+        return shared_submit(config, state, model);
     }
     let timeout = if mode == "--reopen-deadline" {
         Duration::from_secs(1)
@@ -265,6 +268,133 @@ fn shared_session(
         block_on(session.state()),
         Err(Error::SessionClosed)
     ));
+    println!("gateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn shared_submit(
+    config: oxap_adapter_hermes::process::ProcessConfig,
+    state_dir: &str,
+    model: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::future::poll_fn;
+    use std::path::Path;
+    use std::task::{Context, Poll, Waker};
+
+    use futures_executor::block_on;
+    use oxap_adapter::{Adapter, Error, OpenRequest, SubmitRequest};
+    use oxap_protocol::{
+        EnvelopeType, Message, MessageContent, MessageRole, MessageSubmitRequest, Participant,
+        RequestedDeliveryMode, SessionStatus,
+    };
+
+    let adapter = oxap_adapter_hermes::Adapter::new(config, model.to_owned());
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        participant: Participant {
+            id: "user".into(),
+            ..Participant::default()
+        },
+        ..OpenRequest::default()
+    }))?;
+    let request = SubmitRequest {
+        envelope_id: "caller-submit".into(),
+        request: MessageSubmitRequest {
+            session_id: "session".into(),
+            messages: vec![Message {
+                role: MessageRole::USER,
+                content: MessageContent::from_text("hello"),
+                ..Message::default()
+            }],
+            delivery: RequestedDeliveryMode::AUTO,
+            ..MessageSubmitRequest::default()
+        },
+    };
+    let mut unsupported = request.clone();
+    unsupported.request.model_id = Some("other".into());
+    assert!(matches!(
+        block_on(session.submit(unsupported)),
+        Err(Error::UnsupportedControl(_))
+    ));
+    let state_dir = Path::new(state_dir);
+    let mut pending = session.submit(request.clone());
+    assert!(matches!(
+        pending
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Pending
+    ));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !state_dir.join("prompt-received").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "gateway did not receive prompt"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let state = block_on(session.state())?;
+    assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
+    assert!(matches!(
+        block_on(session.submit(request.clone())),
+        Err(Error::RunActive)
+    ));
+    std::fs::write(state_dir.join("release-refusal"), "")?;
+    assert!(matches!(block_on(pending), Err(Error::Harness(_))));
+    assert_eq!(
+        (state.status, block_on(session.state())?.status),
+        (SessionStatus::QUEUED, SessionStatus::IDLE)
+    );
+    println!("PENDING ADMISSION: queued");
+    for expected in ["queued", "voice session active"] {
+        let Err(error) = block_on(session.submit(request.clone())) else {
+            panic!("gateway refusal admitted a run");
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::IDLE);
+        assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
+    }
+    println!("REFUSALS RETURNED TO IDLE: 3");
+    for index in 1..=2 {
+        let (admission, mut stream) = block_on(session.submit(request.clone()))?;
+        let run_id = admission.run_id.clone().ok_or("missing admitted run")?;
+        println!("admission: {}", serde_json::to_string(&admission)?);
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::RUNNING);
+        assert_eq!(state.active_run_id, Some(run_id));
+        assert_eq!(state.active_runs.len(), 1);
+        assert_eq!(
+            state.active_runs[0].admitted_submit_requests[0].as_str(),
+            "caller-submit"
+        );
+        assert!(matches!(
+            block_on(session.submit(request.clone())),
+            Err(Error::RunActive)
+        ));
+        let first = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx)))
+            .ok_or("missing run.started")??;
+        assert_eq!(first.envelope_type, EnvelopeType::RUN_STARTED);
+        println!("envelope: {}", serde_json::to_string(&first)?);
+        std::fs::write(state_dir.join(format!("release-run-{index}")), "")?;
+        if index == 1 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while block_on(session.state())?.status != SessionStatus::IDLE {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "run did not settle while the stream was unread"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
+            println!("envelope: {}", serde_json::to_string(&event?)?);
+        }
+        let state = block_on(session.state())?;
+        assert_eq!(state.status, SessionStatus::IDLE);
+        assert!(state.active_run_id.is_none() && state.active_runs.is_empty());
+    }
+    block_on(session.close())?;
     println!("gateway exited cleanly");
     Ok(())
 }

@@ -59,7 +59,9 @@ impl GatewaySession {
                     return Ok(PromptObservation::Delta(part));
                 }
                 EVENT_MESSAGE_COMPLETE => {
-                    let payload = decode_strict(event.payload_bytes()).map_err(Error::harness)?;
+                    let payload: MessageCompletePayload =
+                        decode_strict(event.payload_bytes()).map_err(Error::harness)?;
+                    self.observed_settlement = !payload.status.is_empty();
                     return Ok(project_settlement(payload));
                 }
                 EVENT_MESSAGE_START => {
