@@ -10,7 +10,10 @@ reopening, inspecting and closing Hermes sessions. Construct it with a
 and returns an owned OAP run stream after admission. Its state is queued
 while admission is pending, running after the gateway opens a turn, and
 idle again after a turn settles or the gateway expressly refuses admission.
-Use the gateway API below for input answers, interruption and reasoning settings.
+Cancel an admitted run through the shared session. The response acknowledges
+the interrupt request. Native settlement determines the terminal event, and
+retrying an accepted cancel during the same run returns its receipt again.
+Use the gateway API below for input answers and reasoning settings.
 
 On Unix, `GatewaySession::create` starts the gateway, creates a native
 session, and keeps its runtime and stored identities. A requested reasoning

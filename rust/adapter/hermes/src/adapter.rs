@@ -18,10 +18,13 @@ use oxap_protocol::{
 };
 
 use crate::{
-    gateway_session::PromptStartError,
+    gateway_session::{interrupt, PromptStartError},
+    native::METHOD_SESSION_INTERRUPT,
     process::{Process, ProcessConfig},
     GatewayRun, GatewaySession, Observation, RunObservation,
 };
+
+const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Adapter {
     process: ProcessConfig,
@@ -47,6 +50,7 @@ impl Adapter {
             ("session.message.submit", SupportLevel::DEGRADED),
             ("session.message.delivery.auto", SupportLevel::DEGRADED),
             ("run.streaming", SupportLevel::NATIVE),
+            ("run.cancel", SupportLevel::DEGRADED),
         ]
         .into_iter()
         .map(|(feature, level)| {
@@ -74,6 +78,8 @@ impl Adapter {
             },
             capability_revision: pin.capability_revision.clone(),
             max_active_runs_per_session: 1,
+            cancellation_target: "session".into(),
+            cancellation_implementation: METHOD_SESSION_INTERRUPT.into(),
             ..Descriptor::default()
         }
     }
@@ -90,7 +96,7 @@ impl AdapterContract for Adapter {
             refuse_unadvertised_tools(&request, &[])?;
             refuse_unadvertised_settings(&request, &Self::descriptor().capabilities)?;
 
-            let deadline = Some(Instant::now() + Duration::from_secs(30));
+            let deadline = Some(Instant::now() + RPC_TIMEOUT);
             let session_id = if request.session_id.as_str().is_empty() {
                 self.runtime.new_id("session").into()
             } else {
@@ -124,10 +130,13 @@ impl AdapterContract for Adapter {
             state.updated_at_ms = self.runtime.now_ms();
             Ok(Box::new(OpenedSession {
                 stored_id: gateway.stored_id().to_owned(),
+                runtime_id: gateway.runtime_id().to_owned(),
                 process: gateway.process.clone(),
+                control: Arc::new(Mutex::new(())),
                 slot: Arc::new(Mutex::new(SessionSlot {
                     gateway: Some(gateway),
                     state,
+                    cancel_accepted: false,
                 })),
                 runtime: self.runtime.clone(),
             }) as Box<dyn Session>)
@@ -137,14 +146,17 @@ impl AdapterContract for Adapter {
 
 struct OpenedSession {
     process: Arc<Process>,
+    control: Arc<Mutex<()>>,
     slot: Arc<Mutex<SessionSlot>>,
     stored_id: String,
+    runtime_id: String,
     runtime: Runtime,
 }
 
 struct SessionSlot {
     gateway: Option<GatewaySession>,
     state: SessionState,
+    cancel_accepted: bool,
 }
 
 impl SessionSlot {
@@ -154,6 +166,7 @@ impl SessionSlot {
         }
         self.state.active_run_id = None;
         self.state.active_runs.clear();
+        self.cancel_accepted = false;
         self.state.updated_at_ms = runtime.now_ms();
         self.state.status = if gateway.is_some() {
             SessionStatus::IDLE
@@ -162,15 +175,30 @@ impl SessionSlot {
         };
         self.gateway = gateway;
     }
+
+    fn cancel_receipt(&self, run_id: &RunId) -> Result<RunCancelResponse, Error> {
+        if self.state.status == SessionStatus::CLOSED {
+            return Err(Error::SessionClosed);
+        }
+        if self.state.active_run_id.as_ref() != Some(run_id) {
+            return Err(Error::RunNotFound);
+        }
+        Ok(RunCancelResponse {
+            session_id: self.state.session_id.clone(),
+            run_id: run_id.clone(),
+            accepted: true,
+            status: RunStatus::CANCELLING,
+        })
+    }
 }
 
-fn lock_slot(slot: &Mutex<SessionSlot>) -> MutexGuard<'_, SessionSlot> {
-    slot.lock().unwrap_or_else(|poison| poison.into_inner())
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 impl OpenedSession {
     fn open_slot(&self) -> Result<MutexGuard<'_, SessionSlot>, Error> {
-        let slot = lock_slot(&self.slot);
+        let slot = lock(&self.slot);
         if slot.state.status == SessionStatus::CLOSED {
             return Err(Error::SessionClosed);
         }
@@ -185,7 +213,7 @@ impl OpenedSession {
     }
 
     fn shutdown(&self) -> Result<(), Error> {
-        lock_slot(&self.slot).state.status = SessionStatus::CLOSED;
+        lock(&self.slot).state.status = SessionStatus::CLOSED;
         self.process.close().map_err(Error::harness)
     }
 }
@@ -229,22 +257,26 @@ impl Session for OpenedSession {
                 (gateway, slot.state.clone())
             };
             let slot = self.slot.clone();
+            let control = self.control.clone();
             let runtime = self.runtime.clone();
             let (reply, admission) = oneshot::channel();
             std::thread::spawn(move || {
-                let deadline = Some(Instant::now() + Duration::from_secs(30));
-                let mut run = match gateway.start_run_classified(
-                    &text,
-                    state.session_id.clone(),
-                    &state.current_model_id,
-                    runtime.clone(),
-                    deadline,
-                ) {
+                let started = {
+                    let _control = lock(&control);
+                    gateway.start_run_classified(
+                        &text,
+                        state.session_id.clone(),
+                        &state.current_model_id,
+                        runtime.clone(),
+                        Some(Instant::now() + RPC_TIMEOUT),
+                    )
+                };
+                let mut run = match started {
                     Ok(run) => run,
                     Err(error) => {
                         let reusable = matches!(error, PromptStartError::Refused(_))
                             && gateway.client().err().is_none();
-                        lock_slot(&slot).settle(reusable.then_some(gateway), &runtime);
+                        lock(&slot).settle(reusable.then_some(gateway), &runtime);
                         let _ = reply.send(Err(error.into()));
                         return;
                     }
@@ -264,7 +296,7 @@ impl Session for OpenedSession {
                 }];
                 state.updated_at_ms = runtime.now_ms();
                 {
-                    let mut slot = lock_slot(&slot);
+                    let mut slot = lock(&slot);
                     if slot.state.status == SessionStatus::CLOSED {
                         return;
                     }
@@ -275,7 +307,7 @@ impl Session for OpenedSession {
                 let _ = reply.send(Ok((response, stream)));
                 let terminal = forward_run(&events, &mut run);
                 let gateway = gateway.observed_settlement.then_some(gateway);
-                lock_slot(&slot).settle(gateway, &runtime);
+                lock(&slot).settle(gateway, &runtime);
                 if let Ok(Some(event)) = terminal {
                     let _ = events.unbounded_send(Ok(event));
                 }
@@ -288,8 +320,48 @@ impl Session for OpenedSession {
         self.while_open(Err(Error::InteractionNotFound))
     }
 
-    fn cancel(&self, _: RunId) -> BoxFuture<'_, RunCancelResponse> {
-        self.while_open(Err(Error::RunNotFound))
+    fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {
+        Box::pin(async move {
+            {
+                let slot = self.open_slot()?;
+                let receipt = slot.cancel_receipt(&run_id)?;
+                if slot.cancel_accepted {
+                    return Ok(receipt);
+                }
+            }
+            let slot = self.slot.clone();
+            let control = self.control.clone();
+            let process = self.process.clone();
+            let runtime_id = self.runtime_id.clone();
+            let (reply, result) = oneshot::channel();
+            std::thread::Builder::new()
+                .spawn(move || {
+                    let _control = lock(&control);
+                    let outcome = (|| {
+                        let receipt = {
+                            let slot = lock(&slot);
+                            let receipt = slot.cancel_receipt(&run_id)?;
+                            if slot.cancel_accepted {
+                                return Ok(receipt);
+                            }
+                            receipt
+                        };
+                        interrupt(
+                            &process.client,
+                            &runtime_id,
+                            Some(Instant::now() + RPC_TIMEOUT),
+                        )?;
+                        let mut slot = lock(&slot);
+                        if slot.state.active_run_id.as_ref() == Some(&run_id) {
+                            slot.cancel_accepted = true;
+                        }
+                        Ok(receipt)
+                    })();
+                    let _ = reply.send(outcome);
+                })
+                .map_err(Error::harness)?;
+            result.await.unwrap_or(Err(Error::SessionClosed))
+        })
     }
 
     fn resume(&self, _: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
