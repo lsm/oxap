@@ -171,6 +171,7 @@ const (
 	TypeExecutionFailed      Type = "session.execution.failed"
 	TypeExecutionInterrupted Type = "session.execution.interrupted"
 	TypeStepStarted          Type = "session.step.started"
+	TypeStepFirstToken       Type = "session.step.first-token"
 	TypeStepStreamed         Type = "session.step.streamed"
 	TypeStepEnded            Type = "session.step.ended"
 	TypeStepFailed           Type = "session.step.failed"
@@ -221,7 +222,7 @@ func (t Type) Supported() bool {
 	switch t {
 	case TypeInboxEnqueued, TypeInboxDelivered, TypeInboxCancelled, TypeInboxDeliveryChanged,
 		TypeExecutionStarted, TypeExecutionSucceeded, TypeExecutionFailed, TypeExecutionInterrupted,
-		TypeStepStarted, TypeStepStreamed, TypeStepEnded, TypeStepFailed,
+		TypeStepStarted, TypeStepFirstToken, TypeStepStreamed, TypeStepEnded, TypeStepFailed,
 		TypeTextStarted, TypeTextDelta, TypeTextEnded, TypeReasoningStarted, TypeReasoningDelta, TypeReasoningEnded,
 		TypeToolInputStarted, TypeToolInputDelta, TypeToolInputEnded, TypeToolCalled, TypeToolProgress,
 		TypeToolSuccess, TypeToolFailed, TypeCreated, TypeAgentSelected, TypeModelSelected, TypeMoved,

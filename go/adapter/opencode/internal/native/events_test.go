@@ -14,3 +14,11 @@ func TestArchiveEventsAreDurable(t *testing.T) {
 		}
 	}
 }
+
+func TestFirstTokenEventIsDurable(t *testing.T) {
+	raw := `{"id":"evt_1","type":"session.step.first-token","data":{"sessionID":"ses_a","assistantMessageID":"msg_a"},"durable":{"aggregateID":"ses_a","seq":1,"version":1}}`
+	event, err := DecodeEvent([]byte(raw))
+	if err != nil || !event.Type.Durable() {
+		t.Fatalf("event=%+v err=%v", event, err)
+	}
+}

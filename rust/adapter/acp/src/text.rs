@@ -274,9 +274,11 @@ impl TextRun {
             return Ok(());
         }
         match header.session_update.as_str() {
-            "agent_message_chunk" => {
+            "agent_message_chunk" | "agent_thought_chunk" => {
+                let thought = header.session_update == "agent_thought_chunk";
                 let chunk = match decode::<AgentMessageChunk>(raw) {
                     Ok(chunk) if chunk.content.kind == "text" => chunk,
+                    _ if thought => return Ok(()),
                     _ => {
                         return self.fail(
                             "acp_invalid_message_chunk",
@@ -286,8 +288,10 @@ impl TextRun {
                         )
                     }
                 };
-                if !chunk.message_id.is_empty() {
-                    let message = match self.native_messages.get(&chunk.message_id) {
+                let message_id = if chunk.message_id.is_empty() {
+                    self.context.message_id.clone()
+                } else {
+                    match self.native_messages.get(&chunk.message_id) {
                         Some(message) => message.clone(),
                         None => {
                             let message = if self.native_messages.is_empty() {
@@ -300,24 +304,33 @@ impl TextRun {
                                 .insert(chunk.message_id, message.clone());
                             message
                         }
-                    };
-                    self.context.message_id = message;
-                }
-                self.texts
-                    .entry(self.context.message_id.clone())
-                    .or_default()
-                    .push_str(&chunk.content.text);
+                    }
+                };
+                let part = if thought {
+                    ContentPart {
+                        part_type: ContentPartType::REASONING,
+                        reasoning: chunk.content.text,
+                        ..ContentPart::default()
+                    }
+                } else {
+                    self.context.message_id = message_id.clone();
+                    self.texts
+                        .entry(message_id.clone())
+                        .or_default()
+                        .push_str(&chunk.content.text);
+                    ContentPart {
+                        part_type: ContentPartType::TEXT,
+                        text: chunk.content.text,
+                        ..ContentPart::default()
+                    }
+                };
                 self.emit(
                     EnvelopeType::CONTENT_DELTA,
                     &ContentDeltaPayload {
                         session_id: self.context.session_id.clone(),
                         run_id: self.context.run_id.clone(),
-                        message_id: Some(self.context.message_id.clone()),
-                        part: ContentPart {
-                            part_type: ContentPartType::TEXT,
-                            text: chunk.content.text,
-                            ..ContentPart::default()
-                        },
+                        message_id: Some(message_id),
+                        part,
                     },
                     RunStatus::RUNNING,
                     None,
@@ -339,7 +352,6 @@ impl TextRun {
                 Ok(())
             }
             "user_message_chunk"
-            | "agent_thought_chunk"
             | "plan"
             | "plan_update"
             | "plan_removed"

@@ -91,13 +91,34 @@ jobs:
         with:
           go-version: '1.27.x'
           cache: true
+      - uses: dtolnay/rust-toolchain@stable
       - name: Build the oapx binary
         run: zig build --build-file zig/build.zig install --prefix /tmp/oapx-go-sdk
+      - name: Verify turn delivery for every registered harness
+        run: |
+          go build -o "$RUNNER_TEMP/goap" ./go/cmd/goap
+          cargo build --locked --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub \
+            --target-dir "$RUNNER_TEMP/harness-rust"
+          python3 -B .claude/skills/verify/scripts/harness-delivery.py \
+            --oxap /tmp/oapx-go-sdk/bin/oxap --goap "$RUNNER_TEMP/goap" \
+            --rust-hub "$RUNNER_TEMP/harness-rust/debug/oap-rust-hub" \
+            --output-dir "$RUNNER_TEMP/harness-delivery"
+      - name: Upload harness delivery wire traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-delivery
+          path: ${{ runner.temp }}/harness-delivery/
+      - name: Prepare configured SDK launch verification
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/go-sdk-launch" /tmp/oapx-go-sdk/bin/oxap
       - name: Run the SDK tests
         env:
-          OAP_SDK_BINARY_PATH: /tmp/oapx-go-sdk/bin/oxap
+          OAP_SDK_BINARY_PATH: ${{ runner.temp }}/go-sdk-launch/oxap
           NODE_ENV: test
-        run: go test -race ./go/sdk/...
+        run: go test -race -v ./go/sdk/...
+      - name: Verify SDK config cleanup
+        if: always()
+        run: python3 .claude/skills/verify/scripts/sdk-config-launch.py check "$RUNNER_TEMP/go-sdk-launch"
       - name: Tests leave no credential store in the checkout
         if: always()
         run: ./scripts/check-no-test-litter.sh

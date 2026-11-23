@@ -60,6 +60,10 @@ pub const Adapter = struct {
         return self.signed_in;
     }
 
+    pub fn hasPendingFlows(self: *const Self) bool {
+        return self.flows.count() != 0;
+    }
+
     pub fn setCapabilityRevision(self: *Self, revision: []const u8) void {
         self.expected_capability_revision = revision;
     }

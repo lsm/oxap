@@ -3,7 +3,7 @@
 Status: proposed for OXAP 0.2.0
 Date: 2026-11-20
 Profiles: Agent Control and Model Provider; a separate messaging protocol is proposed
-Amends: [the CLI draft](../drafts/cli.md), the [multi-session binding](../drafts/hub.md),
+Amends: [the CLI draft](../drafts/cli.md), the [multi-session binding](../drafts/agent-service.md),
 the [raw stdio binding](../drafts/endpoint-stdio.md), the CLI form in
 [Decision 0027](0027-composed-stdio-profiles.md), the daemon naming and command
 in [Decision 0038](0038-one-released-binary-and-a-library-for-every-language.md),
@@ -23,10 +23,12 @@ agents and integrations need a common way to exchange messages.
 
 ### A configuration file selects the services
 
-`oxap serve --config server.json` is the server entry point. `serve` is the
+`oxap serve --config server.yaml` is the server entry point. `serve` is the
 action. A present service section enables that service. An absent section
 leaves it disabled. OXAP 0.2 accepts `agent` and `provider` alone or together.
 The `hub` section is reserved and rejected until the messaging service ships.
+Each service chooses one transport with either `http: <address>` or `stdio: <mode>`.
+The file accepts a strict YAML subset and JSON for generated configurations.
 The server rejects duplicate or unknown configuration members, an empty
 service set, a service without a binding, and conflicting bindings at startup.
 Each HTTP listener requires an explicit address. The multi-session Agent
@@ -42,7 +44,7 @@ listener keeps its single-user, loopback-only deployment contract.
 
 `agent.adapters` is the registry for the Agent service. It can include OXAP's
 own loop and adapters for external harnesses such as Codex and Claude Code.
-The [multi-session binding](../drafts/hub.md) uses that registry to resolve the
+The [multi-session binding](../drafts/agent-service.md) uses that registry to resolve the
 adapter selected at session open. The [raw stdio binding](../drafts/endpoint-stdio.md)
 takes an adapter name from its binding configuration and carries raw Agent
 Control envelopes. Both resolve adapters from `agent.adapters`. A raw binding

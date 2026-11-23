@@ -24,7 +24,7 @@ judges `integer` by mathematical value, including numbers with zero fractional
 part. Thus `1.0` and `1e3` satisfy that type. A JSON Schema `pattern` applies
 to strings and does not constrain a numeric token's original spelling.
 
-[Hub D31 (`drafts/hub.md`)](../drafts/hub.md#d31--go-refused-a-schema-valid-sequence-spelled-10-as-malformed_json--fixed)
+[Hub D31 (`drafts/agent-service.md`)](../drafts/agent-service.md#d31--go-refused-a-schema-valid-sequence-spelled-10-as-malformed_json--fixed)
 keeps that schema-integer acceptance for `sequence` and `timestamp_ms`:
 Go normalizes their integral decimal/exponent spellings before typed decoding.
 D31 remains unchanged. This decision deliberately adds a narrower wire contract

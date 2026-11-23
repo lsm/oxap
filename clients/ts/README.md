@@ -1,7 +1,9 @@
 # @oxap/client (TypeScript)
 
-The TypeScript client for a local `oxap serve` or `goap serve` daemon: drives any OAP adapter
-over the daemon's HTTP + SSE surface with schema/v0.1 envelopes and exact uint64 values. It
+The TypeScript Agent Service client drives OAP adapters over HTTP and SSE
+with schema/v0.1 envelopes and exact uint64 values. Start the product with
+`oxap serve --config examples/agent-service.json` and connect using `dial`.
+Its client type is `AgentServiceClient`, also available as `OapClient`. It
 is the counterpart of the Go `client` package — same wire surface, same
 semantics — so non-Go hosts (HyperNeo and friends) can consume the exact
 envelope stream the Go client sees.
@@ -465,9 +467,9 @@ npm test
   it with the built-in memory adapter on a loopback port, and drives the full
   lifecycle — open → submit → gates → terminal → disconnect/resume — through
   the platform fetch. It skips (not fails) when the go toolchain is missing;
-  point `OAP_GO` at a go binary that is not on `PATH`. Set `OAP_TS_HUB` to an
-  `oapx` binary to run the same suite against `oapx serve` instead, which is
-  what CI's `hub-clients-ts` job does.
+  point `OAP_GO` at a go binary that is not on `PATH`. Set `OAP_TS_AGENT_SERVICE` to an
+  `oxap` binary to run the same suite against the configured Agent Service.
+  CI uses this entry point in its TypeScript client job.
 
 ## Publishing
 

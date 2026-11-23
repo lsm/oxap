@@ -19,6 +19,11 @@ pub const Error = error{
     SilentChild,
 };
 
+pub const StderrRedaction = struct {
+    value: []const u8,
+    variable: []const u8,
+};
+
 pub const Spawn = struct {
     executable: []const u8,
     args: []const []const u8 = &.{},
@@ -28,6 +33,7 @@ pub const Spawn = struct {
     exit_grace_ns: u64 = default_exit_grace_ns,
     read_idle_ns: u64 = default_read_idle_ns,
     framing: Framing = .lines,
+    stderr_redaction: ?StderrRedaction = null,
 };
 
 pub const Departure = enum { running, exited, signalled, stranded };
@@ -74,6 +80,9 @@ pub const Transport = struct {
     framing: Framing,
     threaded: std.Io.Threaded = undefined,
     child: ?std.process.Child = null,
+    stderr_task: ?std.Io.Future(void) = null,
+    stderr_done: std.Io.Event = .unset,
+    stderr_buffer: []u8 = &.{},
     streams: std.Io.File.MultiReader.Buffer(1) = undefined,
     multi: std.Io.File.MultiReader = undefined,
     reading: bool = false,
@@ -109,25 +118,62 @@ pub const Transport = struct {
         };
         errdefer self.threaded.deinit();
 
+        if (request.stderr_redaction) |redaction| std.debug.assert(redaction.value.len > 0);
         var child = try std.process.spawn(self.io(), .{
             .argv = argv.items,
             .environ_map = &environment,
             .cwd = if (request.working_directory) |path| .{ .path = path } else .inherit,
             .stdin = .pipe,
             .stdout = .pipe,
-            .stderr = .inherit,
+            .stderr = if (request.stderr_redaction == null) .inherit else .pipe,
             .create_no_window = true,
         });
         errdefer child.kill(self.io());
 
+        if (request.stderr_redaction) |redaction| {
+            const buffer = try allocator.alloc(u8, redaction.value.len + 4096);
+            errdefer allocator.free(buffer);
+            self.stderr_task = try self.io().concurrent(copyStderr, .{ self, child.stderr.?, redaction, buffer });
+            self.stderr_buffer = buffer;
+            child.stderr = null;
+        }
         self.child = child;
         self.multi.init(allocator, self.io(), self.streams.toStreams(), &.{child.stdout.?});
         self.reading = true;
         return self;
     }
 
+    fn copyStderr(self: *Transport, source: std.Io.File, redaction: StderrRedaction, buffer: []u8) void {
+        const child_io = self.io();
+        defer self.stderr_done.set(child_io);
+        defer source.close(child_io);
+        const output = std.Io.File.stderr();
+        var kept: usize = 0;
+        while (true) {
+            const count = source.readStreaming(child_io, &.{buffer[kept..]}) catch |err| {
+                if (err == error.EndOfStream) output.writeStreamingAll(child_io, buffer[0..kept]) catch {};
+                return;
+            };
+            var bytes = buffer[0 .. kept + count];
+            while (std.mem.find(u8, bytes, redaction.value)) |at| {
+                output.writeStreamingAll(child_io, bytes[0..at]) catch return;
+                output.writeStreamingAll(child_io, redaction.variable) catch return;
+                bytes = bytes[at + redaction.value.len ..];
+            }
+            kept = @min(bytes.len, redaction.value.len - 1);
+            while (!std.mem.startsWith(u8, redaction.value, bytes[bytes.len - kept ..])) kept -= 1;
+            output.writeStreamingAll(child_io, bytes[0 .. bytes.len - kept]) catch return;
+            std.mem.copyForwards(u8, buffer[0..kept], bytes[bytes.len - kept ..]);
+        }
+    }
+
     pub fn deinit(self: *Transport) void {
         self.close();
+        if (self.stderr_task) |*task| {
+            const timeout: std.Io.Timeout = .{ .duration = .{ .clock = .awake, .raw = .fromNanoseconds(@intCast(self.grace)) } };
+            if (self.stderr_done.waitTimeout(self.io(), timeout)) |_| task.await(self.io()) else |_| task.cancel(self.io());
+            self.allocator.free(self.stderr_buffer);
+        }
         if (self.reading) {
             self.multi.deinit();
             self.reading = false;
@@ -291,7 +337,7 @@ pub const Transport = struct {
         const term = self.reap(child) orelse return self.strand(child);
         self.failure = switch (term) {
             .exited => |status| .{ .departure = .exited, .status = status },
-            .signal, .stopped => |signal| .{ .departure = .signalled, .status = @intFromEnum(signal) },
+            .signal, .stopped => |signal| .{ .departure = .signalled, .status = @backingInt(signal) },
             .unknown => |status| .{ .departure = .exited, .status = status },
         };
         self.child = null;

@@ -46,8 +46,10 @@ pub fn stream_parts(records: &[AssistantStreamRecord]) -> Vec<ContentPart> {
     let mut parts = Vec::new();
     for record in records {
         match record.kind.as_str() {
-            "text-chunks" => parts.extend(record.texts.iter().cloned().map(text)),
-            "reasoning-chunks" => parts.extend(record.texts.iter().cloned().map(reasoning)),
+            "text-chunks" if !record.texts.is_empty() => parts.push(text(record.texts.concat())),
+            "reasoning-chunks" if !record.texts.is_empty() => {
+                parts.push(reasoning(record.texts.concat()));
+            }
             "chunk" => parts.extend(record.chunk.as_deref().and_then(chunk_part)),
             _ => {}
         }
@@ -95,13 +97,13 @@ pub fn final_content(
                 return Err(format!(
                     "assistant message contains invalid {} block",
                     block.kind
-                ))
+                ));
             }
             other => {
                 return Err(format!(
                     "unknown assistant content block {}",
                     go_quote(other)
-                ))
+                ));
             }
         }
     }

@@ -1,7 +1,8 @@
 # Open Agent Protocol Examples
 
 These files are illustrative JSON bindings for the draft protocol, not
-conformance tests. Normative executable traces live in `../fixtures/` and are
+conformance tests. Start the configured Agent Service on loopback with
+`oxap serve --config examples/agent-service.json`. Normative executable traces live in `../fixtures/` and are
 listed by `../fixtures/manifest.json`.
 
 `core-run-stream.json`, `capability-refresh.json`, and `core-user-input.json`

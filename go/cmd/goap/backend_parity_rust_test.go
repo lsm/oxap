@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -31,20 +30,11 @@ func TestBackendsMatchRustHub(t *testing.T) {
 		backend := fixtureBackend(t, dir)
 		t.Run(filepath.Base(dir), func(t *testing.T) {
 			scenario := readLines(t, filepath.Join(dir, "scenario.jsonl"))
-			wantOut, wantChild := exchangeWithChild(t, dir, backend, scenario, goap, "serve", "agent")
-			gotOut, gotChild := exchangeWithChild(t, dir, backend, scenario, rust, "serve", "agent")
-			if len(wantOut) < len(scenario) {
-				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(wantOut), len(scenario))
+			goExchange := exchangeWithChild(t, dir, backend, scenario, goap)
+			if len(goExchange.envelopes) < len(scenario) {
+				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(goExchange.envelopes), len(scenario))
 			}
-			if missing, extra := lineDifference(wantOut, gotOut); len(missing)+len(extra) > 0 {
-				t.Errorf("oap-rust-hub answers differently\n--- only goap\n%s\n--- only oap-rust-hub\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
-			}
-			if where := runOrderDifference(t, wantOut, gotOut); where != "" {
-				t.Errorf("oap-rust-hub orders a run differently: %s", where)
-			}
-			if missing, extra := childLineDifference(t, wantChild, gotChild); len(missing)+len(extra) > 0 {
-				t.Errorf("oap-rust-hub writes different data to its child\n--- only goap\n%s\n--- only oap-rust-hub\n%s", strings.Join(missing, "\n"), strings.Join(extra, "\n"))
-			}
+			compareBackendExchanges(t, "oap-rust-hub", goExchange, exchangeWithChild(t, dir, backend, scenario, rust))
 		})
 	}
 	if compared == 0 {

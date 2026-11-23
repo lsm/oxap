@@ -161,6 +161,17 @@ func (h *Hub) openIn(ctx context.Context, adapterName, directory string, request
 		opened.NativeSessionID = native.NativeSessionID()
 	}
 	entry.binding = opened
+	if h.bindings != nil {
+		entry.recordModel = func(ctx context.Context, state protocol.SessionState) {
+			h.bindingMu.Lock()
+			defer h.bindingMu.Unlock()
+			if held, ok := h.sessions.get(entry.id); !ok || held != entry || entry.binding.Model == state.CurrentModelID {
+				return
+			}
+			entry.binding.Model = state.CurrentModelID
+			h.recordBinding(ctx, entry.binding, binding.ActionOpened, state.UpdatedAtMS)
+		}
+	}
 	settled := err != nil || state.Status == protocol.SessionClosed
 	began := binding.ActionOpened
 	if request.Reopen {

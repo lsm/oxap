@@ -13,7 +13,7 @@ Amends: [Decision 0001](0001-agent-control-v0.1-executable-core.md), whose
 [Decision 0009](0009-compound-open.md), whose open naming an existing session
 is refused rather than reopened; [Decision 0012](0012-persistence-is-not-in-v0.1-core.md),
 whose staging list gains two units and whose `transcript-load` gains a
-constraint; and [the hub draft](../drafts/hub.md), whose closed session stays
+constraint; and [the hub draft](../drafts/agent-service.md), whose closed session stays
 listed
 Follows: [Decision 0015](0015-evidence-from-implementations-we-do-not-control.md)
 for the evidence each unit needs

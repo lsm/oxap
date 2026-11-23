@@ -200,7 +200,7 @@ Request `{"adapter", "directory"?, "title"?, "message"}`. Opens a session on
 
 The core's `openRequest` carries no working directory: a session runs in its
 adapter's configured `working_directory`. A `directory` naming another place is
-served only by an entry marked `"any_directory": true` (`drafts/hub.md`, the
+served only by an entry marked `"any_directory": true` (`drafts/agent-service.md`, the
 registry), which builds an adapter for that directory, and must then be
 absolute. Over any other entry it is refused `invalid_request` with the
 configured `working_directory` in its details, so the caller learns where the

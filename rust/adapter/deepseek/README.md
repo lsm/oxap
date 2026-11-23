@@ -48,15 +48,20 @@ policy becomes the `--patch` layer `compaction_patch` writes. Go also accepts a
 caller-supplied client factory, which refuses either setting; the Rust adapter
 always starts its own process, so it has no such branch.
 
-`Adapter::open` is Go's `Open`. It refuses a reopen, attached tool sources and
-tools, and unadvertised settings before starting anything, then starts the
+`Adapter::open` is Go's `Open`. It refuses a reopen naming no native session,
+attached tool sources and tools, and unadvertised settings before starting
+anything, then starts the
 runtime through `launch`, writing a compaction patch to an owner-only temporary
 file under a fresh name that is removed once the runtime has started or failed
 to. A runtime that does not finish the handshake within `start_timeout` (30
 seconds by default) is killed and the open fails, and a timeout too long for
 the clock to represent fails the open before anything starts. The `session::Session` it returns is
-idle under the request's session id, or one minted from `runtime::Runtime`, and
-that id is also the native session id. It refuses resolve and cancel, resumes
+idle under the request's session id, or one minted from `runtime::Runtime`. A
+fresh open runs under a native session id of its own, 32 random hex characters
+(`Config::native_session_id` overrides the minting); a reopen sends
+`session/resume` with the bound native id right after `initialize`, reports the
+session recovered, and is refused as unsatisfiable when the harness cannot
+resume it. It refuses resolve and cancel, resumes
 only a run its journal has ended, reporting a `ReplayGap` for a cursor older
 than the journal holds, and closes by shutting the runtime down once.
 A session dropped without a close shuts its runtime down the same way, even

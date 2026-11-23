@@ -16,6 +16,7 @@ pub const METHOD_TURN_COMPLETED: &str = "turn/completed";
 pub const METHOD_ITEM_STARTED: &str = "item/started";
 pub const METHOD_ITEM_COMPLETED: &str = "item/completed";
 pub const METHOD_AGENT_DELTA: &str = "item/agentMessage/delta";
+pub const METHOD_REASONING_DELTA: &str = "item/reasoning/summaryTextDelta";
 pub const METHOD_COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
 pub const METHOD_FILE_APPROVAL: &str = "item/fileChange/requestApproval";
 pub const METHOD_USER_INPUT: &str = "item/tool/requestUserInput";

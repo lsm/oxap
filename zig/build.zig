@@ -2918,6 +2918,7 @@ pub fn build(b: *std.Build) void {
         .name = "oxap",
         .root_module = makai_cli_module,
     });
+
     const makai_cli_test = b.addTest(.{ .root_module = makai_cli_module });
     const makai_cli_test_run = b.addRunArtifact(makai_cli_test);
     const bounded_output_test_run = b.addRunArtifact(b.addTest(.{ .root_module = bounded_output_mod }));

@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.42] - 2026-11-22
+
+### Added
+
+- Hermes hub entries support custom Responses endpoints. ([#1958](https://github.com/lsm/oxap/pull/1958))
+- OpenCode and Pi hub entries can select a gateway and model with `model_endpoint`. ([#1957](https://github.com/lsm/oxap/pull/1957))
+- Codex and DeepSeek hub entries can select a gateway outside the provider catalog with `model_endpoint`. ([#1951](https://github.com/lsm/oxap/pull/1951))
+
+### Fixed
+
+- DeepSeek Flash accepts prompts with inline images. ([#1961](https://github.com/lsm/oxap/pull/1961))
+- DeepSeek threads resume after a hub restart using their own native session IDs. ([#1960](https://github.com/lsm/oxap/pull/1960))
+- Stdio hubs forward DeepSeek model switches. ([#1959](https://github.com/lsm/oxap/pull/1959))
+- Hub clients receive Codex reasoning summaries, Docker Agent reasoning, and Copilot reasoning deltas. ([#1956](https://github.com/lsm/oxap/pull/1956), [#1955](https://github.com/lsm/oxap/pull/1955), [#1954](https://github.com/lsm/oxap/pull/1954))
+
+### Merged pull requests
+
+- Clarify custom endpoint configuration for Hermes v0.23.3. ([#1953](https://github.com/lsm/oxap/pull/1953))
+- Check stdio turn delivery across all registered harnesses. ([#1952](https://github.com/lsm/oxap/pull/1952))
+- Align package versions for the alpha.41 release. ([#1950](https://github.com/lsm/oxap/pull/1950))
+
+## [0.1.0-alpha.41] - 2026-11-21
+
+### Added
+
+- Claude hub entries can use an Anthropic-compatible gateway configured by URL and credential environment variable name. Hub output and Claude stderr redact the credential. ([#1948](https://github.com/lsm/oxap/pull/1948))
+
+### Fixed
+
+- Long DeepSeek reasoning batches no longer overflow hub subscriptions and drop the assistant reply or turn result. ([#1947](https://github.com/lsm/oxap/pull/1947))
+
+## [0.1.0-alpha.40] - 2026-11-21
+
+### Merged pull requests
+
+- **Route DeepSeek hub entries through catalog providers** ([#1944](https://github.com/lsm/oxap/pull/1944)): DeepSeek hub entries can now route dsh to a catalog provider such as OpenCode Go.
+- **docs: design routing the deepseek adapter through a catalogued model provider** ([#1943](https://github.com/lsm/oxap/pull/1943)): Design only — no behavior change.
+- **agent: finish each turn in one place** ([#1942](https://github.com/lsm/oxap/pull/1942)): Third PR of stage 4 in `drafts/event-driven-loop.md`.
+- **oapx: reuse the state's transcript cursor until the session file grows** ([#1941](https://github.com/lsm/oxap/pull/1941)): Every `state` read on an oapx session parsed the whole saved session file to compute `transcript_cursor`, so polling cost grew with the conversation.
+- **opencode: Upgrade to 2.3.2** ([#1938](https://github.com/lsm/oxap/pull/1938))
+- **hermes: Upgrade to v0.23.3** ([#1933](https://github.com/lsm/oxap/pull/1933)): Updates the Hermes pin to v0.23.3 and admits its group activity event as observed-only.
+- **pi: Pin the 1.6.0 release** ([#1932](https://github.com/lsm/oxap/pull/1932)): Updates the Pi pin to v1.6.0 and carries the previous corpus with its original case provenance.
+- **codex: report live work so an idle session can park** ([#1931](https://github.com/lsm/oxap/pull/1931)): The hub never parked a codex session, because the adapter had no live-work hook.
+- **deepseek: Pin the latest release candidate** ([#1930](https://github.com/lsm/oxap/pull/1930)): Updates the DeepSeek Harness pin to dsh-v0.2.2-rc.5 and carries the existing corpus forward with its original case provenance.
+- **oapx: park an idle session after five seconds by default** ([#1923](https://github.com/lsm/oxap/pull/1923)): A served host runs few turns at once but may hold many idle sessions.
+- **bench: set TCP_NODELAY on the scripted provider** ([#1922](https://github.com/lsm/oxap/pull/1922)): The Linux zig-loop `history` step rose from about 13 ms to 57 ms per turn, and a bisect puts the jump at the shared HTTP client (#1613).
+- **oapx: keep a session that holds a job record from parking** ([#1921](https://github.com/lsm/oxap/pull/1921)): A reopened oapx session starts with an empty job table.
+- **claude: report live work so the hub can park an idle Claude Code session** ([#1920](https://github.com/lsm/oxap/pull/1920)): The hub's `--park-after` stops an idle session's harness and resumes it on the next input, but only for adapters that report their background work.
+- **Define the OXAP server services** ([#1919](https://github.com/lsm/oxap/pull/1919))
+- **agent: run turns in one loop and start each turn in one place** ([#1918](https://github.com/lsm/oxap/pull/1918)): Second PR of stage 4 in `drafts/event-driven-loop.md`.
+- **oapx: allocate from the C heap where libc is linked** ([#1917](https://github.com/lsm/oxap/pull/1917)): In ReleaseSafe, Zig gives `main` a `SafeAllocator`.
+- **agent: hold a run's loop state in one value** ([#1916](https://github.com/lsm/oxap/pull/1916)): First PR of stage 4 in `drafts/event-driven-loop.md`.
+- **bench: measure what parking frees and what a wake costs** ([#1915](https://github.com/lsm/oxap/pull/1915)): The resource benchmark could serve Zig with `--park-after`, but it never checked that a session had actually parked, and it never woke one.
+
 ## [0.1.0-alpha.39] - 2026-11-20
 
 ### Merged pull requests

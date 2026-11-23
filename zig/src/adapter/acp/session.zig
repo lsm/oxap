@@ -637,8 +637,9 @@ pub const Reducer = struct {
     }
 
     fn applyUpdate(self: *Reducer, update: std.json.ObjectMap, kind: []const u8) !void {
-        if (std.mem.eql(u8, kind, "agent_message_chunk")) {
-            try self.applyChunk(update);
+        const thought = std.mem.eql(u8, kind, "agent_thought_chunk");
+        if (thought or std.mem.eql(u8, kind, "agent_message_chunk")) {
+            try self.applyChunk(update, thought);
             return;
         }
         if (std.mem.eql(u8, kind, "tool_call")) {
@@ -662,14 +663,14 @@ pub const Reducer = struct {
         try self.failActive("acp_unknown_update", "unknown stable ACP session update");
     }
 
-    fn applyChunk(self: *Reducer, update: std.json.ObjectMap) !void {
+    fn applyChunk(self: *Reducer, update: std.json.ObjectMap, thought: bool) !void {
         if (gojson.foldedWrongType(update, &.{"content"}, .object) or !chunkDecodes(update)) {
-            try self.failActive("acp_invalid_message_chunk", "unsupported assistant chunk");
+            if (!thought) try self.failActive("acp_invalid_message_chunk", "unsupported assistant chunk");
             return;
         }
         const content_type = gojson.foldedSet(update, &.{ "content", "type" }) orelse std.json.Value{ .null = {} };
         if (content_type != .string or !std.mem.eql(u8, content_type.string, "text")) {
-            try self.failActive("acp_invalid_message_chunk", "unsupported assistant chunk");
+            if (!thought) try self.failActive("acp_invalid_message_chunk", "unsupported assistant chunk");
             return;
         }
         const text = stringAt(update, &.{ "content", "text" });
@@ -679,14 +680,17 @@ pub const Reducer = struct {
         const native_message = gojson.foldedSet(update, &.{"messageId"}) orelse std.json.Value{ .null = {} };
         if (native_message == .string and native_message.string.len > 0) {
             message_id = try self.bindMessage(native_message.string);
-            run.message_id = message_id;
         }
-        const binding = self.textFor(message_id);
-        try binding.text.appendSlice(self.allocator(), text);
+        if (!thought) {
+            run.message_id = message_id;
+            const binding = self.textFor(message_id);
+            try binding.text.appendSlice(self.allocator(), text);
+        }
 
+        const part_kind = if (thought) "reasoning" else "text";
         var part = self.object();
-        try self.put(&part, "type", str("text"));
-        try self.put(&part, "text", str(text));
+        try self.put(&part, "type", str(part_kind));
+        try self.put(&part, part_kind, str(text));
         var payload = self.object();
         try self.put(&payload, "session_id", str(self.options.session_id));
         try self.put(&payload, "run_id", str(run.id));
@@ -1148,9 +1152,9 @@ fn permissionDecodes(params: std.json.Value, native_id: []const u8) bool {
 }
 
 const ignored_updates = [_][]const u8{
-    "user_message_chunk",  "agent_thought_chunk", "plan",
-    "plan_update",         "plan_removed",        "available_commands_update",
-    "current_mode_update", "session_info_update",
+    "user_message_chunk",  "plan",                      "plan_update",
+    "plan_removed",        "available_commands_update", "current_mode_update",
+    "session_info_update",
 };
 
 fn configOptionsDecode(offered: std.json.Value) bool {

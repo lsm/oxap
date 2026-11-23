@@ -106,6 +106,10 @@ pub const Endpoint = struct {
     }
 
     pub fn handleLine(self: *Endpoint, line: []const u8) !void {
+        return self.handleAgentLine(line, false);
+    }
+
+    pub fn handleAgentLine(self: *Endpoint, line: []const u8, composed: bool) !void {
         if (line.len > self.frame_limit) return Error.FrameTooLarge;
         var scratch = std.heap.ArenaAllocator.init(self.allocator);
         defer scratch.deinit();
@@ -130,6 +134,16 @@ pub const Endpoint = struct {
         if (id.len == 0) return Error.UnaddressableEnvelope;
 
         try self.drainAll();
+        if (composed) {
+            const profile = root.get("profile");
+            if (profile == null or profile.? != .string or !std.mem.eql(u8, profile.?.string, oap_types.PROFILE)) {
+                return self.writeError(root, id, .{
+                    .code = "invalid_request",
+                    .message = "a composed connection requires a served profile",
+                    .details = &.{.{ .key = "feature", .value = "profile" }},
+                });
+            }
+        }
         self.serve(arena, root, line) catch |err| switch (err) {
             error.Denied => try self.writeError(root, id, self.denial),
             else => |failure| return failure,
