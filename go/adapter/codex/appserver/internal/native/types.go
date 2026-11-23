@@ -167,6 +167,7 @@ type Item struct {
 	Type       string          `json:"type"`
 	ID         string          `json:"id"`
 	Text       string          `json:"text,omitempty"`
+	Moderation json.RawMessage `json:"moderation,omitempty"`
 	Command    string          `json:"command,omitempty"`
 	Cwd        string          `json:"cwd,omitempty"`
 	Path       string          `json:"path,omitempty"`

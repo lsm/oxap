@@ -77,7 +77,7 @@
         "timestamp_ms": 6,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -99,7 +99,7 @@
         "timestamp_ms": 7,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -118,7 +118,7 @@
         "timestamp_ms": 11,
         "session_id": "session-1",
         "run_id": "run-08",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -140,7 +140,7 @@
         "timestamp_ms": 12,
         "session_id": "session-1",
         "run_id": "run-08",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       }
     ]
   },
@@ -206,7 +206,7 @@
         "timestamp_ms": 6,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -228,7 +228,7 @@
         "timestamp_ms": 7,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       }
     ]
   },
@@ -342,7 +342,7 @@
         "timestamp_ms": 6,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -364,7 +364,7 @@
         "timestamp_ms": 7,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       }
     ]
   },
@@ -419,7 +419,7 @@
         "timestamp_ms": 5,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -441,7 +441,7 @@
         "timestamp_ms": 6,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       }
     ]
   },
@@ -516,7 +516,7 @@
         "timestamp_ms": 5,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -538,7 +538,7 @@
         "timestamp_ms": 6,
         "session_id": "session-1",
         "run_id": "run-02",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       }
     ]
   },
@@ -651,7 +651,7 @@
         "timestamp_ms": 7,
         "session_id": "session-1",
         "run_id": "run-05",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       },
       {
         "protocol": "open-agent-protocol",
@@ -673,7 +673,7 @@
         "timestamp_ms": 8,
         "session_id": "session-1",
         "run_id": "run-05",
-        "capability_revision": "codex-appserver-0.167.2-oap-v1"
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
       }
     ]
   }

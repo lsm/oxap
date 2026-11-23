@@ -235,6 +235,16 @@ impl Shared {
             return;
         };
         if method == METHOD_ITEM_COMPLETED && value.item.kind == "agentMessage" {
+            if value.item.moderation.is_some() {
+                self.fail_run(
+                    inner,
+                    &id,
+                    "unsupported_moderation",
+                    "Codex moderation cannot be represented by this adapter",
+                    "",
+                );
+                return;
+            }
             run.final_text = Some(value.item.text);
         } else {
             self.action(inner, &id, method, value.item);

@@ -289,3 +289,13 @@ func TestAKeptAppServerThatNeverInitializesGivesUpAtTheCallsDeadline(t *testing.
 		}
 	}
 }
+
+func TestNativeReadRefusesHistoryWithModeration(t *testing.T) {
+	for _, moderation := range []string{`{"moderated":true,"display":{"mode":"hide","version":1}}`, `{"moderated":true,"display":{"mode":"block","version":1}}`} {
+		client := &askClient{answers: map[string][]string{"thread/turns/list": {fmt.Sprintf(`{"data":[{"items":[{"type":"agentMessage","text":"restricted","moderation":%s}]}]}`, moderation)}}}
+		turns, err := askingAdapter(t, client).NativeRead(context.Background(), adapter.NativeReadRequest{NativeID: "th", MaxTurns: 10})
+		if err == nil || len(turns) != 0 || !strings.Contains(err.Error(), "cannot represent moderation") {
+			t.Fatalf("turns=%+v err=%v", turns, err)
+		}
+	}
+}

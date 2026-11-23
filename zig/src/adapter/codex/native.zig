@@ -61,6 +61,7 @@ const item_fields = [_]Field{
     .{ .name = "type", .shape = .string },
     .{ .name = "id", .shape = .string },
     .{ .name = "text", .shape = .string },
+    .{ .name = "moderation", .shape = .raw },
     .{ .name = "command", .shape = .string },
     .{ .name = "cwd", .shape = .string },
     .{ .name = "path", .shape = .string },

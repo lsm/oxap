@@ -2,7 +2,7 @@
   "endpoint": {
     "id": "codex.app-server",
     "name": "Codex app-server Adapter",
-    "version": "ce21072c90d32c40af7a55b60b2fb35c84a43a6a",
+    "version": "ccf9be8cc458bd6b8336fe84d68d8893f2691a5e",
     "adapter": "codex-appserver-stdio"
   },
   "protocol_versions": [

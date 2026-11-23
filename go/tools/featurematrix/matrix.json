@@ -95,22 +95,22 @@
     },
     {
       "harness": "codex-app-server",
-      "pin": "rust-v0.167.2",
-      "capability_revision": "codex-appserver-0.167.2-oap-v1",
-      "corpus": "fixtures/adapters/codex-appserver-0.167.2",
+      "pin": "rust-v0.171.0",
+      "capability_revision": "codex-appserver-0.171.0-oap-v1",
+      "corpus": "fixtures/adapters/codex-appserver-0.171.0",
       "cells": [
         {
           "column": "open-submit-complete",
           "claim": "a turn is admitted and completes",
           "evidence": [
-            { "package": "go/adapter/codex/appserver", "test": "TestCodexEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/codex-appserver-0.167.2/cases/completed-text" }
+            { "package": "go/adapter/codex/appserver", "test": "TestCodexEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/codex-appserver-0.171.0/cases/completed-text" }
           ]
         },
         {
           "column": "text-deltas",
           "claim": "content.delta is delivered from the pinned turn",
           "evidence": [
-            { "package": "go/adapter/codex/appserver", "test": "TestCodexEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/codex-appserver-0.167.2/cases/completed-text" }
+            { "package": "go/adapter/codex/appserver", "test": "TestCodexEvidenceCorpus/completed-text", "kind": "positive", "fixture": "fixtures/adapters/codex-appserver-0.171.0/cases/completed-text" }
           ]
         },
         {
@@ -131,7 +131,7 @@
           "column": "tool-observation",
           "claim": "an executed command's output is observed as a completed call",
           "evidence": [
-            { "package": "go/adapter/codex/appserver", "test": "TestCodexEvidenceCorpus/command-completed", "kind": "positive", "fixture": "fixtures/adapters/codex-appserver-0.167.2/cases/command-completed" }
+            { "package": "go/adapter/codex/appserver", "test": "TestCodexEvidenceCorpus/command-completed", "kind": "positive", "fixture": "fixtures/adapters/codex-appserver-0.171.0/cases/command-completed" }
           ]
         }
       ]

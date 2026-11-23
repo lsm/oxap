@@ -8,7 +8,7 @@ const semantic = @import("semantic");
 const jsonschema = @import("jsonschema");
 
 const corpus_relative = harness_pins.codex_app_server_corpus;
-const writes_relative = "fixtures/adapters/codex-appserver-0.167.2-writes/conversation.json";
+const writes_relative = harness_pins.codex_app_server_corpus ++ "-writes/conversation.json";
 const schema_tree_sha256 = harness_pins.codex_app_server_codex_source_tree_sha256;
 const participant = "user";
 
@@ -35,6 +35,7 @@ const claimed_cases = [_]Case{
     .{ .id = "structured-output", .path = "cases/structured-output", .ledger_fixture = "structured-output" },
     .{ .id = "structured-output-nonconforming", .path = "cases/structured-output-nonconforming", .ledger_fixture = "structured-output-nonconforming" },
     .{ .id = "token-usage", .path = "cases/token-usage", .ledger_fixture = "token-usage" },
+    .{ .id = "moderated-message", .path = "cases/moderated-message", .ledger_fixture = "moderated-message" },
 };
 
 const thread_result = "{\"thread\":{\"id\":\"native-thread\"}}";
