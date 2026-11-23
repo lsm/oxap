@@ -37,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     | "--shared-reopen"
                     | "--shared-submit"
                     | "--shared-cancel"
+                    | "--shared-resume"
             ) =>
         {
             (python, source, state, mode.as_str(), model.as_str(), None)
@@ -51,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>]"
                     .into(),
             );
         }
@@ -85,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if matches!(
         mode,
-        "--shared-submit" | "--shared-cancel" | "--shared-input"
+        "--shared-submit" | "--shared-cancel" | "--shared-input" | "--shared-resume"
     ) {
         return shared_submit(config, state, model, mode, answers);
     }
@@ -338,6 +339,9 @@ fn shared_submit(
     if mode == "--shared-cancel" {
         return shared_cancel(session.as_ref(), request, std::path::Path::new(state_dir));
     }
+    if mode == "--shared-resume" {
+        return shared_resume(session.as_ref(), request, std::path::Path::new(state_dir));
+    }
     let mut unsupported = request.clone();
     unsupported.request.model_id = Some("other".into());
     assert!(matches!(
@@ -389,7 +393,7 @@ fn shared_submit(
         println!("admission: {}", serde_json::to_string(&admission)?);
         let state = block_on(session.state())?;
         assert_eq!(state.status, SessionStatus::RUNNING);
-        assert_eq!(state.active_run_id, Some(run_id));
+        assert_eq!(state.active_run_id.as_ref(), Some(&run_id));
         assert_eq!(state.active_runs.len(), 1);
         assert_eq!(
             state.active_runs[0].admitted_submit_requests[0].as_str(),
@@ -414,8 +418,14 @@ fn shared_submit(
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
+        let mut original = vec![serde_json::to_string(&first)?];
         while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
-            println!("envelope: {}", serde_json::to_string(&event?)?);
+            let wire = serde_json::to_string(&event?)?;
+            println!("envelope: {wire}");
+            original.push(wire);
+        }
+        if index == 1 && state_dir.join("check-resume-window").exists() {
+            check_resume_window(session.as_ref(), run_id, &original)?;
         }
         let state = block_on(session.state())?;
         assert_eq!(state.status, SessionStatus::IDLE);
@@ -423,6 +433,103 @@ fn shared_submit(
     }
     block_on(session.close())?;
     println!("gateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replay_wires(
+    mut stream: oxap_adapter::EventStream,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    use std::future::poll_fn;
+
+    let mut wires = Vec::new();
+    while let Some(event) = futures_executor::block_on(poll_fn(|cx| stream.as_mut().poll_next(cx)))
+    {
+        wires.push(serde_json::to_string(&event?)?);
+    }
+    Ok(wires)
+}
+
+#[cfg(unix)]
+fn shared_resume(
+    session: &dyn oxap_adapter::Session,
+    request: oxap_adapter::SubmitRequest,
+    state_dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Error, ResumeRequest};
+    use oxap_protocol::SessionStatus;
+
+    assert!(matches!(
+        block_on(session.resume(ResumeRequest {
+            run_id: "sess0001".into(),
+            after_sequence: 0
+        })),
+        Err(Error::RunNotFound)
+    ));
+    let (admission, original) = block_on(session.submit(request))?;
+    let run_id = admission.run_id.ok_or("missing admitted run")?;
+    let resume = |after_sequence| {
+        block_on(session.resume(ResumeRequest {
+            run_id: run_id.clone(),
+            after_sequence,
+        }))
+    };
+    let (live, follow) = resume(0)?;
+    assert_eq!(live.run_id, run_id);
+    assert_eq!(live.requested_after, 0);
+    assert_eq!((live.replayed_from, live.replayed_through), (1, 1));
+    assert_eq!(live.state.status, SessionStatus::RUNNING);
+    assert_eq!(live.state.active_run_id, Some(run_id.clone()));
+    assert!(matches!(resume(2), Err(Error::ReplayCursorFuture)));
+    std::fs::write(state_dir.join("release-run-1"), "")?;
+    let original = replay_wires(original)?;
+    assert_eq!(original.len(), 2);
+    assert_eq!(replay_wires(follow)?, original);
+    println!("LIVE REPLAY ENVELOPES: {}", original.len());
+    let (ended, suffix) = resume(1)?;
+    assert_eq!(ended.state.status, SessionStatus::IDLE);
+    assert_eq!((ended.replayed_from, ended.replayed_through), (2, 2));
+    assert_eq!(replay_wires(suffix)?, original[1..]);
+    let (at_end, empty) = resume(2)?;
+    assert_eq!((at_end.replayed_from, at_end.replayed_through), (2, 2));
+    assert!(replay_wires(empty)?.is_empty());
+    assert!(matches!(resume(3), Err(Error::ReplayCursorFuture)));
+    block_on(session.close())?;
+    assert!(matches!(resume(0), Err(Error::SessionClosed)));
+    println!("COMPLETED REPLAY ENVELOPES: 1\ngateway exited cleanly");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn check_resume_window(
+    session: &dyn oxap_adapter::Session,
+    run_id: oxap_protocol::RunId,
+    original: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use futures_executor::block_on;
+    use oxap_adapter::{Error, ResumeRequest};
+
+    let resume = |after_sequence| {
+        block_on(session.resume(ResumeRequest {
+            run_id: run_id.clone(),
+            after_sequence,
+        }))
+    };
+    let Err(Error::ReplayGap(gap)) = resume(0) else {
+        return Err("expected a replay gap for the evicted prefix".into());
+    };
+    assert_eq!(gap.requested_after, 0);
+    assert_eq!(gap.latest_available, u64::try_from(original.len())?);
+    let after = gap.oldest_available - 1;
+    let (recovery, stream) = resume(after)?;
+    assert_eq!(
+        (recovery.replayed_from, recovery.replayed_through),
+        (gap.oldest_available, gap.latest_available)
+    );
+    assert_eq!(replay_wires(stream)?, original[usize::try_from(after)?..]);
+    assert_eq!(gap.latest_available - after, 256);
+    println!("REPLAY WINDOW: 256");
     Ok(())
 }
 
