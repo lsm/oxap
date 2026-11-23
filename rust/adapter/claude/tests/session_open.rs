@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::executor::block_on;
+use futures::{executor::block_on, FutureExt, StreamExt};
 use oxap_adapter::{Adapter as _, Error, OpenRequest, SubmitRequest};
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
@@ -33,10 +33,10 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .join(&pin().corpus);
-    let corpus = corpus.join(if mode == "catalog" {
-        "tools-catalog-sources/native.jsonl"
-    } else {
-        "initialize-lifecycle/native.jsonl"
+    let corpus = corpus.join(match mode {
+        "catalog" => "tools-catalog-sources/native.jsonl",
+        mode if mode.starts_with("admission-") => "admission-corroboration/native.jsonl",
+        _ => "initialize-lifecycle/native.jsonl",
     });
     let frames = fs::read_to_string(&corpus)
         .unwrap()
@@ -46,7 +46,14 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
     let config = Config {
         executable: Some(peer.display().to_string()),
         tools: ToolPosture::Unrestricted,
-        model: Some("configured-model".into()),
+        model: Some(
+            if mode.starts_with("admission-") {
+                "claude-test"
+            } else {
+                "configured-model"
+            }
+            .into(),
+        ),
         working_directory: Some(directory.path().display().to_string()),
         environment: vec![
             format!("PATH={}", std::env::var("PATH").unwrap()),
@@ -224,6 +231,71 @@ fn verify_submit(mode: &str, request: SubmitRequest, expand_prompts: bool) {
     block_on(session.close()).unwrap();
     assert!(directory.path().join("no-extra-turn").is_file());
     println!("PASS {mode}: one native turn, invalid and overlapping submits refused, no premature admission");
+}
+
+#[test]
+fn admits_the_corpus_turn_only_after_corroboration() {
+    for mode in ["admission-single", "admission-list", "admission-compacting"] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut submission = session.submit(text_submit("hello"));
+        let mut context = Context::from_waker(futures::task::noop_waker_ref());
+        assert!(submission.as_mut().poll(&mut context).is_pending());
+        wait_for_turn(directory.path());
+        let idle = block_on(session.state()).unwrap();
+        assert_eq!(idle.status.as_str(), "idle");
+        assert!(idle.active_run_id.is_none());
+        assert!(submission.as_mut().poll(&mut context).is_pending());
+
+        fs::write(directory.path().join("release-turn"), []).unwrap();
+        let (admission, mut stream) = block_on(submission).expect(mode);
+        assert_eq!(idle.current_model_id, "claude-test");
+        let start = stream
+            .next()
+            .now_or_never()
+            .expect("run.started is ready")
+            .unwrap()
+            .unwrap();
+        let mut payload = serde_json::to_value(&start).unwrap()["payload"].clone();
+        let expected: Vec<Value> = serde_json::from_str(
+            &fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../..")
+                    .join(&pin().corpus)
+                    .join("admission-corroboration/expected-oap.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let run_id = admission.run_id.as_ref().unwrap();
+        assert_eq!(start.envelope_type.as_str(), expected[0]["type"]);
+        assert_eq!(start.sequence, Some(1));
+        assert_eq!(start.run_id.as_ref(), Some(run_id));
+        assert!(payload["started_at_ms"].as_i64().unwrap() > 0);
+        payload["started_at_ms"] = expected[0]["payload"]["started_at_ms"].clone();
+        payload["run_id"] = expected[0]["payload"]["run_id"].clone();
+        assert_eq!(payload, expected[0]["payload"].clone());
+        assert!(admission.accepted);
+        assert_eq!(admission.model_id, payload["model_id"]);
+        assert_eq!(admission.admission.as_str(), "started");
+        assert_eq!(admission.effective_delivery.as_str(), "start");
+        assert_eq!(admission.status.as_str(), "running");
+        let running = block_on(session.state()).unwrap();
+        assert_eq!(running.status.as_str(), "running");
+        assert_eq!(running.active_run_id.as_ref(), Some(run_id));
+        assert_eq!(running.current_model_id, frames[5]["raw"]["model"]);
+        assert!(stream.next().poll_unpin(&mut context).is_pending());
+        assert!(matches!(
+            block_on(session.submit(text_submit("again"))),
+            Err(Error::RunActive)
+        ));
+        println!("PASS {mode}: only corroborated turn admitted, run.started first, buffered metadata replayed");
+    }
+    println!("3/3 Claude admission peer cases passed");
 }
 
 fn wait_for_turn(directory: &Path) {

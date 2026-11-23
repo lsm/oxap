@@ -44,7 +44,7 @@ init = next(frame["raw"] for frame in frames if isinstance(frame["raw"], dict)
             and frame["raw"].get("subtype") == "init")
 init["session_id"] = binding
 exchange(frames[0]["raw"], frames[1]["raw"], mode == "initialize-refusal",
-         None if mode == "catalog" else init, close_stdin=mode == "submit-write-refused")
+         None if mode == "catalog" or mode.startswith("admission-") else init, close_stdin=mode == "submit-write-refused")
 if mode == "submit-write-refused":
     deadline = time.monotonic() + 5
     while not Path("release-turn").exists() and time.monotonic() < deadline:
@@ -72,7 +72,7 @@ if mode in {"settings", "settings-refusal"}:
         {"type": "control_response", "response": {"subtype": "success", "response": {}}},
         mode == "settings-refusal",
     )
-if mode in {"submit-text", "submit-parts", "submit-abandon"}:
+if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith("admission-"):
     raw = sys.stdin.readline()
     frame = json.loads(raw)
     assert frame["uuid"].startswith("turn-")
@@ -86,6 +86,26 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"}:
     wire = json.dumps(expected, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
     wire = wire.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     assert raw == wire + "\n", raw
+    if mode.startswith("admission-"):
+        def observe(raw):
+            raw["session_id"] = binding
+            print(json.dumps(raw), flush=True)
+
+        for observed in frames[3:6]:
+            native = observed["raw"]
+            if "command_uuid" in native:
+                native["command_uuid"] = frame["uuid"]
+            observe(native)
+
+        echo = frames[6]["raw"]
+        observe(dict(echo, user_message_uuid="foreign", user_message_uuids=["foreign"]))
+        observe(dict(echo, user_message_uuid=frame["uuid"], user_message_uuids=[], parent_tool_use_id="child"))
+        observe(dict(frames[8]["raw"], user_message_uuid=frame["uuid"], user_message_uuids=[],
+                     origin={"kind": "task-notification"}))
+        print(json.dumps({"type": "control_request", "request_id": "barrier",
+                          "request": {"subtype": "barrier"}}), flush=True)
+        assert json.loads(sys.stdin.readline())["response"]["request_id"] == "barrier"
+
     Path("turn-observed").touch()
     if mode == "submit-abandon":
         assert not sys.stdin.readline(), "extra native input"
@@ -96,6 +116,17 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"}:
         assert not select.select([sys.stdin], [], [], 0.02)[0], "extra native input"
         assert time.monotonic() < deadline, "submit did not release peer"
     assert not select.select([sys.stdin], [], [], 0)[0], "extra native input"
+    if mode.startswith("admission-"):
+        if mode == "admission-compacting":
+            observe({"type": "system", "subtype": "status", "status": "compacting"})
+        else:
+            single = mode == "admission-single"
+            observe(dict(echo, user_message_uuid=frame["uuid"] if single else "",
+                         user_message_uuids=[] if single else [frame["uuid"]]))
+        ready = select.select([sys.stdin], [], [], 3)[0]
+        if ready:
+            assert not sys.stdin.readline(), "extra native input"
+
     Path("no-extra-turn").touch()
     sys.exit(0)
 assert not sys.stdin.readline()
