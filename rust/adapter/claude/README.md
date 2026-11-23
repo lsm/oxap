@@ -104,9 +104,12 @@ the frame the session reserves one pending turn, which blocks another submit
 or close. A matching native turn marker or compacting status admits the run.
 The stream begins with `run.started`, then the reducer applies buffered
 observations in arrival order. Explicitly foreign markers, child echoes, and
-injected output do not join the turn. This stage projects admission and native
-metadata updates. Deltas and terminal events follow in later slices. Transport
-loss before the run is installed fails the pending submit, even if the reader
+injected output do not join the turn. The adapter streams text and reasoning
+deltas. A matching result settles a basic run, reports native usage and cost,
+and returns the session to idle for the next submit. Interrupt settlement,
+queued continuations, and failure inferred from a disconnect follow in
+later slices. Transport loss before the run is installed fails the pending
+submit, even if the reader
 has already seen a matching marker. Hosts can set a deadline by dropping
 that future and closing the retired session. Per-run tool
 selection is unavailable until permission handling can enforce it.

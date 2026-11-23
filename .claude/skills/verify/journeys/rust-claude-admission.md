@@ -21,5 +21,5 @@ order. In the disconnect case, the peer waits for the reader to drain the
 matching echo and then exits before the submit future resumes. The caller must
 receive a closed-session error.
 
-Later slices project deltas and terminal observations. This journey ends at
-admission.
+This journey ends at admission. Use the Rust Claude run events journey for
+deltas and terminal observations.
