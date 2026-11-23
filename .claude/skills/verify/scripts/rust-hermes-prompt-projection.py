@@ -121,6 +121,12 @@ def shared_submit_frames(corpus):
 
 
 def settings_gateway(corpus, case, read, send):
+    def wait_for(name):
+        deadline = time.monotonic() + 10
+        while not Path(name).exists():
+            assert time.monotonic() < deadline, "consumer did not release the gateway"
+            assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+
     def call(request_id, method, params, result=None, error=None):
         assert read() == {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         reply = {"result": result} if error is None else {"error": error}
@@ -146,15 +152,17 @@ def settings_gateway(corpus, case, read, send):
              {"session_id": "runtime", "stored_session_id": "stored"})
         setting(2, "runtime", "none")
         setting(3, "runtime", "high", {"code": -32000, "message": "effort rejected"})
-        setting(4, "runtime", "low")
+        assert read() == {"jsonrpc": "2.0", "id": 4, "method": "config.set", "params": {
+            "session_id": "runtime", "key": "reasoning", "value": "low",
+        }}
+        Path("settings-received").touch()
+        wait_for("release-settings")
+        send({"jsonrpc": "2.0", "id": 4, "result": {"key": "reasoning", "value": "low"}})
         call(5, "prompt.submit", {"session_id": "runtime", "text": "hello"}, {"status": "streaming"})
         send({"jsonrpc": "2.0", "method": "event", "params": {
             "type": "message.start", "session_id": "runtime", "seq": 1,
         }})
-        deadline = time.monotonic() + 10
-        while not Path("release-settings-run").exists():
-            assert time.monotonic() < deadline, "consumer did not check the active update refusal"
-            assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+        wait_for("release-settings-run")
         send({"jsonrpc": "2.0", "method": "event", "params": {
             "type": "message.complete", "session_id": "runtime", "seq": 2,
             "payload": {"status": "complete", "text": "done"},

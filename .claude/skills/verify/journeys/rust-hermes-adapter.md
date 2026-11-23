@@ -217,8 +217,8 @@ python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
 The consumer probes the adapter and opens through the shared trait. Create
 returns idle state with the configured model and a stored binding. Reopen
 sends the recorded resume request and returns the restored model and binding.
-Both paths reject a reasoning setting the shared adapter has yet to
-advertise. After close, the gateway has reached EOF and the shared session
+Both paths reject an unadvertised compaction policy. After close, the
+gateway has reached EOF and the shared session
 returns `SessionClosed` to a state query.
 
 Replay recorded prompt refusals and two successful prompts through the same
@@ -275,3 +275,19 @@ Repeat with one retained envelope and with an inferred failure after gateway
 exit. The burst case checks the default 256-envelope window, the gap before
 that window, and exact replay of the retained suffix. The gateway expects
 only prompt writes and reaches EOF without a native replay call.
+
+Check reasoning settings and native session listing through the shared API:
+
+```sh
+for case in shared-settings shared-settings-reopen native-list; do
+  python3 "$replay" "$example" "--$case" "$case" || exit $?
+done
+```
+
+The gateway sees `off` as `none` on create and on the restored runtime
+session. A rejected native update preserves the old setting. A successful
+idle update returns the previous and new levels and finishes before an
+overlapping submit reaches Hermes. An update during the resulting run is
+refused. The isolated listing calls `session.list` with the requested limit,
+skips rows without IDs, falls back to preview and converts seconds to
+milliseconds. All three cases observe clean gateway EOF.

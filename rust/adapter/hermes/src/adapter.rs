@@ -6,20 +6,23 @@ use std::{
 use crossbeam_channel::{never, unbounded, Sender};
 use futures_channel::{mpsc, oneshot};
 use oxap_adapter::{
-    journal::Journal, refuse_unadvertised_controls, refuse_unadvertised_settings,
-    refuse_unadvertised_tool_sources, refuse_unadvertised_tools, runtime::Runtime,
-    Adapter as AdapterContract, BoxFuture, Descriptor, Error, EventStream, InteractionResolution,
-    JournalDescriptor, OpenRequest, Recovery, ResumeRequest, Session, SubmitRequest,
+    journal::Journal, refuse_unadvertised_controls, refuse_unadvertised_live_settings,
+    refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
+    runtime::Runtime, Adapter as AdapterContract, BoxFuture, Descriptor, Error, EventStream,
+    InteractionResolution, JournalDescriptor, NativeListRequest, NativeLister, NativeListing,
+    OpenRequest, Recovery, ResumeRequest, Session, SettingsUpdater, SubmitRequest,
 };
 use oxap_protocol::{
     ActiveRun, CapabilityDescriptor, ContentPartType, EndpointDescriptor, Envelope, EnvelopeType,
     FeatureSupport, MessageRole, MessageSubmitRequest, MessageSubmitResponse, ParticipantId,
-    RequestedDeliveryMode, RunCancelResponse, RunId, RunStatus, SessionState, SessionStatus,
-    SupportLevel, FEATURE_OPEN_REOPEN, PROFILE, VERSION,
+    RequestedDeliveryMode, RunCancelResponse, RunId, RunStatus, SessionId,
+    SessionSettingsUpdateRequest, SessionSettingsUpdateResponse, SessionState, SessionStatus,
+    SupportLevel, FEATURE_OPEN_REOPEN, FEATURE_SESSION_REASONING, MODE_SESSION_LIVE,
+    MODE_SESSION_OPEN, PROFILE, VERSION,
 };
 
 use crate::{
-    gateway_session::{interrupt, InputCommand, ObservationError, PromptStartError},
+    gateway_session::{interrupt, set_reasoning, InputCommand, ObservationError, PromptStartError},
     native::METHOD_SESSION_INTERRUPT,
     process::{Process, ProcessConfig},
     GatewayRun, GatewaySession, Observation, RunObservation,
@@ -80,6 +83,7 @@ impl Adapter {
                 },
             )
         })
+        .chain([(FEATURE_SESSION_REASONING.into(), reasoning_support())])
         .collect();
         Descriptor {
             capabilities: CapabilityDescriptor {
@@ -107,6 +111,28 @@ impl Adapter {
             cancellation_implementation: METHOD_SESSION_INTERRUPT.into(),
         }
     }
+}
+
+fn reasoning_support() -> FeatureSupport {
+    FeatureSupport {
+        level: SupportLevel::NATIVE,
+        modes: vec![MODE_SESSION_OPEN.into(), MODE_SESSION_LIVE.into()],
+        ..FeatureSupport::default()
+    }
+}
+
+fn background<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> BoxFuture<'static, T> {
+    Box::pin(async move {
+        let (reply, result) = oneshot::channel();
+        std::thread::Builder::new()
+            .spawn(move || {
+                let _ = reply.send(work());
+            })
+            .map_err(Error::harness)?;
+        result.await.unwrap_or(Err(Error::SessionClosed))
+    })
 }
 
 impl AdapterContract for Adapter {
@@ -151,6 +177,15 @@ impl AdapterContract for Adapter {
                     },
                 )
             };
+            if request.reopen && !request.reasoning_level.is_empty() {
+                set_reasoning(
+                    gateway.client(),
+                    gateway.runtime_id(),
+                    &request.reasoning_level,
+                    deadline,
+                )?;
+            }
+            state.reasoning_level = request.reasoning_level;
             state.updated_at_ms = self.runtime.now_ms();
             Ok(Box::new(OpenedSession {
                 stored_id: gateway.stored_id().to_owned(),
@@ -171,6 +206,19 @@ impl AdapterContract for Adapter {
                 })),
                 runtime: self.runtime.clone(),
             }) as Box<dyn Session>)
+        })
+    }
+
+    fn native_lister(&self) -> Option<&dyn NativeLister> {
+        Some(self)
+    }
+}
+
+impl NativeLister for Adapter {
+    fn native_list(&self, request: NativeListRequest) -> BoxFuture<'_, Vec<NativeListing>> {
+        let process = self.process.clone();
+        background(move || {
+            crate::native_list::list(&process, request.limit, Instant::now() + RPC_TIMEOUT)
         })
     }
 }
@@ -194,6 +242,18 @@ struct SessionSlot {
 }
 
 impl SessionSlot {
+    fn require_idle(&self, session_id: &SessionId) -> Result<(), Error> {
+        if self.state.status == SessionStatus::CLOSED || self.state.status == SessionStatus::ERROR {
+            Err(Error::SessionClosed)
+        } else if *session_id != self.state.session_id {
+            Err(Error::RunNotFound)
+        } else if self.state.status == SessionStatus::IDLE {
+            Ok(())
+        } else {
+            Err(Error::RunActive)
+        }
+    }
+
     fn settle(&mut self, mut gateway: Option<GatewaySession>, runtime: &Runtime) {
         if self.state.status == SessionStatus::CLOSED {
             return;
@@ -293,6 +353,10 @@ impl Session for OpenedSession {
         Some(self.stored_id.clone())
     }
 
+    fn settings_updater(&self) -> Option<&dyn SettingsUpdater> {
+        Some(self)
+    }
+
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async { self.shutdown() })
     }
@@ -300,40 +364,39 @@ impl Session for OpenedSession {
     fn submit(&self, submit: SubmitRequest) -> BoxFuture<'_, (MessageSubmitResponse, EventStream)> {
         Box::pin(async move {
             let text = submit_text(&submit.request)?;
-            let (mut gateway, mut state) = {
-                let mut slot = self.open_slot()?;
-                if submit.request.session_id != slot.state.session_id {
-                    return Err(Error::RunNotFound);
-                }
-                let gateway = slot.gateway.take().ok_or_else(|| {
-                    if slot.state.status == SessionStatus::ERROR {
-                        Error::SessionClosed
-                    } else {
-                        Error::RunActive
-                    }
-                })?;
-                slot.state.status = SessionStatus::QUEUED;
-                slot.state.updated_at_ms = self.runtime.now_ms();
-                (gateway, slot.state.clone())
-            };
+            self.open_slot()?.require_idle(&submit.request.session_id)?;
             let slot = self.slot.clone();
             let control = self.control.clone();
             let runtime = self.runtime.clone();
             let responder = self.responder.clone();
             let (reply, admission) = oneshot::channel();
             std::thread::spawn(move || {
-                let (input, commands) = unbounded();
-                gateway.input = commands;
-                let started = {
-                    let _control = lock(&control);
-                    gateway.start_run_classified(
-                        &text,
-                        state.session_id.clone(),
-                        &state.current_model_id,
-                        runtime.clone(),
-                        Some(Instant::now() + RPC_TIMEOUT),
+                let ordering = lock(&control);
+                let (mut gateway, mut state) = {
+                    let mut slot = lock(&slot);
+                    if let Err(error) = slot.require_idle(&submit.request.session_id) {
+                        let _ = reply.send(Err(error));
+                        return;
+                    }
+                    slot.state.status = SessionStatus::QUEUED;
+                    slot.state.updated_at_ms = runtime.now_ms();
+                    (
+                        slot.gateway
+                            .take()
+                            .expect("idle Hermes session has a gateway"),
+                        slot.state.clone(),
                     )
                 };
+                let (input, commands) = unbounded();
+                gateway.input = commands;
+                let started = gateway.start_run_classified(
+                    &text,
+                    state.session_id.clone(),
+                    &state.current_model_id,
+                    runtime.clone(),
+                    Some(Instant::now() + RPC_TIMEOUT),
+                );
+                drop(ordering);
                 let mut run = match started {
                     Ok(run) => run,
                     Err(error) => {
@@ -470,6 +533,54 @@ impl Session for OpenedSession {
                 return Err(Error::ReplayGap(gap));
             }
             Ok((recovery, stream))
+        })
+    }
+}
+
+impl SettingsUpdater for OpenedSession {
+    fn update_settings(
+        &self,
+        request: SessionSettingsUpdateRequest,
+    ) -> BoxFuture<'_, (SessionSettingsUpdateResponse, SessionState)> {
+        Box::pin(async move {
+            let descriptor = CapabilityDescriptor {
+                features: [(FEATURE_SESSION_REASONING.into(), reasoning_support())].into(),
+                ..CapabilityDescriptor::default()
+            };
+            refuse_unadvertised_live_settings(&request, &descriptor)?;
+            self.open_slot()?.require_idle(&request.session_id)?;
+            let (slot, control, process) = (
+                self.slot.clone(),
+                self.control.clone(),
+                self.process.clone(),
+            );
+            let (runtime_id, runtime) = (self.runtime_id.clone(), self.runtime.clone());
+            background(move || {
+                let _control = lock(&control);
+                lock(&slot).require_idle(&request.session_id)?;
+                let mut response = SessionSettingsUpdateResponse {
+                    session_id: request.session_id,
+                    ..SessionSettingsUpdateResponse::default()
+                };
+                if !request.reasoning_level.is_empty() {
+                    set_reasoning(
+                        &process.client,
+                        &runtime_id,
+                        &request.reasoning_level,
+                        Some(Instant::now() + RPC_TIMEOUT),
+                    )?;
+                }
+                let mut slot = lock(&slot);
+                slot.require_idle(&response.session_id)?;
+                if !request.reasoning_level.is_empty() {
+                    response.reasoning_level = request.reasoning_level.clone();
+                    response.previous_reasoning_level =
+                        std::mem::replace(&mut slot.state.reasoning_level, request.reasoning_level);
+                }
+                slot.state.updated_at_ms = runtime.now_ms();
+                Ok((response, slot.state.clone()))
+            })
+            .await
         })
     }
 }

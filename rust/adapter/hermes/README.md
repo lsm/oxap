@@ -16,7 +16,8 @@ retrying an accepted cancel during the same run returns its receipt again.
 Native approval, clarification, sudo and secret requests move the shared
 session to waiting for input. Answer them through the shared session using
 the declared participant. Tool lifecycle events stay on the same run stream.
-Use the gateway API below for reasoning settings.
+Set reasoning on shared open or reopen, or update it while the session is
+idle. The adapter also lists stored native sessions through `session.list`.
 
 The shared session keeps a 256-envelope journal in memory by default. Use
 `Adapter::with_journal_capacity` to choose another capacity. Resume a known

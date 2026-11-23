@@ -155,11 +155,7 @@ impl GatewaySession {
         reasoning: &ReasoningLevel,
         deadline: Option<Instant>,
     ) -> Result<Self, Error> {
-        let effort = if *reasoning == ReasoningLevel::OFF {
-            "none"
-        } else {
-            reasoning.as_str()
-        };
+        let effort = native_effort(reasoning);
         let (session, ()) = Self::bind(config, deadline, |client| {
             let created: SessionCreateResult = call(
                 client,
@@ -176,25 +172,7 @@ impl GatewaySession {
                 ));
             }
             if !effort.is_empty() {
-                let _: ConfigSetResult = call(
-                    client,
-                    METHOD_CONFIG_SET,
-                    &ConfigSetParams {
-                        session_id: &created.session_id,
-                        key: "reasoning",
-                        value: effort,
-                    },
-                    deadline,
-                )
-                .map_err(|error| {
-                    Error::UnsupportedControl(Box::new(UnsupportedControl {
-                        feature: FEATURE_SESSION_REASONING.into(),
-                        reason: CONTROL_UNSATISFIABLE,
-                        field: "reasoning_level".into(),
-                        detail: format!("Hermes refused the reasoning level: {error}"),
-                        ..UnsupportedControl::default()
-                    }))
-                })?;
+                set_reasoning(client, &created.session_id, reasoning, deadline)?;
             }
             Ok((created.session_id, created.stored_session_id, ()))
         })?;
@@ -439,6 +417,42 @@ impl GatewaySession {
     pub fn close(&self) -> Result<(), Error> {
         self.process.close().map_err(Error::harness)
     }
+}
+
+fn native_effort(level: &ReasoningLevel) -> &str {
+    if *level == ReasoningLevel::OFF {
+        "none"
+    } else {
+        level.as_str()
+    }
+}
+
+pub(crate) fn set_reasoning(
+    client: &RpcClient,
+    session_id: &str,
+    level: &ReasoningLevel,
+    deadline: Option<Instant>,
+) -> Result<(), Error> {
+    call::<ConfigSetResult>(
+        client,
+        METHOD_CONFIG_SET,
+        &ConfigSetParams {
+            session_id,
+            key: "reasoning",
+            value: native_effort(level),
+        },
+        deadline,
+    )
+    .map(drop)
+    .map_err(|error| {
+        Error::UnsupportedControl(Box::new(UnsupportedControl {
+            feature: FEATURE_SESSION_REASONING.into(),
+            reason: CONTROL_UNSATISFIABLE,
+            field: "reasoning_level".into(),
+            detail: format!("Hermes refused the reasoning level: {error}"),
+            ..UnsupportedControl::default()
+        }))
+    })
 }
 
 pub(crate) fn interrupt(

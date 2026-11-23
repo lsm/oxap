@@ -7,6 +7,8 @@ mod gateway_run;
 #[cfg(unix)]
 mod gateway_session;
 #[cfg(unix)]
+mod native_list;
+#[cfg(unix)]
 mod prompt_observation;
 
 #[cfg(unix)]

@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>]"
+                "usage: gateway_session <python> <hermes-source> <isolated-state> [--prompt|--observe|--start|--project|--run [model [answers-file]]|--reopen <stored-id>|--shared-open|--shared-reopen <stored-id>|--shared-submit <model>|--shared-cancel <model>|--shared-input <model> <answers-file>|--shared-resume <model>|--shared-settings|--shared-settings-reopen <stored-id>|--native-list]"
                     .into(),
             );
         }
@@ -253,7 +253,7 @@ fn shared_session(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use futures_executor::block_on;
     use oxap_adapter::{Adapter, Error, OpenRequest};
-    use oxap_protocol::{Participant, ReasoningLevel, SupportLevel};
+    use oxap_protocol::{CompactionPolicy, Participant, SupportLevel};
 
     let adapter = oxap_adapter_hermes::Adapter::new(config, "configured".into());
     let adapter: &dyn Adapter = &adapter;
@@ -277,13 +277,13 @@ fn shared_session(
         native_session_id: stored.unwrap_or_default().into(),
         ..OpenRequest::default()
     };
-    let with_reasoning = OpenRequest {
-        reasoning_level: ReasoningLevel::OFF,
+    let with_compaction = OpenRequest {
+        compaction_policy: Some(CompactionPolicy::default()),
         ..request.clone()
     };
-    let refused = block_on(adapter.open(with_reasoning));
+    let refused = block_on(adapter.open(with_compaction));
     assert!(matches!(refused, Err(Error::UnsupportedControl(refusal))
-        if refusal.feature == oxap_protocol::FEATURE_SESSION_REASONING));
+        if refusal.feature == oxap_protocol::FEATURE_COMPACTION_POLICY));
     let session = block_on(adapter.open(request))?;
     let mut state = block_on(session.state())?;
     assert!(state.updated_at_ms > 0);
@@ -347,7 +347,12 @@ fn shared_settings(
     use oxap_adapter::{Adapter, Error, OpenRequest, SubmitRequest};
     use oxap_protocol::{
         Message, MessageContent, MessageRole, MessageSubmitRequest, ReasoningLevel,
-        SessionSettingsUpdateRequest,
+        SessionSettingsUpdateRequest, SessionStatus,
+    };
+    use std::{
+        path::Path,
+        task::{Context, Poll, Waker},
+        time::{Duration, Instant},
     };
 
     let adapter = oxap_adapter_hermes::Adapter::new(config, "configured".into());
@@ -366,26 +371,37 @@ fn shared_settings(
         let settings = session
             .settings_updater()
             .ok_or("missing settings updater")?;
-        let set = |reasoning_level| {
-            block_on(settings.update_settings(SessionSettingsUpdateRequest {
+        let update = |reasoning_level| {
+            settings.update_settings(SessionSettingsUpdateRequest {
                 session_id: "session".into(),
                 reasoning_level,
                 ..SessionSettingsUpdateRequest::default()
-            }))
+            })
         };
         assert!(
-            matches!(set(ReasoningLevel::HIGH), Err(Error::UnsupportedControl(refusal))
+            matches!(block_on(update(ReasoningLevel::HIGH)), Err(Error::UnsupportedControl(refusal))
             if refusal.detail.contains("effort rejected"))
         );
         assert_eq!(
             block_on(session.state())?.reasoning_level,
             ReasoningLevel::OFF
         );
-        let (changed, state) = set(ReasoningLevel::LOW)?;
-        assert_eq!(changed.previous_reasoning_level, ReasoningLevel::OFF);
-        assert_eq!(changed.reasoning_level, ReasoningLevel::LOW);
-        assert_eq!(state.reasoning_level, ReasoningLevel::LOW);
-        let (_, stream) = block_on(session.submit(SubmitRequest {
+        let state_dir = Path::new(state_dir);
+        let mut context = Context::from_waker(Waker::noop());
+        let mut updating = update(ReasoningLevel::LOW);
+        assert!(matches!(
+            updating.as_mut().poll(&mut context),
+            Poll::Pending
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !state_dir.join("settings-received").exists() {
+            assert!(
+                Instant::now() < deadline,
+                "gateway did not receive settings update"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut submit = session.submit(SubmitRequest {
             request: MessageSubmitRequest {
                 session_id: "session".into(),
                 messages: vec![Message {
@@ -396,12 +412,23 @@ fn shared_settings(
                 ..MessageSubmitRequest::default()
             },
             ..SubmitRequest::default()
-        }))?;
-        assert!(matches!(set(ReasoningLevel::HIGH), Err(Error::RunActive)));
-        std::fs::write(
-            std::path::Path::new(state_dir).join("release-settings-run"),
-            "",
-        )?;
+        });
+        assert!(matches!(submit.as_mut().poll(&mut context), Poll::Pending));
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(matches!(submit.as_mut().poll(&mut context), Poll::Pending));
+        assert_eq!(block_on(session.state())?.status, SessionStatus::IDLE);
+        std::fs::write(state_dir.join("release-settings"), "")?;
+        let (changed, state) = block_on(updating)?;
+        assert_eq!(changed.previous_reasoning_level, ReasoningLevel::OFF);
+        assert_eq!(changed.reasoning_level, ReasoningLevel::LOW);
+        assert_eq!(state.reasoning_level, ReasoningLevel::LOW);
+        assert_eq!(state.status, SessionStatus::IDLE);
+        let (_, stream) = block_on(submit)?;
+        assert!(matches!(
+            block_on(update(ReasoningLevel::HIGH)),
+            Err(Error::RunActive)
+        ));
+        std::fs::write(state_dir.join("release-settings-run"), "")?;
         assert_eq!(replay_wires(stream)?.len(), 2);
         assert_eq!(
             block_on(session.state())?.reasoning_level,
