@@ -1,10 +1,10 @@
 # Claude Code 2.1.330 mapping
 
-This comparison is in progress. The CLI release `v2.1.330` in https://github.com/anthropics/claude-code resolves to commit `e791a1c41eee7504672a109fd6eb66b11566b8a1`. npm reports CLI `2.1.330` and TypeScript SDK `0.3.330`; PyPI reports Python SDK `0.2.187`. Their wire surfaces, artifacts and adapter compatibility still need comparison.
+The CLI release `v2.1.330` in https://github.com/anthropics/claude-code resolves to commit `e791a1c41eee7504672a109fd6eb66b11566b8a1`. npm reports CLI `2.1.330` and TypeScript SDK `0.3.330`; PyPI reports Python SDK `0.2.187`. The artifact and declaration comparison and the process check below bound the evidence for this pin.
 
-The catalog selects the new versions. The corpus is a synthetic adaptation of the 2.1.322 cases, with version and source metadata updated; it is not a live capture.
+The catalog selects the new versions. The corpus is a synthetic adaptation of the 2.1.322 cases, with version and source metadata updated; it is not a live capture. The earlier corpus remains available as historical evidence, but is not claimed as a supported floor.
 
-A comparison of the published TypeScript SDK declarations for 0.3.322 and 0.3.330 finds two additional `SDKStartupFailureReason` values, `managed_settings_not_delivered` and `initialize_fields_not_delivered`. The built-in tool list replaces `ProposeGoal` with `SetGoal`. Other SDK changes include session archiving and MCP configuration delivery options. Their effect on the adapter's CLI wire and error handling remains to be assessed.
+A comparison of the published TypeScript SDK declarations for 0.3.322 and 0.3.330 finds two additional `SDKStartupFailureReason` values, `managed_settings_not_delivered` and `initialize_fields_not_delivered`. The built-in tool list replaces `ProposeGoal` with `SetGoal`. Other SDK changes include session archiving and MCP configuration delivery options. The adapters do not expose the new SDK configuration options. The effect of the new startup failures on the CLI wire and the handling of the new event subtype remain unverified.
 
 Python SDK v0.2.187 resolves to commit `3184360393a92ca8a6ec7bbbdee571afd1ce1c56`, tree `675cdc3b5937ea4361d9fbca804ae06548c54e21`, and bundles CLI 2.1.330. TypeScript SDK v0.3.330 resolves to commit `1e667424b6d3e9ca4f878e77dc80ccb4d77c9518`, tree `9803cb33168169f38f5d2cfcae6c6a4e5d1c944b`. The CLI tag resolves to `e791a1c41eee7504672a109fd6eb66b11566b8a1`. Python SDK parser changes expose user message correlation fields already used by the adapter.
 
