@@ -299,9 +299,16 @@ def verify(binary, corpus, mode, case):
             model = ["hermes-test" if case == "shared-input" else "", str(answers_file)]
         if case in REOPEN_CASES | REOPEN_TIMEOUT_CASES:
             model = [stored_id]
+        command = [binary, sys.executable, directory, directory, mode]
+        environment = {"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"}
+        if case == "shared-input":
+            usage = subprocess.run(command + model[:1], env=environment, timeout=5,
+                                   capture_output=True, text=True)
+            print(f"MISSING ANSWERS EXIT: {usage.returncode}")
+            assert usage.returncode == 1 and not usage.stdout
+            assert "--shared-input <model> <answers-file>" in usage.stderr, usage.stderr
         result = subprocess.run(
-            [binary, sys.executable, directory, directory, mode, *model],
-            env={"PATH": os.defpath, "HOME": directory, "NODE_ENV": "test"},
+            command + model, env=environment,
             timeout=45, capture_output=True, text=True,
         )
         replay_complete = (root / "replay-complete").exists()
