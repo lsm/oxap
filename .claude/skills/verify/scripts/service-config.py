@@ -12,6 +12,9 @@ import tempfile
 
 
 def cases():
+    fixtures = Path(__file__).resolve().parents[4] / 'fixtures/config/service-invalid.json'
+    for case in json.loads(fixtures.read_text()):
+        yield json.dumps(case['config']), case['diagnostic']
     yield '{}', 'at least one service'
     yield 'null', 'must be an object'
     yield '{"agent":{},"agent":{}}', 'DuplicateField'
