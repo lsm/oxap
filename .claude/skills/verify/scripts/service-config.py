@@ -56,7 +56,7 @@ def cases():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('probe', type=lambda path: str(Path(path).resolve()))
+    parser.add_argument('binary', type=lambda path: str(Path(path).resolve()))
     args = parser.parse_args()
     helpers = runpy.run_path(str(Path(__file__).with_name('hub-open-directory.py')))
     with tempfile.TemporaryDirectory(prefix='service-config-') as temp:
@@ -69,7 +69,7 @@ def main():
 
         def run(document, requests=()):
             config.write_text(document if isinstance(document, str) else json.dumps(document))
-            return subprocess.run([args.probe, config], cwd=root, env=env, capture_output=True, text=True,
+            return subprocess.run([args.binary, 'serve', '--config', config], cwd=root, env=env, capture_output=True, text=True,
                                   input=''.join(json.dumps(line) + '\n' for line in requests), timeout=15)
 
         invalid_count = 0
@@ -89,12 +89,11 @@ def main():
                           'working_directory': str(root), 'model': 'synthetic-model',
                           'approval_policy': 'on-request', 'sandbox': 'workspace-write'},
         }
-        provider = {'stdio': 'raw'}
         envelope = helpers['envelope']
         capabilities = {**envelope('caps'), 'type': 'capabilities.request', 'payload': {}}
         for name, endpoint_id in [('scripted', 'reference.memory'), ('synthetic', 'codex.app-server')]:
             agent = {'adapters': adapters, 'stdio': 'raw', 'adapter': name}
-            result = run({'provider': provider, 'agent': agent}, [capabilities, envelope(name)])
+            result = run({'agent': agent}, [capabilities, envelope(name)])
             assert result.returncode == 0, result
             frames = [json.loads(line) for line in result.stdout.splitlines()]
             endpoints = [frame['payload']['endpoint']['id'] for frame in frames
@@ -144,8 +143,8 @@ def main():
         assert methods.count('thread/start') == 1, result
         print(f'multi-session opened {len(requests)} sessions and exited {result.returncode}')
 
-        config.write_text('agent:\n  http: localhost:0\n  ' + yaml_adapters + 'provider: {stdio: raw}\n')
-        with subprocess.Popen([args.probe, config], cwd=root, env=env, stdout=subprocess.PIPE,
+        config.write_text('agent:\n  http: localhost:0\n  ' + yaml_adapters)
+        with subprocess.Popen([args.binary, 'serve', '--config', config], cwd=root, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True) as process:
             try:
                 assert select.select([process.stdout], [], [], 15)[0], 'HTTP listener did not start'
@@ -170,10 +169,7 @@ def main():
                 if process.poll() is None:
                     process.kill()
 
-        result = run('provider:\r\n  http: \'127.0.0.1:6271\'  # explicit address\r\n')
-        assert result.returncode == 0 and not result.stdout, result
-        print(f'provider-only configuration validation exited {result.returncode}')
-        print(f'PASS: {invalid_count} refusals, 2 raw sessions, {len(requests)} multi-session opens, 2 HTTP responses, 1 provider-only config')
+        print(f'PASS: {invalid_count} refusals, 2 raw sessions, {len(requests)} multi-session opens, 2 HTTP responses')
 
 
 if __name__ == '__main__':

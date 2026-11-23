@@ -48,5 +48,15 @@
     "name": "literal bearer token",
     "config": {"agent":{"stdio":"multi_session","tool_sources":{"tools":{"kind":"remote","auth":""}}}},
     "diagnostic": "auth must name an environment variable"
+  },
+  {
+    "name": "unknown cohosted provider selection",
+    "config": {"agent":{"stdio":"multi_session","provider":"auto"},"provider":{"http":"127.0.0.1:6271"}},
+    "diagnostic": "agent.provider must be cohosted"
+  },
+  {
+    "name": "cohosted selection without HTTP",
+    "config": {"agent":{"http":"127.0.0.1:0","provider":"cohosted"},"provider":{"stdio":"raw"}},
+    "diagnostic": "cohosted requires provider.http"
   }
 ]

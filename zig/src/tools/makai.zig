@@ -517,6 +517,9 @@ const AgentRegistry = struct {
     surface: ConfigSurface,
     configured_sources: []const adapter_contract.ConfiguredSource = &.{},
     production: ?*tui_app.ProductionRuntime = null,
+    provider_service: ?*const oap_remote_provider_transport.Config = null,
+    provider_bridge: agent_oap_provider_bridge.InProcessOapProviderBridge = undefined,
+    provider_models: ?[]ai_types.Model = null,
     saved: ?*ServedSessions = null,
     memories: std.ArrayList(*memory_adapter.Adapter) = .empty,
     builtins: std.ArrayList(*oapx_adapter.Adapter) = .empty,
@@ -539,6 +542,10 @@ const AgentRegistry = struct {
         if (self.production) |production| {
             production.deinit();
             self.allocator.destroy(production);
+        }
+        if (self.provider_models) |models| {
+            for (models) |*model| model.deinit(self.allocator);
+            self.allocator.free(models);
         }
         for (self.memories.items) |memory| memory.deinit();
         self.memories.deinit(self.allocator);
@@ -620,8 +627,17 @@ const AgentRegistry = struct {
         }
         if (std.mem.eql(u8, entry.kind, "oapx")) {
             const production = try self.runtime();
+            var options = production.options();
+            if (self.provider_service) |service| {
+                if (self.provider_models == null) {
+                    self.provider_models = try oap_remote_provider_transport.discoverModels(self.allocator, service);
+                    self.provider_bridge = agent_oap_provider_bridge.InProcessOapProviderBridge.init(service.factory());
+                }
+                options.models = self.provider_models.?;
+                options.protocol = self.provider_bridge.protocolClient();
+            }
             const built = try arena.create(oapx_adapter.Adapter);
-            built.* = oapx_adapter.Adapter.init(self.allocator, production.options());
+            built.* = oapx_adapter.Adapter.init(self.allocator, options);
             built.environment = entry.environment;
             built.configured_sources = self.configured_sources;
             errdefer built.deinit();
@@ -748,9 +764,11 @@ const MultiSessionOptions = struct {
     history_path: ?[]const u8 = null,
     save_sessions: ?bool = null,
     park_after_ns: u64 = default_park_after_ns,
+    configured: bool = false,
+    provider_service: ?*const oap_remote_provider_transport.Config = null,
 };
 
-pub fn loadServiceConfig(arena: std.mem.Allocator, path: []const u8, environ: *const std.process.Environ.Map, stderr: std.Io.File) !adapter_config.ServiceConfig {
+fn loadServiceConfig(arena: std.mem.Allocator, path: []const u8, environ: *const std.process.Environ.Map, stderr: std.Io.File) !adapter_config.ServiceConfig {
     const surface = withSurface(hub_config_surface, arena, stderr);
     const bytes = compat.fs.readFileAlloc(arena, compat.fs.getCwd(), path, backend_config_read_limit) catch |err| {
         try surface.refuse("cannot read --config {s}: {s}", .{ path, @errorName(err) });
@@ -761,25 +779,6 @@ pub fn loadServiceConfig(arena: std.mem.Allocator, path: []const u8, environ: *c
         if (err != error.ConfigInvalid) return err;
         try surface.refuse("{s}: {s}", .{ path, diagnostic.message });
         return error.BackendRefused;
-    };
-}
-
-pub fn runConfiguredAgent(
-    allocator: std.mem.Allocator,
-    arena: std.mem.Allocator,
-    environ: *const std.process.Environ.Map,
-    agent: adapter_config.AgentService,
-    stdin: std.Io.File,
-    stdout: std.Io.File,
-    stderr: std.Io.File,
-) !void {
-    return switch (agent.binding) {
-        .multi_session_stdio => runMultiSessionAgent(allocator, arena, environ, agent.registry, .{}, stdin, stdout, stderr),
-        .http => |http| runMultiSessionAgent(allocator, arena, environ, agent.registry, .{ .address = http.address }, stdin, stdout, stderr),
-        .raw_stdio => |entry| raw: {
-            endpoint_signals.install() catch {};
-            break :raw runRawAgent(allocator, arena, environ, entry, agent.registry.tool_sources, stdin, stdout, stderr);
-        },
     };
 }
 
@@ -885,7 +884,7 @@ fn runMultiSessionAgent(
         }
     }
     const tool_sources = try configuredSources(arena, file.tool_sources);
-    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources, .provider_service = options.provider_service };
     defer registry.deinit();
     var saved: ?ServedSessions = null;
     defer if (saved) |*held| held.deinit();
@@ -929,11 +928,11 @@ fn runMultiSessionAgent(
     if (bindings) |*store| core.bindings = store.bindings();
 
     if (hubTakesSignals()) {
-        endpoint_signals.install() catch {
+        if (!options.configured) endpoint_signals.install() catch {
             try compat.stdio.writeAll(stderr, "oxap serve: the process cannot take a signal handler; refusing to serve a hub that cannot be stopped\n");
             return error.BackendRefused;
         };
-    } else {
+    } else if (!options.configured) {
         try compat.stdio.writeAll(stderr, "oxap serve: a console interrupt ends this process rather than the hub; the Windows path is #460\n");
     }
 
@@ -996,6 +995,96 @@ fn hubIo() std.Io {
 fn readStdin(context: *anyopaque, buffer: []u8) anyerror!usize {
     const file: *std.Io.File = @ptrCast(@alignCast(context));
     return file.readStreaming(hubIo(), &.{buffer});
+}
+
+const ConfiguredServer = struct {
+    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    config: adapter_config.ServiceConfig,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+    stderr: std.Io.File,
+    failure: ?anyerror = null,
+    provider_stop: std.atomic.Value(bool) = .init(false),
+
+    fn run(self: *ConfiguredServer) !void {
+        try endpoint_signals.install();
+        const provider = self.config.provider orelse return self.runAgent(null, false, self.stdout);
+        switch (provider) {
+            .raw_stdio => {
+                if (self.config.agent == null) return self.runProvider();
+                if (self.config.agent.?.binding == .raw_stdio) return self.runAgent(null, true, self.stdout);
+                const agent_thread = try std.Thread.spawn(.{}, backgroundAgent, .{self});
+                const result = self.runProvider();
+                endpoint_signals.requestShutdown();
+                agent_thread.join();
+                try result;
+            },
+            .http => |http| {
+                var listener = try bindProviderHttp(self.allocator, http.address);
+                defer compat.net.closeServer(&listener);
+                if (self.config.agent == null) return serveProviderHttp(self.allocator, &listener, .signal);
+                const service: oap_remote_provider_transport.Config = .{
+                    .base_url = try std.fmt.allocPrint(self.arena, "http://{s}", .{http.address}),
+                    .security = .loopback,
+                };
+                const provider_thread = try std.Thread.spawn(.{}, backgroundProvider, .{ self, &listener });
+                const result = self.runAgent(if (self.config.agent.?.cohosted_provider) &service else null, false, self.stdout);
+                self.provider_stop.store(true, .release);
+                provider_thread.join();
+                try result;
+            },
+        }
+        if (self.failure) |failure| return failure;
+    }
+
+    fn runAgent(self: *ConfiguredServer, service: ?*const oap_remote_provider_transport.Config, provider_stdio: bool, notices: std.Io.File) !void {
+        const agent = self.config.agent.?;
+        return switch (agent.binding) {
+            .raw_stdio => |entry| runRawAgent(self.allocator, self.arena, self.environ, entry, agent.registry.tool_sources, service, provider_stdio, self.stdin, notices, self.stderr),
+            .http, .multi_session_stdio => runMultiSessionAgent(self.allocator, self.arena, self.environ, agent.registry, .{
+                .address = if (agent.binding == .http) agent.binding.http.address else null,
+                .configured = true,
+                .provider_service = service,
+            }, self.stdin, notices, self.stderr),
+        };
+    }
+
+    fn runProvider(self: *ConfiguredServer) !void {
+        return runProviderStdio(self.allocator, self.stdin, self.stdout, self.stderr, false, null);
+    }
+
+    fn backgroundAgent(self: *ConfiguredServer) void {
+        defer endpoint_signals.requestShutdown();
+        self.runAgent(null, false, self.stderr) catch |err| {
+            self.failure = err;
+        };
+    }
+
+    fn backgroundProvider(self: *ConfiguredServer, listener: *compat.net.Server) void {
+        serveProviderHttp(self.allocator, listener, .{ .flag = &self.provider_stop }) catch |err| {
+            self.failure = err;
+            endpoint_signals.requestShutdown();
+        };
+    }
+};
+
+fn runServeConfig(allocator: std.mem.Allocator, path: []const u8, stdin: std.Io.File, stdout: std.Io.File, stderr: std.Io.File) !void {
+    var scratch = std.heap.ArenaAllocator.init(allocator);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+    var environ = try compat.createEnvMap(arena);
+    var server = ConfiguredServer{
+        .allocator = allocator,
+        .arena = arena,
+        .environ = &environ,
+        .config = try loadServiceConfig(arena, path, &environ, stderr),
+        .stdin = stdin,
+        .stdout = stdout,
+        .stderr = stderr,
+    };
+    return server.run();
 }
 
 fn runServe(
@@ -1531,6 +1620,7 @@ fn printUsage(file: std.Io.File) !void {
         \\  oxap opencode install                            Alias for oxap harness install opencode
         \\  oxap tui --backend opencode [--config <path>]  The terminal UI over an OpenCode server oxap starts, or the entry's endpoint
         \\  oxap run [--backend <name>] [--config <path>] [--model <id>] [--system <text>] [--json] [--approve] ["<prompt>"]
+        \\  oxap serve --config <path>
         \\  oxap serve agent [--stdio] [--model <model-ref>]
         \\  oxap serve agent [--stdio] --backend <name> [--config <path>]
         \\  oxap serve provider [--stdio] [--specimens]
@@ -2076,6 +2166,25 @@ pub fn main(init: std.process.Init) !void {
             else => return err,
         };
         return;
+    }
+
+    if (std.mem.eql(u8, args[1], "serve")) {
+        const path = if (args.len == 4 and std.mem.eql(u8, args[2], "--config") and !std.mem.startsWith(u8, args[3], "--"))
+            args[3]
+        else if (args.len == 3 and std.mem.startsWith(u8, args[2], "--config="))
+            args[2]["--config=".len..]
+        else
+            null;
+        if (path) |file| {
+            runServeConfig(allocator, file, stdin, stdout, stderr) catch |err| {
+                if (err != error.BackendRefused) {
+                    var buffer: [160]u8 = undefined;
+                    try compat.stdio.writeAll(stderr, try std.fmt.bufPrint(&buffer, "oxap serve: {s}\n", .{@errorName(err)}));
+                }
+                std.process.exit(1);
+            };
+            return;
+        }
     }
 
     if (std.mem.eql(u8, args[1], "hub") or (std.mem.eql(u8, args[1], "serve") and (args.len == 2 or std.mem.startsWith(u8, args[2], "-")))) {
@@ -4829,13 +4938,35 @@ fn handleHttpProviderConnectionFallible(runtime: *HttpProviderRuntime, stream: *
 }
 
 fn runOapProviderHttpMode(allocator: std.mem.Allocator, bind: []const u8) !void {
+    var listener = try bindProviderHttp(allocator, bind);
+    defer compat.net.closeServer(&listener);
+    return serveProviderHttp(allocator, &listener, .never);
+}
+
+fn bindProviderHttp(allocator: std.mem.Allocator, bind: []const u8) !compat.net.Server {
     const separator = std.mem.lastIndexOfScalar(u8, bind, ':') orelse return error.InvalidHttpBind;
     if (!std.mem.eql(u8, bind[0..separator], "127.0.0.1")) return error.HttpProviderMustBindLoopback;
     const port = std.fmt.parseInt(u16, bind[separator + 1 ..], 10) catch return error.InvalidHttpBind;
     if (port == 0) return error.InvalidHttpBind;
     const address = try compat.net.resolveAddress(allocator, "127.0.0.1", port);
-    var listener = try compat.net.tcpListen(address, .{ .reuse_address = true });
-    defer compat.net.closeServer(&listener);
+    return compat.net.tcpListen(address, .{ .reuse_address = true });
+}
+
+const ProviderHttpStop = union(enum) {
+    never,
+    signal,
+    flag: *const std.atomic.Value(bool),
+
+    fn requested(self: ProviderHttpStop) bool {
+        return switch (self) {
+            .never => false,
+            .signal => endpoint_signals.received(),
+            .flag => |flag| flag.load(.acquire),
+        };
+    }
+};
+
+fn serveProviderHttp(allocator: std.mem.Allocator, listener: *compat.net.Server, stop: ProviderHttpStop) !void {
     var runtime = try HttpProviderRuntime.init(allocator);
     const pump_thread = std.Thread.spawn(.{}, pumpHttpProvider, .{&runtime}) catch |err| {
         runtime.deinit();
@@ -4847,8 +4978,10 @@ fn runOapProviderHttpMode(allocator: std.mem.Allocator, bind: []const u8) !void 
         pump_thread.join();
         runtime.deinit();
     }
-    while (true) {
-        const connection = try compat.net.accept(&listener);
+    while (!stop.requested()) {
+        if (stop != .never and !try hub_daemon.listenerReadyWithin(allocator, listener, 25)) continue;
+        if (stop.requested()) break;
+        const connection = try compat.net.accept(listener);
         const existing = runtime.workers.fetchAdd(1, .acq_rel);
         if (existing >= HTTP_PROVIDER_MAX_WORKERS) {
             _ = runtime.workers.fetchSub(1, .acq_rel);
@@ -4944,13 +5077,25 @@ fn runOapProviderMode(
     answers_specimens: bool,
 ) !void {
     endpoint_signals.install() catch {};
+    return runProviderStdio(allocator, stdin, stdout, stderr, answers_specimens, null);
+}
+
+fn runProviderStdio(
+    allocator: std.mem.Allocator,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+    stderr: std.Io.File,
+    answers_specimens: bool,
+    agent: ?*adapter_endpoint.Endpoint,
+) !void {
     var registry = api_registry.ApiRegistry.init(allocator);
     defer registry.deinit();
     try register_builtins.registerBuiltInApiProviders(&registry);
 
     var server = oap_provider_server.Server.init(allocator, servedOapProviderOptions(if (oap_provider_grant_channel.GrantChannel.supported) .out_of_band else .unsupported));
     defer server.deinit();
-    var output = bounded_output.Output.init(stdout, std.math.maxInt(u64));
+    if (agent != null) unblockOutput(stdout);
+    var output = bounded_output.Output.init(stdout, if (agent != null) backend_write_stall_ns else std.math.maxInt(u64));
     try output.start();
     defer output.deinit();
 
@@ -4976,13 +5121,17 @@ fn runOapProviderMode(
 
     var served_generation = try startServingOapCatalog(allocator, &server);
 
-    var async_receiver = stdio.AsyncStdioReceiver.initWithFile(stdin);
+    var async_receiver = if (agent != null)
+        stdio.AsyncStdioReceiver.initWithFileAndLimit(stdin, adapter_endpoint.default_frame_limit)
+    else
+        stdio.AsyncStdioReceiver.initWithFile(stdin);
     var stdin_handle = try async_receiver.receiveStreamWithHandle(allocator);
     defer _ = stdin_handle.deinit(if (endpoint_signals.received()) 0 else STDIO_THREAD_JOIN_TIMEOUT_MS);
     const stdin_stream = stdin_handle.getStream();
 
     while (true) {
         var did_work = false;
+        if (agent) |endpoint| try endpoint.takeSignals(endpoint_signals.count());
         if (try applyServedOapReload(allocator, &server, &served_oap_models, &served_generation)) did_work = true;
 
         while (if (endpoint_signals.received()) null else stdin_stream.poll()) |chunk| {
@@ -5006,6 +5155,14 @@ fn runOapProviderMode(
                 continue;
             }
 
+            if (agent) |endpoint| {
+                if (!try isProviderOapLine(allocator, line)) {
+                    try endpoint.handleAgentLine(line, true);
+                    _ = try writeEndpointOutbound(&output, allocator, endpoint);
+                    did_work = true;
+                    continue;
+                }
+            }
             server.handleLine(line) catch |err| {
                 _ = try drainOapProviderOutbound(&output, allocator, &server);
                 try compat.stdio.writeAll(stderr, OAP_PROVIDER_EXHAUSTED_MESSAGE);
@@ -5027,10 +5184,26 @@ fn runOapProviderMode(
 
         if (try drainOapProviderOutbound(&output, allocator, &server)) did_work = true;
 
-        if (oapInputEnded(stdin_stream) and running.items.len == 0 and !did_work) break;
+        var done = oapInputEnded(stdin_stream);
+        if (agent) |endpoint| {
+            if (oapInputDrained(stdin_stream)) {
+                if (stdin_stream.getError()) |failure| {
+                    if (std.mem.eql(u8, failure, "stdio line too large")) return error.FrameTooLarge;
+                    return error.StdinFailed;
+                }
+            }
+            if (endpoint.sessionCount() > 0 and try endpoint.pump(if (did_work) 0 else STDIO_IDLE_SLEEP_NS)) did_work = true;
+            if (try writeEndpointOutbound(&output, allocator, endpoint)) did_work = true;
+            if (endpoint_signals.received()) done = try endpoint.shutdownComplete();
+        }
+        if (done and running.items.len == 0 and !did_work) break;
         if (!did_work) compat.time.sleepNs(STDIO_IDLE_SLEEP_NS);
     }
 
+    if (agent) |endpoint| {
+        try endpoint.finish(if (endpoint.shutdown == .force) 0 else adapter_endpoint.default_settle_window_ns, backendClock);
+        _ = try writeEndpointOutbound(&output, allocator, endpoint);
+    }
     _ = try drainOapProviderOutbound(&output, allocator, &server);
 }
 
@@ -6184,7 +6357,7 @@ fn runBackendMode(
     var configured_sources: []const adapter_config.ToolSource = &.{};
     const surface = withSurface(endpoint_config_surface, arena, stderr);
     const entry = try backendEntry(surface, arena, name, config_path, &environ, &configured_sources);
-    return runRawAgent(allocator, arena, &environ, entry, configured_sources, stdin, stdout, stderr);
+    return runRawAgent(allocator, arena, &environ, entry, configured_sources, null, false, stdin, stdout, stderr);
 }
 
 fn runRawAgent(
@@ -6193,26 +6366,30 @@ fn runRawAgent(
     environ: *const std.process.Environ.Map,
     entry: adapter_config.AdapterEntry,
     configured_sources: []const adapter_config.ToolSource,
+    provider_service: ?*const oap_remote_provider_transport.Config,
+    provider_stdio: bool,
     stdin: std.Io.File,
     stdout: std.Io.File,
     stderr: std.Io.File,
 ) !void {
     const surface = withSurface(endpoint_config_surface, arena, stderr);
     const tool_sources = try configuredSources(arena, configured_sources);
-    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources, .provider_service = provider_service };
     defer registry.deinit();
     const served = try registry.make(arena, entry);
+
+    var endpoint = adapter_endpoint.Endpoint.init(allocator, served, .{ .tool_sources = tool_sources });
+    defer endpoint.deinit();
+    var notices = StderrNotice{ .file = stderr };
+    endpoint.notices = notices.notice();
+
+    if (provider_stdio) return runProviderStdio(allocator, stdin, stdout, stderr, false, &endpoint);
 
     unblockOutput(stdout);
     var output = bounded_output.Output.init(stdout, backend_write_stall_ns);
     try output.start();
     defer output.deinit();
     output.stall_notice = .{ .file = stderr, .message = BACKEND_OUTPUT_STALLED_MESSAGE };
-    var endpoint = adapter_endpoint.Endpoint.init(allocator, served, .{ .tool_sources = tool_sources });
-    defer endpoint.deinit();
-    var notices = StderrNotice{ .file = stderr };
-    endpoint.notices = notices.notice();
-
     var async_receiver = stdio.AsyncStdioReceiver.initWithFileAndLimit(stdin, adapter_endpoint.default_frame_limit);
     var stdin_handle = try async_receiver.receiveStreamWithHandle(allocator);
     defer _ = stdin_handle.deinit(if (endpoint_signals.received()) 0 else STDIO_THREAD_JOIN_TIMEOUT_MS);
