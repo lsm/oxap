@@ -1094,6 +1094,17 @@ fn serveWindows(daemon: *Daemon, listener: *compat.net.Server, poll_ms: i32) ?st
     return null;
 }
 
+pub fn listenerReadyWithin(allocator: std.mem.Allocator, listener: *compat.net.Server, timeout_ms: u32) !bool {
+    const handle = compat.net.serverHandle(listener);
+    if (comptime hub_http.pollable) return compat.net.readableWithin(handle, @intCast(timeout_ms));
+    var poll = afd_poll.Poll.init(allocator);
+    defer poll.deinit();
+    try poll.arm(handle, &.{.{ .handle = handle, .events = .{ .accept = true } }});
+    waitCycle(&poll, true, @as(u64, timeout_ms) * std.time.ns_per_ms);
+    if (poll.state != .done) return false;
+    return (try poll.ready()).?.len > 0;
+}
+
 fn waitCycle(poll: *const afd_poll.Poll, armed: bool, cycle_ns: u64) void {
     const started = compat.time.monotonicNanos() catch return;
     while (!armed or poll.state != .done) {

@@ -71,6 +71,7 @@ pub const HttpBinding = struct {
 
 pub const AgentService = struct {
     registry: File,
+    cohosted_provider: bool = false,
     binding: union(enum) {
         multi_session_stdio,
         raw_stdio: AdapterEntry,
@@ -199,13 +200,16 @@ pub fn parseService(arena: std.mem.Allocator, bytes: []const u8, environ: *const
     if (top.contains("hub")) return reader.refuse("hub is reserved", .{});
     var config = ServiceConfig{};
     if (top.get("agent")) |value| {
-        const agent = try reader.members(value, "agent", &.{ "http", "stdio", "adapter", "adapters", "tool_sources" }) orelse
+        const agent = try reader.members(value, "agent", &.{ "http", "stdio", "adapter", "adapters", "tool_sources", "provider" }) orelse
             return reader.refuse("agent: must be an object", .{});
         const binding = try readBinding(reader, agent, "agent");
         if (agent.contains("adapter") and binding != .raw_stdio)
             return reader.refuse("agent.adapter is only valid for stdio: raw", .{});
         const registry = try readRegistry(reader, agent, environ);
-        config.agent = .{ .registry = registry, .binding = switch (binding) {
+        const cohosted = agent.contains("provider");
+        if (cohosted and !std.mem.eql(u8, try reader.string(agent, "agent", "provider"), "cohosted"))
+            return reader.refuse("agent.provider must be cohosted", .{});
+        config.agent = .{ .registry = registry, .cohosted_provider = cohosted, .binding = switch (binding) {
             .multi_session_stdio => .multi_session_stdio,
             .http => |http| .{ .http = http },
             .raw_stdio => raw: {
@@ -225,6 +229,10 @@ pub fn parseService(arena: std.mem.Allocator, bytes: []const u8, environ: *const
             .http => |http| .{ .http = http },
             .multi_session_stdio => unreachable,
         };
+    }
+    if (config.agent) |agent| {
+        if (agent.cohosted_provider and (config.provider == null or config.provider.? != .http))
+            return reader.refuse("agent.provider: cohosted requires provider.http", .{});
     }
     if (config.agent == null and config.provider == null) return reader.refuse("at least one service is required", .{});
     if (config.agent) |agent| if (config.provider) |provider| {

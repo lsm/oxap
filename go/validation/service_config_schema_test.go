@@ -48,11 +48,13 @@ func TestServiceConfigSchema(t *testing.T) {
 			}
 		})
 	}
-	for _, input := range []string{
+	validConfigs := []string{
 		`{"agent":{"http":"localhost:0","adapters":{"work":{"type":"claude","allowed_tools":["Read"]}}},"provider":{"stdio":"raw"}}`,
 		`{"agent":{"stdio":"raw","adapter":"memory","adapters":{"memory":{"journal_capacity":0}}},"provider":{"http":"127.0.0.1:65535"}}`,
 		`{"agent":{"stdio":"multi_session","tool_sources":{"tools":{"kind":"remote","auth":{"env":"TOOLS_TOKEN"}}}}}`,
-	} {
+		`{"agent":{"stdio":"raw","adapter":"loop","provider":"cohosted","adapters":{"loop":{"type":"oapx"}}},"provider":{"http":"127.0.0.1:6271"}}`,
+	}
+	for _, input := range validConfigs {
 		var value any
 		if err := json.Unmarshal([]byte(input), &value); err != nil {
 			t.Fatal(err)
@@ -61,5 +63,5 @@ func TestServiceConfigSchema(t *testing.T) {
 			t.Errorf("schema refused the valid config %s: %v", input, err)
 		}
 	}
-	t.Logf("validated 3 good configs and refused %d bad configs", len(cases))
+	t.Logf("validated %d good configs and refused %d bad configs", len(validConfigs), len(cases))
 }

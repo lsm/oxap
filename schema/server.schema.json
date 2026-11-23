@@ -13,6 +13,8 @@
       "provider": {"required": ["stdio"], "properties": {"stdio": {"const": "raw"}}}
     }
   },
+  "if": {"required": ["agent"], "properties": {"agent": {"required": ["provider"]}}},
+  "then": {"required": ["provider"], "properties": {"provider": {"required": ["http"]}}},
   "$defs": {
     "agentService": {
       "type": "object",
@@ -23,6 +25,7 @@
         },
         "stdio": {"enum": ["raw", "multi_session"]},
         "adapter": {"$ref": "#/$defs/nonempty"},
+        "provider": {"const": "cohosted"},
         "adapters": {"$ref": "#/$defs/adapters"},
         "tool_sources": {
           "type": ["object", "null"],

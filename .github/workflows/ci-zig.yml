@@ -466,8 +466,8 @@ jobs:
 
       - name: Verify service configuration and Agent adapter selection
         run: |
-          zig build --build-file zig/build.zig build-service-config-probe --prefix /tmp/oapx-hub -Doptimize=ReleaseSafe
-          python3 .claude/skills/verify/scripts/service-config.py /tmp/oapx-hub/bin/service-config-probe
+          python3 .claude/skills/verify/scripts/service-config.py /tmp/oapx-hub/bin/oxap
+          python3 .claude/skills/verify/scripts/serve-config.py /tmp/oapx-hub/bin/oxap
 
       - name: Verify Claude custom endpoint routing and key redaction
         run: python3 .claude/skills/verify/scripts/claude-model-endpoint.py --binary /tmp/oapx-hub/bin/oxap
