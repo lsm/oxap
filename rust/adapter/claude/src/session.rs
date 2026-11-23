@@ -323,7 +323,7 @@ impl ActiveTurn {
                 frame.errors.join("; ")
             } else if !frame.result.trim().is_empty() {
                 frame.result.trim().into()
-            } else if !success {
+            } else if !success && !frame.subtype.is_empty() {
                 frame.subtype.clone()
             } else if let Some(status) = frame.api_error_status {
                 format!("API error (HTTP {status})")
