@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.43] - 2026-11-23
+
+### Added
+
+- Start Agent and Provider services with `oxap serve --config`. The Go, Rust, TypeScript and Python SDKs use a server config by default. ([#1982](https://github.com/lsm/oxap/pull/1982), [#1939](https://github.com/lsm/oxap/pull/1939), [#1986](https://github.com/lsm/oxap/pull/1986))
+- The Rust Claude adapter opens native sessions, lists tools and sources, routes requests to configured providers, and sends pending text turns. ([#1994](https://github.com/lsm/oxap/pull/1994), [#1995](https://github.com/lsm/oxap/pull/1995), [#1996](https://github.com/lsm/oxap/pull/1996), [#1998](https://github.com/lsm/oxap/pull/1998))
+- Rust Hermes supports session creation and reopening, settings and session listing, streamed turns, input gates, cancellation, and replay from a retained cursor. ([#1966](https://github.com/lsm/oxap/pull/1966), [#1977](https://github.com/lsm/oxap/pull/1977), [#1978](https://github.com/lsm/oxap/pull/1978), [#1985](https://github.com/lsm/oxap/pull/1985), [#1987](https://github.com/lsm/oxap/pull/1987), [#1979](https://github.com/lsm/oxap/pull/1979), [#1980](https://github.com/lsm/oxap/pull/1980), [#1981](https://github.com/lsm/oxap/pull/1981), [#1983](https://github.com/lsm/oxap/pull/1983))
+
+### Fixed
+
+- DeepSeek sessions restore their saved model when reopened after a hub restart. ([#1997](https://github.com/lsm/oxap/pull/1997))
+- Configured built-in Agents report available providers during auth discovery. ([#1984](https://github.com/lsm/oxap/pull/1984))
+- Rust Hermes handles gateway disconnects, transport errors, and stale observations between runs. ([#1974](https://github.com/lsm/oxap/pull/1974), [#1992](https://github.com/lsm/oxap/pull/1992), [#1991](https://github.com/lsm/oxap/pull/1991))
+
+### Changed
+
+- Update harness pins to Codex 0.171.0, Claude Code 2.1.330, Copilot CLI 1.0.114, and ACP 1.21.2. ([#1934](https://github.com/lsm/oxap/pull/1934), [#1990](https://github.com/lsm/oxap/pull/1990), [#1935](https://github.com/lsm/oxap/pull/1935), [#1937](https://github.com/lsm/oxap/pull/1937), [#1936](https://github.com/lsm/oxap/pull/1936), [#1989](https://github.com/lsm/oxap/pull/1989))
+
+### Merged pull requests
+
+- **Replay the complete Hermes adapter corpus in Rust** ([#1993](https://github.com/lsm/oxap/pull/1993)): The Rust Hermes adapter reported different capability levels and advanced its clock outside the run stream, so callers could see different session and run metadata.
+- **Resolve Rust Hermes input gates from caller answers** ([#1976](https://github.com/lsm/oxap/pull/1976)): Rust Hermes runs can now accept answers to approval, clarification, sudo and secret prompts.
+- **Publish Rust Hermes input gates on the run stream** ([#1975](https://github.com/lsm/oxap/pull/1975)): Rust Hermes runs now surface native input requests as OAP events.
+- **Replay Rust Hermes tool lifecycles as OAP envelopes** ([#1973](https://github.com/lsm/oxap/pull/1973)): Rust Hermes run streams now publish tool calls as OAP envelopes.
+- **Replay Rust Hermes streaming runs as OAP envelopes** ([#1972](https://github.com/lsm/oxap/pull/1972)): The Rust Hermes gateway now exposes an OAP run stream for prompt start, content deltas, and settlement.
+- **Project Rust Hermes prompt deltas and settlement** ([#1971](https://github.com/lsm/oxap/pull/1971)): The Rust Hermes gateway session now projects content and the final result after a prompt starts.
+- **Wait for native Hermes prompt start in Rust** ([#1970](https://github.com/lsm/oxap/pull/1970)): Hermes can acknowledge a streaming prompt and settle it before a turn opens.
+- **Read ordered native Hermes session observations in Rust** ([#1969](https://github.com/lsm/oxap/pull/1969)): The Rust Hermes adapter can now read typed native session observations in wire order.
+- **Bind native Hermes prompt submission and interruption in Rust** ([#1968](https://github.com/lsm/oxap/pull/1968)): Rust can now submit a prompt to a native Hermes session and interrupt it.
+- **parity: Compare served Zig, Go, and Rust backends** ([#1967](https://github.com/lsm/oxap/pull/1967)): The shared served-backend comparison now runs Rust alongside Zig and Go for ACP, Codex, both DeepSeek scenarios, and memory.
+- **verify: Fix Rust pin checks on Python 3.12 and newer** ([#1965](https://github.com/lsm/oxap/pull/1965)): The Rust pin-literal verifier fails on Python 3.12 and newer even when `goap check` catches both planted violations.
+- **Replay the shared Codex corpus in Rust** ([#1964](https://github.com/lsm/oxap/pull/1964)): The Rust Codex adapter now replays every case in the shared catalog corpus.
+- **harness: Enforce catalog pins in Rust source** ([#1963](https://github.com/lsm/oxap/pull/1963)): `goap check` now rejects Rust source strings that duplicate a harness pin from the catalog.
+- **release: Cut 0.1.0-alpha.42** ([#1962](https://github.com/lsm/oxap/pull/1962)): Prepares 0.1.0-alpha.42 with DeepSeek model switches forwarded through stdio hubs (#1959), thread resume after hub restart (#1960), and inline image input for Flash (#1961).
+
 ## [0.1.0-alpha.42] - 2026-11-22
 
 ### Added
