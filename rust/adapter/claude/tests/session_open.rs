@@ -364,6 +364,10 @@ fn claude_run_replays_streaming_and_settlement() {
         {
             let text = frame["raw"]["message"]["content"].as_str().unwrap();
             let (admission, stream) = block_on(session.submit(text_submit(text))).unwrap();
+            if mode == "run-streaming" {
+                let running = block_on(session.state()).unwrap();
+                assert_eq!(running.transcript_cursor, "1");
+            }
             fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
             let actual: Vec<_> = block_on(stream.collect::<Vec<_>>())
                 .into_iter()
@@ -411,6 +415,7 @@ fn claude_run_replays_streaming_and_settlement() {
             assert_eq!(idle.status.as_str(), "idle");
             assert!(idle.active_run_id.is_none());
             assert!(idle.active_runs.is_empty());
+            assert_eq!(idle.transcript_cursor, expected.len().to_string());
         }
         block_on(session.close()).unwrap();
         assert!(directory.path().join("eof").is_file());
