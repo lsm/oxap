@@ -21,8 +21,9 @@ synthetic Codex peer, and checks the HTTP Host allowlist.
 
 The service journey covers both orderings of dual raw stdio, single-service
 bindings, and all mixed HTTP/stdio bindings. It checks same-ID replies by
-profile, a missing-profile refusal, fatal framing diagnostics with a prior
-reply preserved, terminal events on both profiles at EOF,
+profile, auth provider discovery on the built-in raw Agent both alone and
+alongside a raw Provider, a missing-profile refusal, fatal framing diagnostics
+with a prior reply preserved, terminal events on both profiles at EOF,
 and a built-in Agent turn through the explicitly selected Provider over
 loopback. The test Provider is synthetic and anonymous. The HTTP Provider
 discloses no grant channel and the Agent profile refuses Provider grants.
