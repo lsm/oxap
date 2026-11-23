@@ -10,6 +10,12 @@ import uuid
 assert os.environ["NODE_ENV"] == "test"
 assert Path(os.environ["HOME"]) == Path.cwd()
 mode = os.environ["MODE"]
+if mode == "provider":
+    assert os.environ["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:1/gateway"
+    assert os.environ["ANTHROPIC_API_KEY"] == "oap-unauthenticated"
+    assert "ANTHROPIC_AUTH_TOKEN" not in os.environ
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ
+    assert os.environ["ANTHROPIC_CUSTOM_HEADERS"] == "X-Host: first\nX-Trace: two words\nx-trace: third"
 arguments = sys.argv[1:]
 binding = arguments[arguments.index("--session-id") + 1]
 assert uuid.UUID(binding).version == 4

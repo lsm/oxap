@@ -1,5 +1,164 @@
 use oxap_adapter::Adapter;
-use oxap_adapter_claude::{Adapter as ClaudeAdapter, Config, ToolPosture};
+use oxap_adapter_claude::{
+    Adapter as ClaudeAdapter, AuthMode, Config, Header, Provider, ToolPosture,
+};
+
+#[test]
+fn rejects_nul_in_the_launch_environment_before_startup() {
+    let error = ClaudeAdapter::new(Config {
+        executable: Some("unused".into()),
+        tools: ToolPosture::Unrestricted,
+        environment: vec!["LAUNCH_VALUE=invalid\0value".into()],
+        ..Default::default()
+    })
+    .err()
+    .expect("invalid environment must be refused before opening a session");
+    assert!(error.to_string().contains("environment entry carries NUL"));
+    assert!(!error.to_string().contains("invalid"));
+}
+
+#[test]
+fn launch_plan_matches_go_for_all_auth_modes() {
+    let mut config = Config {
+        executable: Some("unused".into()),
+        tools: ToolPosture::Unrestricted,
+        environment: [
+            "ANTHROPIC_BASE_URL=https://old.example",
+            "ANTHROPIC_API_KEY=old",
+            "ANTHROPIC_AUTH_TOKEN=old",
+            "CLAUDE_CODE_OAUTH_TOKEN=old",
+            "OTHER=entry=with=equals",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        ..Default::default()
+    };
+    let plan = |config| ClaudeAdapter::new(config).unwrap().spawn_plan().unwrap();
+    assert_eq!(plan(config.clone()).env, config.environment);
+    let base_url = "HTTPS://gateway.example/anthropic";
+    for (auth, secret, credential) in [
+        (AuthMode::None, "", "ANTHROPIC_API_KEY=oap-unauthenticated"),
+        (AuthMode::ApiKey, "key", "ANTHROPIC_API_KEY=key"),
+        (AuthMode::Token, "token", "ANTHROPIC_AUTH_TOKEN=token"),
+    ] {
+        config.provider = Some(Provider {
+            base_url: base_url.into(),
+            auth,
+            secret: secret.into(),
+        });
+        let launch = plan(config.clone());
+        assert!(!format!("{launch:?}").contains("ANTHROPIC_"));
+        assert_eq!(
+            launch.env,
+            [
+                "OTHER=entry=with=equals",
+                "ANTHROPIC_BASE_URL=HTTPS://gateway.example/anthropic",
+                credential
+            ]
+        );
+    }
+    config.headers.push(Header {
+        name: "X-Trace".into(),
+        value: String::new(),
+    });
+    assert_eq!(
+        plan(config.clone()).env.last().unwrap(),
+        "ANTHROPIC_CUSTOM_HEADERS=X-Trace: "
+    );
+    config.environment.push("ANTHROPIC_CUSTOM_HEADERS=".into());
+    assert!(plan(config)
+        .env
+        .iter()
+        .any(|entry| entry == "ANTHROPIC_CUSTOM_HEADERS=X-Trace: "));
+    println!("PASS launch plans: preserved native environment and all three configured auth modes");
+}
+
+#[test]
+fn invalid_provider_and_headers_are_refused_at_construction() {
+    let config = Config {
+        executable: Some("unused".into()),
+        tools: ToolPosture::Unrestricted,
+        ..Default::default()
+    };
+    for (url, auth, secret, diagnostic) in [
+        ("", AuthMode::None, "", "base URL"),
+        ("ftp://gateway.example", AuthMode::None, "", "base URL"),
+        ("https:///path", AuthMode::None, "", "base URL"),
+        ("https://gate way.example", AuthMode::None, "", "base URL"),
+        (
+            "https://gateway.example\nX: value",
+            AuthMode::None,
+            "",
+            "base URL",
+        ),
+        (
+            "https://gateway.example",
+            AuthMode::None,
+            "private-value",
+            "takes no secret",
+        ),
+        (
+            "https://gateway.example",
+            AuthMode::ApiKey,
+            "",
+            "needs a secret",
+        ),
+        (
+            "https://gateway.example",
+            AuthMode::Token,
+            "",
+            "needs a secret",
+        ),
+        (
+            "https://gateway.example",
+            AuthMode::Token,
+            "private-value\r\n",
+            "line break or NUL",
+        ),
+        (
+            "https://gateway.example",
+            AuthMode::ApiKey,
+            "private-value\0",
+            "line break or NUL",
+        ),
+    ] {
+        let error = ClaudeAdapter::new(Config {
+            provider: Some(Provider {
+                base_url: url.into(),
+                auth,
+                secret: secret.into(),
+            }),
+            ..config.clone()
+        })
+        .err()
+        .expect("invalid provider was accepted")
+        .to_string();
+        assert!(error.contains(diagnostic), "{error}");
+        assert!(!error.contains("private-value"));
+    }
+    for (name, value) in [
+        ("", ""),
+        ("x:y", ""),
+        ("x y", ""),
+        ("x", "value\rnext"),
+        ("x", "value\nnext"),
+        ("x", "value\0next"),
+    ] {
+        let error = ClaudeAdapter::new(Config {
+            headers: vec![Header {
+                name: name.into(),
+                value: value.into(),
+            }],
+            ..config.clone()
+        })
+        .err()
+        .expect("invalid header was accepted")
+        .to_string();
+        assert!(error.contains("cannot be carried in ANTHROPIC_CUSTOM_HEADERS"));
+        assert!(!error.contains("value"));
+    }
+    println!("PASS validation: 10 invalid routes and 6 invalid headers refused");
+}
 use oxap_protocol::{CompactionKind, CompactionPolicy, ReasoningLevel};
 
 fn descriptor(adapter: &ClaudeAdapter) -> oxap_adapter::Descriptor {

@@ -10,11 +10,16 @@ use std::{
 
 use futures::executor::block_on;
 use oxap_adapter::{Adapter as _, Error, OpenRequest};
-use oxap_adapter_claude::{adapter::pin, Adapter, Config, ToolPosture};
+use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{ReasoningLevel, ToolsListRequest, FEATURE_TOOLS_LIST};
 use serde_json::{json, Value};
 
 fn fixture(mode: &str) -> (Adapter, tempfile::TempDir, Vec<Value>) {
+    let (config, directory, frames) = fixture_config(mode);
+    (Adapter::new(config).unwrap(), directory, frames)
+}
+
+fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
     let directory = tempfile::tempdir().unwrap();
     let peer = directory.path().join("peer");
     fs::write(&peer, include_str!("session_open_peer.py")).unwrap();
@@ -32,7 +37,7 @@ fn fixture(mode: &str) -> (Adapter, tempfile::TempDir, Vec<Value>) {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    let adapter = Adapter::new(Config {
+    let config = Config {
         executable: Some(peer.display().to_string()),
         tools: ToolPosture::Unrestricted,
         model: Some("configured-model".into()),
@@ -45,9 +50,8 @@ fn fixture(mode: &str) -> (Adapter, tempfile::TempDir, Vec<Value>) {
             format!("MODE={mode}"),
         ],
         ..Default::default()
-    })
-    .unwrap();
-    (adapter, directory, frames)
+    };
+    (config, directory, frames)
 }
 
 fn open_fixture(mode: &str) {
@@ -114,6 +118,31 @@ fn opens_and_closes_the_corpus_gateway() {
         open_fixture(mode);
     }
     println!("4/4 Claude startup cases passed");
+}
+
+#[test]
+fn configured_provider_reaches_the_cli_peer() {
+    let (mut config, directory, _) = fixture_config("provider");
+    config.environment.extend([
+        "ANTHROPIC_BASE_URL=https://old.example".into(),
+        "ANTHROPIC_CUSTOM_HEADERS=X-Host: first".into(),
+    ]);
+    config.provider = Some(Provider {
+        base_url: "http://127.0.0.1:1/gateway".into(),
+        auth: AuthMode::None,
+        secret: String::new(),
+    });
+    config.headers = [("X-Trace", "two words"), ("x-trace", "third")]
+        .map(|(name, value)| Header {
+            name: name.into(),
+            value: value.into(),
+        })
+        .to_vec();
+    let adapter = Adapter::new(config).unwrap();
+    let session = block_on(adapter.open(OpenRequest::default())).unwrap();
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS Rust provider launch: route, ordered headers, initialize, and EOF");
 }
 
 #[test]

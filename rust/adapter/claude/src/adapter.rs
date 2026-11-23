@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use oxap_adapter::runtime::Runtime;
 use oxap_adapter::{
@@ -17,6 +17,7 @@ use oxap_protocol::{SessionState, SessionStatus};
 use crate::{
     catalog::native_source,
     native::{apply_flag_settings_request, initialize_request, settings_flags, FlagSettings},
+    provider::{configure_environment, Header, Provider},
     rpc::{Process, ProcessConfig},
     session::{bind, OpenedSession},
 };
@@ -96,16 +97,29 @@ pub struct Config {
     pub model: Option<String>,
     pub tools: ToolPosture,
     pub environment: Vec<String>,
+    pub provider: Option<Provider>,
+    pub headers: Vec<Header>,
     pub working_directory: Option<String>,
     pub journal_capacity: usize,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct SpawnPlan {
     pub path: String,
     pub args: Vec<String>,
     pub dir: String,
     pub env: Vec<String>,
+}
+
+impl fmt::Debug for SpawnPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SpawnPlan")
+            .field("path", &self.path)
+            .field("args", &self.args)
+            .field("dir", &self.dir)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone)]
@@ -120,6 +134,11 @@ pub fn pin() -> &'static oxap_harness::Version {
 
 impl Adapter {
     pub fn new(mut config: Config) -> Result<Self, Error> {
+        configure_environment(
+            &mut config.environment,
+            config.provider.take(),
+            &config.headers,
+        )?;
         config.tools.validate()?;
         if config.journal_capacity == 0 {
             config.journal_capacity = DEFAULT_JOURNAL_CAPACITY;
