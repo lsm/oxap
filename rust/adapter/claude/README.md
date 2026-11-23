@@ -43,6 +43,15 @@ the wait error, not a close error, as in Go. Closing also shuts the stdout
 and stderr readers, as Go closes both pipes, so a descendant that inherited
 either one cannot keep the reader or a pending call waiting.
 
+`Config::provider` routes fresh sessions to a configured HTTP or HTTPS base
+URL. It replaces the allowlisted Anthropic URL, API key, bearer token and
+Claude OAuth token with the configured URL and one authentication variable.
+The CLI expects an API key sentinel for unauthenticated routes. Without a
+provider, the allowlisted environment supplies the native route and auth.
+`Config::headers` appends ordered `Name: Value` lines to any existing
+`ANTHROPIC_CUSTOM_HEADERS`. Construction rejects malformed routes, secrets,
+configured headers and environment entries that carry NUL.
+
 `native` holds the pinned frame types, decoded as Go's `encoding/json` decodes
 them. `decode_observation` reads every frame Go's `DecodeObservation` reads:
 an unrecognised type reads as `Unknown`, and an unrecognised system subtype as
