@@ -17,30 +17,41 @@ def cases():
         yield json.dumps(case['config']), case['diagnostic']
     yield '{}', 'at least one service'
     yield 'null', 'must be an object'
-    yield '{"agent":{},"agent":{}}', 'DuplicateField'
-    yield '{"provider":{"binding":{"type":"raw_stdio","type":"http"}}}', 'DuplicateField'
-    yield '{"provider":{"binding":{"type":"raw_stdio"}},"extra":{}}', 'unknown field "extra"'
-    yield '{"hub":null}', 'hub is reserved'
-    yield '{"agent":null}', 'agent: must be an object'
-    yield '{"agent":{}}', 'agent.binding is required'
-    yield '{"provider":{}}', 'provider.binding is required'
-    yield '{"provider":{"binding":{"type":"multi_session_stdio"}}}', 'invalid provider binding'
-    yield '{"agent":{"binding":{"type":"typo"}}}', 'invalid agent binding'
-    yield '{"agent":{"binding":{"type":"multi_session_stdio","adapter":"one"}}}', 'only valid for raw_stdio'
-    yield '{"agent":{"binding":{"type":"multi_session_stdio","address":"127.0.0.1:80"}}}', 'only valid for http'
-    yield '{"agent":{"binding":{"type":"multi_session_stdio","extra":true}}}', 'unknown field "extra"'
-    yield '{"agent":{"binding":{"type":"http"}}}', 'explicit address'
-    yield '{"agent":{"binding":{"type":"http","address":"localhost"}}}', 'invalid HTTP address'
-    yield '{"agent":{"binding":{"type":"http","address":"0.0.0.0:8000"}}}', 'loopback'
-    yield '{"provider":{"binding":{"type":"http","address":"127.0.0.1:0"}}}', 'nonzero port'
-    yield '{"agent":{"binding":{"type":"raw_stdio"}}}', 'adapter name is required'
-    yield '{"agent":{"binding":{"type":"raw_stdio","adapter":"missing"}}}', 'no adapter named "missing"'
-    yield '{"agent":{"binding":{"type":"multi_session_stdio"},"adapters":{"a":{"type":"memory","extra":0}}}}', 'unknown field "extra"'
-    yield '{"agent":{"binding":{"type":"multi_session_stdio"},"adapters":{"a":{"type":"unknown"}}}}', 'does not know'
-    yield ('{"agent":{"binding":{"type":"multi_session_stdio"}},"provider":{"binding":{"type":"raw_stdio"}}}',
-           'exclusive use of stdio')
-    yield ('{"provider":{"binding":{"type":"http","address":"127.0.0.1:8000"}},'
-           '"agent":{"binding":{"type":"http","address":"localhost:08000"}}}', 'HTTP listeners conflict')
+    yield '{"agent":{},"agent":{}}', 'line 1, column 13: duplicate mapping key'
+    yield 'provider:\n  stdio: raw\n  "stdio": raw', 'line 3, column 3: duplicate mapping key'
+    yield 'provider: {stdio: raw, stdio: raw}', 'duplicate mapping key'
+    yield 'provider: {stdio: raw} # provider\nextra: {}', 'unknown field "extra"'
+    yield 'hub: null', 'hub is reserved'
+    yield 'agent: null', 'agent: must be an object'
+    yield 'agent: {}', 'exactly one of http or stdio'
+    yield 'provider: {}', 'exactly one of http or stdio'
+    yield 'agent: {http: localhost:0, stdio: multi_session}', 'exactly one of http or stdio'
+    yield 'provider: {stdio: multi_session}', 'invalid provider stdio binding'
+    yield 'agent: {stdio: typo}', 'invalid agent stdio binding'
+    yield 'agent: {stdio: multi_session, adapter: one}', 'only valid for stdio: raw'
+    yield 'agent: {http: null}', 'explicit address'
+    yield 'agent: {http: localhost}', 'invalid HTTP address'
+    yield 'agent: {http: 0.0.0.0:8000}', 'loopback'
+    yield 'provider: {http: 127.0.0.1:0}', 'nonzero port'
+    yield 'agent: {stdio: raw}', 'adapter name is required'
+    yield 'agent: {stdio: raw, adapter: missing}', 'no adapter named "missing"'
+    yield 'agent: {stdio: multi_session, adapters: {a: {type: unknown}}}', 'does not know'
+    yield 'agent: {stdio: multi_session}\nprovider: {stdio: raw}', 'exclusive use of stdio'
+    yield 'provider: {http: 127.0.0.1:8000}\nagent: {http: localhost:08000}', 'HTTP listeners conflict'
+    yield 'provider: &p {stdio: raw}', 'unsupported YAML indicator'
+    yield 'provider: *p', 'unsupported YAML indicator'
+    yield 'provider: !custom {stdio: raw}', 'unsupported YAML indicator'
+    yield 'provider: {<<: {stdio: raw}}', 'merge keys are unsupported'
+    yield 'provider: |\n  stdio: raw', 'unsupported YAML indicator'
+    yield 'provider: {stdio: raw}\n---\nprovider: {stdio: raw}', 'another document'
+    yield 'provider:\n\tstdio: raw', 'tabs cannot indent a block'
+    yield 'provider: {stdio: "raw}', 'unterminated quoted string'
+    yield 'provider: {stdio: raw extra}', 'invalid provider stdio binding'
+    yield 'provider: {true: raw}', 'mapping keys must be strings'
+    yield 'agent: {stdio: multi_session, adapters: {memory: {any_directory: yes}}}', 'must be a boolean'
+    yield 'agent: {stdio: multi_session, tool_sources: {t: {kind: remote, auth: null}}}', 'auth must name an environment variable'
+    yield 'agent: {stdio: multi_session, tool_sources: {t: {kind: remote, auth: {env: UNSET_TOOL_TOKEN}}}}', 'environment variable "UNSET_TOOL_TOKEN" is not set'
+    yield 'agent: {stdio: multi_session, adapters: {memory: {agent_config: ' + '[' * 70 + '0' + ']' * 70 + '}}}', 'nesting limit exceeded'
 
 
 def main():
@@ -52,7 +63,7 @@ def main():
         root = Path(temp)
         home = root / 'home'
         home.mkdir()
-        config = root / 'server.json'
+        config = root / 'server.yaml'
         env = {'HOME': str(home), 'PATH': os.defpath, 'NODE_ENV': 'test',
                'XDG_DATA_HOME': str(root / 'data'), 'XDG_CONFIG_HOME': str(root / 'config')}
 
@@ -78,11 +89,11 @@ def main():
                           'working_directory': str(root), 'model': 'synthetic-model',
                           'approval_policy': 'on-request', 'sandbox': 'workspace-write'},
         }
-        provider = {'binding': {'type': 'raw_stdio'}}
+        provider = {'stdio': 'raw'}
         envelope = helpers['envelope']
         capabilities = {**envelope('caps'), 'type': 'capabilities.request', 'payload': {}}
         for name, endpoint_id in [('scripted', 'reference.memory'), ('synthetic', 'codex.app-server')]:
-            agent = {'adapters': adapters, 'binding': {'type': 'raw_stdio', 'adapter': name}}
+            agent = {'adapters': adapters, 'stdio': 'raw', 'adapter': name}
             result = run({'provider': provider, 'agent': agent}, [capabilities, envelope(name)])
             assert result.returncode == 0, result
             frames = [json.loads(line) for line in result.stdout.splitlines()]
@@ -98,10 +109,32 @@ def main():
                 native.unlink()
             print(f'raw stdio used {endpoint_id} and exited {result.returncode}')
 
-        agent = {'adapters': adapters, 'binding': {'type': 'multi_session_stdio'}}
+        script = json.dumps(str(peer))
+        log = json.dumps(str(native))
+        executable = json.dumps(sys.executable)
+        work = json.dumps(str(root))
+        yaml_adapters = f'''adapters:
+    scripted:
+      type: memory
+      agent_config:
+        options:
+          - label: 'it''s # literal'
+            on: off
+          - {{ enabled: True, value: ~ }}
+    synthetic:
+      type: codex # start the synthetic peer
+      executable: {executable}
+      args:
+        - {script}
+        - {log}
+      working_directory: {work}
+      model: "synthetic-model"
+      approval_policy: on-request
+      sandbox: workspace-write
+'''
         requests = [{'id': index, 'op': 'open', 'adapter': name, 'request': envelope(name)}
                     for index, name in enumerate(adapters, 1)]
-        result = run({'agent': agent}, requests)
+        result = run('---\nagent:\n  stdio: multi_session\n  ' + yaml_adapters + '...\n', requests)
         assert result.returncode == 0, result
         replies = {frame['id']: frame for line in result.stdout.splitlines()
                    if 'id' in (frame := json.loads(line))}
@@ -111,8 +144,7 @@ def main():
         assert methods.count('thread/start') == 1, result
         print(f'multi-session opened {len(requests)} sessions and exited {result.returncode}')
 
-        agent['binding'] = {'type': 'http', 'address': 'localhost:0'}
-        config.write_text(json.dumps({'agent': agent, 'provider': provider}))
+        config.write_text('agent:\n  http: localhost:0\n  ' + yaml_adapters + 'provider: {stdio: raw}\n')
         with subprocess.Popen([args.probe, config], cwd=root, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, stdin=subprocess.DEVNULL, text=True) as process:
             try:
@@ -138,7 +170,7 @@ def main():
                 if process.poll() is None:
                     process.kill()
 
-        result = run({'provider': {'binding': {'type': 'http', 'address': '127.0.0.1:6271'}}})
+        result = run('provider:\r\n  http: \'127.0.0.1:6271\'  # explicit address\r\n')
         assert result.returncode == 0 and not result.stdout, result
         print(f'provider-only configuration validation exited {result.returncode}')
         print(f'PASS: {invalid_count} refusals, 2 raw sessions, {len(requests)} multi-session opens, 2 HTTP responses, 1 provider-only config')

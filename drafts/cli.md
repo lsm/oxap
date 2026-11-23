@@ -90,27 +90,49 @@ the requests that fit it and is silent about the rest.
 ## Service configuration for 0.2
 
 [Decision 0070](../decisions/0070-one-server-with-agent-provider-and-hub-services.md)
-defines the transition to a service document. Each present service has one
-\`binding\` object:
+defines a service document. Declare exactly one transport per enabled service:
 
-| Service | \`binding.type\` | Other binding members |
+| Service | Transport | Required settings |
 |---|---|---|
-| \`agent\` | \`multi_session_stdio\` | None |
-| \`agent\` | \`raw_stdio\` | \`adapter\` names an entry in \`agent.adapters\` |
-| \`agent\` | \`http\` | \`address\` is a loopback host and port |
-| \`provider\` | \`raw_stdio\` | None |
-| \`provider\` | \`http\` | \`address\` is \`127.0.0.1\` and a nonzero port |
+| Agent | `stdio: multi_session` | None |
+| Agent | `stdio: raw` | `adapter` names an entry in `agent.adapters` |
+| Agent | `http: <address>` | A loopback host and port |
+| Provider | `stdio: raw` | None |
+| Provider | `http: <address>` | `127.0.0.1` and a nonzero port |
 
-Agent HTTP accepts \`127.0.0.1\`, \`localhost\` (bound as \`127.0.0.1\`), and
-\`[::1]\`. Port zero lets the OS choose an Agent HTTP port. Two HTTP bindings
-cannot claim the same IPv4 loopback port. Multi-session stdio takes the
-stream exclusively. Agent and Provider may both declare raw stdio.
+```yaml
+agent:
+  http: "127.0.0.1:6270"
+  adapters:
+    demo:
+      type: memory
+provider:
+  stdio: raw
+```
 
-\`agent.adapters\` and \`agent.tool_sources\` use the existing registry format.
-The multi-session binding resolves an adapter on session open. The raw
-binding selects one at startup. The loader refuses duplicate and unknown
-members, an empty service set, and any \`hub\` section. Config-based dispatch
-ships separately.
+Agent HTTP accepts `127.0.0.1`, `localhost` (bound as `127.0.0.1`), and
+`[::1]`. Quote IPv6 addresses. Ports contain one to five ASCII digits and
+range from 0 to 65535. Port zero lets the OS choose an Agent HTTP port.
+Two HTTP bindings cannot claim the same IPv4 loopback port. Multi-session
+stdio takes the stream exclusively. Agent and Provider may both declare raw
+stdio.
+
+Use [the server schema](../schema/server.schema.json) to validate a decoded
+document. Agent adapters and tool sources use named mappings. The
+multi-session binding resolves an adapter on session open. Raw Agent stdio
+selects one at startup. The loader rejects duplicate and unknown members,
+an empty service set, and any `hub` section. A remote tool source's
+`auth` takes an environment reference such as `{env: TOOL_TOKEN}`.
+
+The configuration accepts JSON and a YAML subset: one document with string
+keys, indented block or flow collections, comments, plain scalars, single
+quotes with doubled apostrophes, and double quotes with JSON escapes. Plain
+booleans, nulls and decimal integers use YAML 1.2 Core spellings. Other
+plain scalars such as `yes` or `off` are strings. Quote strings that look
+like the supported typed scalars. Anchors, aliases, tags, merge keys,
+complex keys, block strings and additional documents are refused. YAML
+syntax errors include a line and column. Config-based dispatch ships
+separately.
 
 ## Migration
 

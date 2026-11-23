@@ -23,10 +23,12 @@ agents and integrations need a common way to exchange messages.
 
 ### A configuration file selects the services
 
-`oxap serve --config server.json` is the server entry point. `serve` is the
+`oxap serve --config server.yaml` is the server entry point. `serve` is the
 action. A present service section enables that service. An absent section
 leaves it disabled. OXAP 0.2 accepts `agent` and `provider` alone or together.
 The `hub` section is reserved and rejected until the messaging service ships.
+Each service chooses one transport with either `http: <address>` or `stdio: <mode>`.
+The file accepts a strict YAML subset and JSON for generated configurations.
 The server rejects duplicate or unknown configuration members, an empty
 service set, a service without a binding, and conflicting bindings at startup.
 Each HTTP listener requires an explicit address. The multi-session Agent
