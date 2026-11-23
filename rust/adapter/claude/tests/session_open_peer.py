@@ -72,7 +72,7 @@ if mode in {"settings", "settings-refusal"}:
         {"type": "control_response", "response": {"subtype": "success", "response": {}}},
         mode == "settings-refusal",
     )
-if mode in {"submit-text", "submit-parts"}:
+if mode in {"submit-text", "submit-parts", "submit-abandon"}:
     raw = sys.stdin.readline()
     frame = json.loads(raw)
     assert frame["uuid"].startswith("turn-")
@@ -87,6 +87,10 @@ if mode in {"submit-text", "submit-parts"}:
     wire = wire.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     assert raw == wire + "\n", raw
     Path("turn-observed").touch()
+    if mode == "submit-abandon":
+        assert not sys.stdin.readline(), "extra native input"
+        Path("eof").touch()
+        sys.exit(0)
     deadline = time.monotonic() + 10
     while not Path("release-turn").exists():
         assert not select.select([sys.stdin], [], [], 0.02)[0], "extra native input"

@@ -205,12 +205,7 @@ fn verify_submit(mode: &str, request: SubmitRequest, expand_prompts: bool) {
         Poll::Ready(Err(error)) => panic!("native submit refused: {error}"),
         Poll::Ready(Ok(_)) => panic!("write alone must not admit a run"),
     }
-    let observed = directory.path().join("turn-observed");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while !observed.is_file() {
-        assert!(Instant::now() < deadline, "no turn reached native stdin");
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_turn(directory.path());
     assert!(matches!(
         block_on(session.submit(text_submit("again"))),
         Err(Error::RunActive)
@@ -229,6 +224,43 @@ fn verify_submit(mode: &str, request: SubmitRequest, expand_prompts: bool) {
     block_on(session.close()).unwrap();
     assert!(directory.path().join("no-extra-turn").is_file());
     println!("PASS {mode}: one native turn, invalid and overlapping submits refused, no premature admission");
+}
+
+fn wait_for_turn(directory: &Path) {
+    let observed = directory.join("turn-observed");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !observed.is_file() {
+        assert!(Instant::now() < deadline, "no turn reached native stdin");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn dropping_an_uncorroborated_submit_allows_close() {
+    let (adapter, directory, _) = fixture("submit-abandon");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let mut submission = session.submit(text_submit("hello"));
+    let mut context = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(submission.as_mut().poll(&mut context).is_pending());
+    wait_for_turn(directory.path());
+    assert_eq!(block_on(session.close()), Err(Error::RunActive));
+    drop(submission);
+
+    block_on(session.close()).expect("dropping submit must release the session for close");
+    assert!(directory.path().join("eof").is_file());
+    assert!(matches!(
+        block_on(session.state()),
+        Err(Error::SessionClosed)
+    ));
+    assert!(matches!(
+        block_on(session.submit(text_submit("retry"))),
+        Err(Error::SessionClosed)
+    ));
+    println!("PASS submit-abandon: caller dropped submit after native write, then closed the session and the peer observed EOF");
 }
 
 fn check_invalid_submits(session: &dyn oxap_adapter::Session) {
