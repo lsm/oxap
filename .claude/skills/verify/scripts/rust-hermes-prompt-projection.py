@@ -136,7 +136,7 @@ def settings_gateway(corpus, case, read, send):
         call(request_id, "config.set", {"session_id": session_id, "key": "reasoning", "value": value},
              {"key": "reasoning", "value": value}, error)
 
-    if case == "native-list":
+    if case in {"native-list", "native-list-exit-error"}:
         call(1, "session.list", {"limit": 2}, {"sessions": [
             None, {"title": "missing id"}, {"id": "stored-a", "title": "Named", "started_at": 1.25},
             {"id": "stored-b", "title": "", "preview": "first words", "started_at": 2},
@@ -169,6 +169,8 @@ def settings_gateway(corpus, case, read, send):
         }})
     assert sys.stdin.read() == ""
     Path("replay-complete").touch()
+    if case == "native-list-exit-error":
+        raise SystemExit(7)
 
 
 def gateway(corpus, case):
@@ -178,7 +180,7 @@ def gateway(corpus, case):
     def send(frame):
         print(frame if isinstance(frame, str) else json.dumps(frame), flush=True)
 
-    if case in {"shared-settings", "shared-settings-reopen", "native-list"}:
+    if case in {"shared-settings", "shared-settings-reopen", "native-list", "native-list-exit-error"}:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
         settings_gateway(corpus, case, read, send)
         return
@@ -393,6 +395,12 @@ def verify(binary, corpus, mode, case):
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
+    if case == "native-list-exit-error":
+        assert replay_complete
+        assert result.returncode == 1, "native listing reported success after gateway exit 7"
+        assert "exit status 7" in result.stderr and not result.stdout
+        print("GATEWAY EXIT ERROR: 7")
+        return
     if case in REOPEN_TIMEOUT_CASES:
         assert result.returncode == 1
         assert result.stderr.strip() == "Error: DeadlineExceeded"
