@@ -50,8 +50,9 @@ CASES = {
 
 
 def check_registries():
-    zig = (ROOT / "zig/src/tools/makai.zig").read_text().split("const HubRegistry = struct", 1)[1]
-    zig = zig.split("fn reported(", 1)[0]
+    _, start, registry = (ROOT / "zig/src/tools/makai.zig").read_text().partition("const AgentRegistry = struct {")
+    zig, end, _ = registry.partition("\n};")
+    assert start and end, "could not locate the Zig Agent registry"
     go = (ROOT / "go/serve/registry.go").read_text().split("func buildAdapter(", 1)[1]
     go = go.split("func claudeToolPosture(", 1)[0]
     rust = (ROOT / "rust/serve/src/config.rs").read_text().split("match kind.as_str() {", 1)[1]

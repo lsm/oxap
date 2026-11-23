@@ -511,7 +511,7 @@ const ServedSessions = struct {
     }
 };
 
-const HubRegistry = struct {
+const AgentRegistry = struct {
     allocator: std.mem.Allocator,
     environ: *const std.process.Environ.Map,
     surface: ConfigSurface,
@@ -519,12 +519,13 @@ const HubRegistry = struct {
     production: ?*tui_app.ProductionRuntime = null,
     saved: ?*ServedSessions = null,
     memories: std.ArrayList(*memory_adapter.Adapter) = .empty,
+    builtins: std.ArrayList(*oapx_adapter.Adapter) = .empty,
     claudes: std.ArrayList(*claude_adapter.Adapter) = .empty,
     codexes: std.ArrayList(*codex_adapter.Adapter) = .empty,
     hermeses: std.ArrayList(*hermes_adapter.Adapter) = .empty,
     opencode_servers: std.ArrayList(*opencode_server.Server) = .empty,
 
-    fn deinit(self: *HubRegistry) void {
+    fn deinit(self: *AgentRegistry) void {
         for (self.opencode_servers.items) |server| server.deinit();
         self.opencode_servers.deinit(self.allocator);
         for (self.claudes.items) |claude| claude.deinit();
@@ -533,6 +534,8 @@ const HubRegistry = struct {
         self.codexes.deinit(self.allocator);
         for (self.hermeses.items) |hermes| hermes.deinit();
         self.hermeses.deinit(self.allocator);
+        for (self.builtins.items) |adapter| adapter.deinit();
+        self.builtins.deinit(self.allocator);
         if (self.production) |production| {
             production.deinit();
             self.allocator.destroy(production);
@@ -542,7 +545,7 @@ const HubRegistry = struct {
         self.* = undefined;
     }
 
-    fn runtime(self: *HubRegistry) !*tui_app.ProductionRuntime {
+    fn runtime(self: *AgentRegistry) !*tui_app.ProductionRuntime {
         if (self.production) |production| return production;
         const production = try self.allocator.create(tui_app.ProductionRuntime);
         errdefer self.allocator.destroy(production);
@@ -553,35 +556,42 @@ const HubRegistry = struct {
     }
 
     fn build(context: *anyopaque, arena: std.mem.Allocator, entry: adapter_config.AdapterEntry) adapter_contract.Failure!adapter_contract.Adapter {
-        const self: *HubRegistry = @ptrCast(@alignCast(context));
+        const self: *AgentRegistry = @ptrCast(@alignCast(context));
+        return self.make(arena, entry) catch |failure| switch (failure) {
+            error.OutOfMemory => error.OutOfMemory,
+            else => error.Unavailable,
+        };
+    }
+
+    fn make(self: *AgentRegistry, arena: std.mem.Allocator, entry: adapter_config.AdapterEntry) !adapter_contract.Adapter {
         if (std.mem.eql(u8, entry.kind, "claude")) {
-            const config = claudeBackendConfig(self.surface, arena, entry, self.environ) catch |failure| return self.reported(failure);
+            const config = try claudeBackendConfig(self.surface, arena, entry, self.environ);
             const built = try arena.create(claude_adapter.Adapter);
             built.* = claude_adapter.Adapter.init(self.allocator, config);
             try self.claudes.append(self.allocator, built);
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "codex")) {
-            const config = codexBackendConfig(self.surface, arena, entry, self.environ) catch |failure| return self.reported(failure);
+            const config = try codexBackendConfig(self.surface, arena, entry, self.environ);
             const built = try arena.create(codex_adapter.Adapter);
             built.* = codex_adapter.Adapter.init(self.allocator, config);
             try self.codexes.append(self.allocator, built);
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "pi")) {
-            const config = piBackendConfig(self.surface, arena, entry, self.environ) catch |failure| return self.reported(failure);
+            const config = try piBackendConfig(self.surface, arena, entry, self.environ);
             const built = try arena.create(pi_adapter.Adapter);
             built.* = pi_adapter.Adapter.init(self.allocator, config);
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "acp")) {
-            const config = acpBackendConfig(self.surface, arena, entry, self.environ) catch |failure| return self.reported(failure);
+            const config = try acpBackendConfig(self.surface, arena, entry, self.environ);
             const built = try arena.create(acp_adapter.Adapter);
             built.* = acp_adapter.Adapter.init(self.allocator, config);
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "deepseek")) {
-            const config = deepseekBackendConfig(self.surface, arena, entry, self.environ) catch |failure| return self.reported(failure);
+            const config = try deepseekBackendConfig(self.surface, arena, entry, self.environ);
             const built = try arena.create(deepseek_adapter.Adapter);
             built.* = deepseek_adapter.Adapter.init(self.allocator, config);
             return built.adapter();
@@ -589,14 +599,14 @@ const HubRegistry = struct {
         if (std.mem.eql(u8, entry.kind, "opencode")) {
             try self.opencode_servers.ensureUnusedCapacity(self.allocator, 1);
             var started: ?*opencode_server.Server = null;
-            const config = opencodeBackendConfig(self.allocator, self.surface, arena, entry, self.environ, &started) catch |failure| return self.reported(failure);
+            const config = try opencodeBackendConfig(self.allocator, self.surface, arena, entry, self.environ, &started);
             if (started) |server| self.opencode_servers.appendAssumeCapacity(server);
             const built = try arena.create(opencode_adapter.Adapter);
             built.* = opencode_adapter.Adapter.init(self.allocator, config);
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "hermes")) {
-            const config = hermesBackendConfig(self.surface, arena, entry, self.environ) catch |failure| return self.reported(failure);
+            const config = try hermesBackendConfig(self.surface, arena, entry, self.environ);
             const built = try arena.create(hermes_adapter.Adapter);
             built.* = hermes_adapter.Adapter.init(self.allocator, config);
             try self.hermeses.append(self.allocator, built);
@@ -609,30 +619,22 @@ const HubRegistry = struct {
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "oapx")) {
-            const production = self.runtime() catch |failure| return self.reported(failure);
+            const production = try self.runtime();
             const built = try arena.create(oapx_adapter.Adapter);
             built.* = oapx_adapter.Adapter.init(self.allocator, production.options());
             built.environment = entry.environment;
             built.configured_sources = self.configured_sources;
+            errdefer built.deinit();
+            try self.builtins.append(self.allocator, built);
             if (self.saved) |saved| saved.attach(built);
             return built.adapter();
         }
-        return self.refuse(entry);
-    }
-
-    fn reported(self: *HubRegistry, failure: anyerror) adapter_contract.Failure {
-        _ = self;
-        if (failure == error.OutOfMemory) return error.OutOfMemory;
-        return error.Unavailable;
-    }
-
-    fn refuse(self: *HubRegistry, entry: adapter_config.AdapterEntry) adapter_contract.Failure {
-        self.surface.refuse("{s} \"{s}\" is of type \"{s}\", which oxap does not know; it serves claude, codex, pi, acp, hermes, deepseek, opencode, memory and oapx", .{ self.surface.noun, entry.name, entry.kind }) catch {};
-        return error.Unavailable;
+        try self.surface.refuse("{s} \"{s}\" is of type \"{s}\", which oxap does not know; it serves claude, codex, pi, acp, hermes, deepseek, opencode, memory and oapx", .{ self.surface.noun, entry.name, entry.kind });
+        return error.BackendRefused;
     }
 };
 
-fn hubConfiguredSources(
+fn configuredSources(
     arena: std.mem.Allocator,
     configured: []const adapter_config.ToolSource,
 ) ![]const adapter_contract.ConfiguredSource {
@@ -741,6 +743,46 @@ fn parkAfterNs(text: []const u8) error{InvalidHubOption}!u64 {
     return std.math.mul(u64, seconds, std.time.ns_per_s) catch error.InvalidHubOption;
 }
 
+const MultiSessionOptions = struct {
+    address: ?[]const u8 = null,
+    history_path: ?[]const u8 = null,
+    save_sessions: ?bool = null,
+    park_after_ns: u64 = default_park_after_ns,
+};
+
+pub fn loadServiceConfig(arena: std.mem.Allocator, path: []const u8, environ: *const std.process.Environ.Map, stderr: std.Io.File) !adapter_config.ServiceConfig {
+    const surface = withSurface(hub_config_surface, arena, stderr);
+    const bytes = compat.fs.readFileAlloc(arena, compat.fs.getCwd(), path, backend_config_read_limit) catch |err| {
+        try surface.refuse("cannot read --config {s}: {s}", .{ path, @errorName(err) });
+        return error.BackendRefused;
+    };
+    var diagnostic = adapter_config.Diagnostic{};
+    return adapter_config.parseService(arena, bytes, environ, &diagnostic) catch |err| {
+        if (err != error.ConfigInvalid) return err;
+        try surface.refuse("{s}: {s}", .{ path, diagnostic.message });
+        return error.BackendRefused;
+    };
+}
+
+pub fn runConfiguredAgent(
+    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    agent: adapter_config.AgentService,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+    stderr: std.Io.File,
+) !void {
+    return switch (agent.binding) {
+        .multi_session_stdio => runMultiSessionAgent(allocator, arena, environ, agent.registry, .{}, stdin, stdout, stderr),
+        .http => |http| runMultiSessionAgent(allocator, arena, environ, agent.registry, .{ .address = http.address }, stdin, stdout, stderr),
+        .raw_stdio => |entry| raw: {
+            endpoint_signals.install() catch {};
+            break :raw runRawAgent(allocator, arena, environ, entry, agent.registry.tool_sources, stdin, stdout, stderr);
+        },
+    };
+}
+
 fn runHub(
     allocator: std.mem.Allocator,
     args: []const []const u8,
@@ -801,10 +843,8 @@ fn runHub(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var environ = try compat.createEnvMap(arena);
-    var redactions: RouteRedactions = .{};
-    var surface = withSurface(hub_config_surface, arena, stderr);
-    surface.redactions = &redactions;
-    var file = adapter_config.File{};
+    const surface = withSurface(hub_config_surface, arena, stderr);
+    var file = adapter_config.File{ .adapters = &.{.{ .name = "memory", .kind = "memory" }} };
     if (config) |path| {
         const bytes = compat.fs.readFileAlloc(arena, compat.fs.getCwd(), path, backend_config_read_limit) catch |err| {
             try surface.refuse("cannot read --config {s}: {s}", .{ path, @errorName(err) });
@@ -817,20 +857,41 @@ fn runHub(
             return error.BackendRefused;
         };
     }
+    return runMultiSessionAgent(allocator, arena, &environ, file, .{
+        .address = if (over_stdio) null else addr orelse hub_http.defaultBind(),
+        .history_path = history_path,
+        .save_sessions = save_sessions,
+        .park_after_ns = park_after_ns,
+    }, stdin, stdout, stderr);
+}
+
+fn runMultiSessionAgent(
+    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    file: adapter_config.File,
+    options: MultiSessionOptions,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+    stderr: std.Io.File,
+) !void {
+    var redactions: RouteRedactions = .{};
+    var surface = withSurface(hub_config_surface, arena, stderr);
+    surface.redactions = &redactions;
     for (file.adapters) |entry| {
         if (entry.model_endpoint) |endpoint| {
             const value = environ.get(endpoint.credential_env).?;
             try redactions.keys.append(arena, .{ .variable = endpoint.credential_env, .value = value });
         }
     }
-    const tool_sources = try hubConfiguredSources(arena, file.tool_sources);
-    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = surface, .configured_sources = tool_sources };
+    const tool_sources = try configuredSources(arena, file.tool_sources);
+    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources };
     defer registry.deinit();
     var saved: ?ServedSessions = null;
     defer if (saved) |*held| held.deinit();
-    if (save_sessions orelse true) open: {
+    if (options.save_sessions orelse true) open: {
         const store = session_store.Store.initDefault(allocator) catch |err| {
-            if (save_sessions == null and err == error.HomeNotFound) {
+            if (options.save_sessions == null and err == error.HomeNotFound) {
                 compat.stdio.writeAll(stderr, "oxap: HOME is not set, so served sessions are not saved\n") catch {};
                 break :open;
             }
@@ -842,7 +903,15 @@ fn runHub(
     }
     var bindings: ?hub.binding.Store = null;
     defer if (bindings) |*store| store.deinit();
-    const history = history_path orelse if (compat.getEnvVarOwned(arena, "HOME")) |home| try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "sessions.jsonl" }) else |err| switch (err) {
+    var core = hub.Hub.init(allocator, wallClockNanoseconds, .{ .tool_sources = tool_sources, .park_after_ns = options.park_after_ns });
+    defer core.deinit();
+    var load_diagnostic = adapter_config.Diagnostic{};
+    core.load(arena, file, .{ .context = &registry, .make = AgentRegistry.build }, &load_diagnostic) catch |failure| {
+        if (failure != error.ConfigRefused) return failure;
+        try surface.refuse("{s}", .{load_diagnostic.message});
+        return error.BackendRefused;
+    };
+    const history = options.history_path orelse if (compat.getEnvVarOwned(arena, "HOME")) |home| try std.fs.path.join(arena, &.{ home, try compat.state.nameUnder(arena, home), "sessions.jsonl" }) else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => "",
     };
@@ -857,21 +926,7 @@ fn runHub(
             return error.BackendRefused;
         };
     }
-    var core = hub.Hub.init(allocator, wallClockNanoseconds, .{ .tool_sources = tool_sources, .park_after_ns = park_after_ns, .bindings = if (bindings) |*store| store.bindings() else null });
-    defer core.deinit();
-    if (config == null) {
-        const memory = try arena.create(memory_adapter.Adapter);
-        memory.* = memory_adapter.Adapter.init(allocator);
-        try registry.memories.append(allocator, memory);
-        try core.register("memory", memory.adapter());
-    } else {
-        var load_diagnostic = adapter_config.Diagnostic{};
-        core.load(arena, file, .{ .context = &registry, .make = HubRegistry.build }, &load_diagnostic) catch |failure| {
-            if (failure != error.ConfigRefused) return failure;
-            try surface.refuse("{s}", .{load_diagnostic.message});
-            return error.BackendRefused;
-        };
-    }
+    if (bindings) |*store| core.bindings = store.bindings();
 
     if (hubTakesSignals()) {
         endpoint_signals.install() catch {
@@ -883,7 +938,7 @@ fn runHub(
     }
 
     const served = try redactions.text(arena, try std.mem.join(arena, ", ", try core.names(arena)));
-    if (!over_stdio) return runHubHttp(allocator, arena, &core, addr orelse hub_http.defaultBind(), served, &redactions, stdout, stderr);
+    if (options.address) |address| return runHubHttp(allocator, arena, &core, address, served, &redactions, stdout, stderr);
 
     var sink = StdoutSink{ .file = stdout, .io = hubIo(), .redactions = &redactions, .json = true };
     var frontend = try hub_stdio.Frontend.init(allocator, &core, .{ .context = &sink, .write = StdoutSink.write }, .{});
@@ -6129,62 +6184,24 @@ fn runBackendMode(
     var configured_sources: []const adapter_config.ToolSource = &.{};
     const surface = withSurface(endpoint_config_surface, arena, stderr);
     const entry = try backendEntry(surface, arena, name, config_path, &environ, &configured_sources);
-    const tool_sources = try arena.alloc(adapter_contract.ConfiguredSource, configured_sources.len);
-    for (configured_sources, tool_sources) |source, *slot| {
-        slot.* = .{ .id = source.id, .kind = source.kind, .display_name = source.display_name, .protocol = source.protocol, .endpoint = source.endpoint, .command = source.command, .args = source.args, .environment = source.environment, .headers = source.headers };
-    }
+    return runRawAgent(allocator, arena, &environ, entry, configured_sources, stdin, stdout, stderr);
+}
 
-    var claude: claude_adapter.Adapter = undefined;
-    var codex: codex_adapter.Adapter = undefined;
-    var pi: pi_adapter.Adapter = undefined;
-    var acp: acp_adapter.Adapter = undefined;
-    var deepseek: deepseek_adapter.Adapter = undefined;
-    var opencode: opencode_adapter.Adapter = undefined;
-    var opencode_started: ?*opencode_server.Server = null;
-    defer if (opencode_started) |server| server.deinit();
-    var hermes: hermes_adapter.Adapter = undefined;
-    var hermes_held = false;
-    defer if (hermes_held) hermes.deinit();
-    var memory: memory_adapter.Adapter = undefined;
-    var oapx_production: ?tui_app.ProductionRuntime = null;
-    defer if (oapx_production) |*production| production.deinit();
-    var oapx: oapx_adapter.Adapter = undefined;
-    const served = if (std.mem.eql(u8, entry.kind, "claude")) claude_served: {
-        claude = claude_adapter.Adapter.init(allocator, try claudeBackendConfig(surface, arena, entry, &environ));
-        break :claude_served claude.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "codex")) codex_served: {
-        codex = codex_adapter.Adapter.init(allocator, try codexBackendConfig(surface, arena, entry, &environ));
-        break :codex_served codex.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "pi")) pi_served: {
-        pi = pi_adapter.Adapter.init(allocator, try piBackendConfig(surface, arena, entry, &environ));
-        break :pi_served pi.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "acp")) acp_served: {
-        acp = acp_adapter.Adapter.init(allocator, try acpBackendConfig(surface, arena, entry, &environ));
-        break :acp_served acp.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "deepseek")) deepseek_served: {
-        deepseek = deepseek_adapter.Adapter.init(allocator, try deepseekBackendConfig(surface, arena, entry, &environ));
-        break :deepseek_served deepseek.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "opencode")) opencode_served: {
-        opencode = opencode_adapter.Adapter.init(allocator, try opencodeBackendConfig(allocator, surface, arena, entry, &environ, &opencode_started));
-        break :opencode_served opencode.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "hermes")) hermes_served: {
-        hermes = hermes_adapter.Adapter.init(allocator, try hermesBackendConfig(surface, arena, entry, &environ));
-        hermes_held = true;
-        break :hermes_served hermes.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "memory")) memory_served: {
-        memory = memory_adapter.Adapter.init(allocator);
-        break :memory_served memory.adapter();
-    } else if (std.mem.eql(u8, entry.kind, "oapx")) oapx_served: {
-        oapx_production = try tui_app.ProductionRuntime.init(allocator, .{});
-        oapx_production.?.initBridge();
-        oapx = oapx_adapter.Adapter.init(allocator, oapx_production.?.options());
-        oapx.environment = entry.environment;
-        oapx.configured_sources = tool_sources;
-        break :oapx_served oapx.adapter();
-    } else {
-        try surface.refuse("{s} \"{s}\" is of type \"{s}\", which oxap does not know; it serves claude, codex, pi, acp, hermes, deepseek, opencode, memory and oapx", .{ surface.noun, name, entry.kind });
-        return error.BackendRefused;
-    };
+fn runRawAgent(
+    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    entry: adapter_config.AdapterEntry,
+    configured_sources: []const adapter_config.ToolSource,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+    stderr: std.Io.File,
+) !void {
+    const surface = withSurface(endpoint_config_surface, arena, stderr);
+    const tool_sources = try configuredSources(arena, configured_sources);
+    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources };
+    defer registry.deinit();
+    const served = try registry.make(arena, entry);
 
     unblockOutput(stdout);
     var output = bounded_output.Output.init(stdout, backend_write_stall_ns);
@@ -6679,9 +6696,9 @@ test "the hub's registry builds every entry a document names, and a child inheri
     try std.testing.expectEqualStrings("claude", file.adapters[0].name);
     try std.testing.expectEqualStrings("memory", file.adapters[1].name);
 
-    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
     defer registry.deinit();
-    const claude = try HubRegistry.build(&registry, arena, file.adapter("claude").?);
+    const claude = try AgentRegistry.build(&registry, arena, file.adapter("claude").?);
     const claude_adapter_instance: *claude_adapter.Adapter = @ptrCast(@alignCast(claude.ptr));
     const inherited = claude_adapter_instance.config.backend.environment;
     try std.testing.expectEqual(@as(usize, 2), inherited.len);
@@ -6691,7 +6708,7 @@ test "the hub's registry builds every entry a document names, and a child inheri
     const claude_descriptor = try claude.probe(&refusal);
     try std.testing.expect(claude_descriptor.capability_revision.len > 0);
 
-    const memory = try HubRegistry.build(&registry, arena, file.adapter("memory").?);
+    const memory = try AgentRegistry.build(&registry, arena, file.adapter("memory").?);
     const memory_descriptor = try memory.probe(&refusal);
     try std.testing.expectEqualStrings("reference.memory", memory_descriptor.endpoint.id);
 }
@@ -6708,9 +6725,9 @@ test "the hub's registry refuses an entry of a type it does not know, naming the
     var environ = std.process.Environ.Map.init(arena);
     var diagnostic = adapter_config.Diagnostic{};
     const file = try adapter_config.parse(arena, "{\"adapters\":{\"ghost\":{\"type\":\"ghost\"}}}", &environ, &diagnostic);
-    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
     defer registry.deinit();
-    try std.testing.expectError(error.Unavailable, HubRegistry.build(&registry, arena, file.adapter("ghost").?));
+    try std.testing.expectError(error.Unavailable, AgentRegistry.build(&registry, arena, file.adapter("ghost").?));
     complained_on.close(std.testing.io);
     const complained = try tmp.dir.readFileAlloc(std.testing.io, "stderr", allocator, .limited(4096));
     defer allocator.free(complained);
@@ -6729,9 +6746,9 @@ test "the hub's registry reports a known adapter's own requirement once, not as 
     var environ = std.process.Environ.Map.init(arena);
     var diagnostic = adapter_config.Diagnostic{};
     const file = try adapter_config.parse(arena, "{\"adapters\":{\"a\":{\"type\":\"opencode\"}}}", &environ, &diagnostic);
-    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
     defer registry.deinit();
-    try std.testing.expectError(error.Unavailable, HubRegistry.build(&registry, arena, file.adapter("a").?));
+    try std.testing.expectError(error.Unavailable, AgentRegistry.build(&registry, arena, file.adapter("a").?));
     complained_on.close(std.testing.io);
     const complained = try tmp.dir.readFileAlloc(std.testing.io, "stderr", allocator, .limited(4096));
     defer allocator.free(complained);
@@ -6756,11 +6773,11 @@ test "two entries of one type are two adapters, each with its own executable" {
         "}}";
     var diagnostic = adapter_config.Diagnostic{};
     const file = try adapter_config.parse(arena, document, &environ, &diagnostic);
-    var registry = HubRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = &environ, .surface = withSurface(hub_config_surface, arena, complained_on) };
     defer registry.deinit();
 
-    const first = try HubRegistry.build(&registry, arena, file.adapter("first").?);
-    const second = try HubRegistry.build(&registry, arena, file.adapter("second").?);
+    const first = try AgentRegistry.build(&registry, arena, file.adapter("first").?);
+    const second = try AgentRegistry.build(&registry, arena, file.adapter("second").?);
     try std.testing.expect(first.ptr != second.ptr);
     const first_claude: *claude_adapter.Adapter = @ptrCast(@alignCast(first.ptr));
     const second_claude: *claude_adapter.Adapter = @ptrCast(@alignCast(second.ptr));

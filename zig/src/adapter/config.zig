@@ -1,5 +1,6 @@
 const std = @import("std");
 const json_encode = @import("json_encode");
+const service_yaml = @import("service_yaml.zig");
 
 pub const Error = error{ConfigInvalid} || std.mem.Allocator.Error;
 
@@ -62,6 +63,26 @@ pub const File = struct {
     }
 };
 
+pub const HttpBinding = struct {
+    address: []const u8,
+    port: u16,
+    ipv6: bool,
+};
+
+pub const AgentService = struct {
+    registry: File,
+    binding: union(enum) {
+        multi_session_stdio,
+        raw_stdio: AdapterEntry,
+        http: HttpBinding,
+    },
+};
+
+pub const ServiceConfig = struct {
+    agent: ?AgentService = null,
+    provider: ?union(enum) { raw_stdio, http: HttpBinding } = null,
+};
+
 pub const Posture = union(enum) {
     unrestricted,
     allowed: []const []const u8,
@@ -81,6 +102,7 @@ const source_kinds = [_][]const u8{ "native", "local", "process", "remote", "hos
 const Reader = struct {
     arena: std.mem.Allocator,
     diagnostic: *Diagnostic,
+    service_config: bool = false,
 
     fn refuse(self: Reader, comptime format: []const u8, args: anytype) Error {
         self.diagnostic.message = try std.fmt.allocPrint(self.arena, "config: " ++ format, args);
@@ -152,14 +174,106 @@ const Reader = struct {
     }
 };
 
-pub fn parse(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.process.Environ.Map, diagnostic: *Diagnostic) Error!File {
-    const reader = Reader{ .arena = arena, .diagnostic = diagnostic };
-    const root = std.json.parseFromSliceLeaky(std.json.Value, arena, bytes, .{}) catch |err| {
+fn readJson(reader: Reader, bytes: []const u8) Error!std.json.Value {
+    return std.json.parseFromSliceLeaky(std.json.Value, reader.arena, bytes, .{}) catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;
         return reader.refuse("not one JSON object: {s}", .{@errorName(err)});
     };
-    const top = try reader.members(root, "the file", &top_members) orelse return .{};
+}
 
+pub fn parse(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.process.Environ.Map, diagnostic: *Diagnostic) Error!File {
+    const reader = Reader{ .arena = arena, .diagnostic = diagnostic };
+    const top = try reader.members(try readJson(reader, bytes), "the file", &top_members) orelse return .{};
+    return readRegistry(reader, top, environ);
+}
+
+pub fn parseService(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.process.Environ.Map, diagnostic: *Diagnostic) Error!ServiceConfig {
+    const reader = Reader{ .arena = arena, .diagnostic = diagnostic, .service_config = true };
+    var syntax: []const u8 = "";
+    const root = service_yaml.parse(arena, bytes, &syntax) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidYaml => return reader.refuse("{s}", .{syntax}),
+    };
+    const top = try reader.members(root, "the file", &.{ "agent", "provider", "hub" }) orelse
+        return reader.refuse("the file: must be an object", .{});
+    if (top.contains("hub")) return reader.refuse("hub is reserved", .{});
+    var config = ServiceConfig{};
+    if (top.get("agent")) |value| {
+        const agent = try reader.members(value, "agent", &.{ "http", "stdio", "adapter", "adapters", "tool_sources" }) orelse
+            return reader.refuse("agent: must be an object", .{});
+        const binding = try readBinding(reader, agent, "agent");
+        if (agent.contains("adapter") and binding != .raw_stdio)
+            return reader.refuse("agent.adapter is only valid for stdio: raw", .{});
+        const registry = try readRegistry(reader, agent, environ);
+        config.agent = .{ .registry = registry, .binding = switch (binding) {
+            .multi_session_stdio => .multi_session_stdio,
+            .http => |http| .{ .http = http },
+            .raw_stdio => raw: {
+                const adapter = try reader.string(agent, "agent", "adapter");
+                if (adapter.len == 0) return reader.refuse("agent.adapter name is required for stdio: raw", .{});
+                const entry = registry.adapter(adapter) orelse
+                    return reader.refuse("agent.adapters: no adapter named \"{s}\"", .{adapter});
+                break :raw .{ .raw_stdio = entry };
+            },
+        } };
+    }
+    if (top.get("provider")) |value| {
+        const provider = try reader.members(value, "provider", &.{ "http", "stdio" }) orelse
+            return reader.refuse("provider: must be an object", .{});
+        config.provider = switch (try readBinding(reader, provider, "provider")) {
+            .raw_stdio => .raw_stdio,
+            .http => |http| .{ .http = http },
+            .multi_session_stdio => unreachable,
+        };
+    }
+    if (config.agent == null and config.provider == null) return reader.refuse("at least one service is required", .{});
+    if (config.agent) |agent| if (config.provider) |provider| {
+        if (agent.binding == .multi_session_stdio and provider == .raw_stdio)
+            return reader.refuse("multi_session stdio requires exclusive use of stdio", .{});
+        if (agent.binding == .http and provider == .http) {
+            if (!agent.binding.http.ipv6 and agent.binding.http.port == provider.http.port)
+                return reader.refuse("Agent and Provider HTTP listeners conflict", .{});
+        }
+    };
+    return config;
+}
+
+const Binding = union(enum) { raw_stdio, multi_session_stdio, http: HttpBinding };
+
+fn readBinding(reader: Reader, service: std.json.ObjectMap, name: []const u8) Error!Binding {
+    const http = service.contains("http");
+    if (http == service.contains("stdio")) return reader.refuse("{s}: exactly one of http or stdio is required", .{name});
+    const provider = std.mem.eql(u8, name, "provider");
+    if (http) return .{ .http = try readHttp(reader, try reader.string(service, name, "http"), provider) };
+    const mode = try reader.string(service, name, "stdio");
+    if (std.mem.eql(u8, mode, "raw")) return .raw_stdio;
+    if (!provider and std.mem.eql(u8, mode, "multi_session")) return .multi_session_stdio;
+    return reader.refuse("invalid {s} stdio binding", .{name});
+}
+
+fn readHttp(reader: Reader, address: []const u8, provider: bool) Error!HttpBinding {
+    if (address.len == 0) return reader.refuse("HTTP binding requires an explicit address", .{});
+    const colon = std.mem.lastIndexOfScalar(u8, address, ':') orelse return reader.refuse("invalid HTTP address; expected host:port", .{});
+    const host = address[0..colon];
+    const digits = address[colon + 1 ..];
+    if (digits.len == 0 or digits.len > 5) return reader.refuse("invalid HTTP address port", .{});
+    for (digits) |digit| if (!std.ascii.isDigit(digit)) return reader.refuse("invalid HTTP address port", .{});
+    const port = std.fmt.parseInt(u16, digits, 10) catch
+        return reader.refuse("invalid HTTP address port", .{});
+    const ipv4 = std.mem.eql(u8, host, "127.0.0.1");
+    const ipv6 = std.mem.eql(u8, host, "[::1]");
+    const localhost = std.mem.eql(u8, host, "localhost");
+    if (provider) {
+        if (!ipv4 or port == 0) return reader.refuse("Provider HTTP requires 127.0.0.1 and a nonzero port", .{});
+    } else if (!ipv4 and !ipv6 and !localhost) {
+        return reader.refuse("Agent HTTP requires a loopback address", .{});
+    }
+    const literal = try std.fmt.allocPrint(reader.arena, "{s}:{d}", .{ if (localhost) "127.0.0.1" else host, port });
+    return .{ .address = literal, .port = port, .ipv6 = ipv6 };
+}
+
+fn readRegistry(reader: Reader, top: std.json.ObjectMap, environ: *const std.process.Environ.Map) Error!File {
+    const arena = reader.arena;
     var adapters = std.ArrayList(AdapterEntry).empty;
     if (top.get("adapters")) |listed_adapters| {
         if (listed_adapters == .object) {
@@ -188,9 +302,13 @@ pub fn parse(arena: std.mem.Allocator, bytes: []const u8, environ: *const std.pr
 
 fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ: *const std.process.Environ.Map) Error!AdapterEntry {
     const where = try std.fmt.allocPrint(reader.arena, "adapter \"{s}\"", .{name});
-    const object = try reader.members(value, where, &adapter_members) orelse return .{ .name = name, .kind = name };
+    const object = try reader.members(value, where, &adapter_members) orelse {
+        if (reader.service_config) try validateServiceAdapter(reader, where, name, .{});
+        return .{ .name = name, .kind = name };
+    };
     const declared = try reader.string(object, where, "type");
     const kind = if (declared.len > 0) declared else name;
+    if (reader.service_config) try validateServiceAdapter(reader, where, kind, object);
     const model_provider = try reader.string(object, where, "model_provider");
     if (model_provider.len > 0 and !std.mem.eql(u8, kind, "claude") and !std.mem.eql(u8, kind, "codex") and !std.mem.eql(u8, kind, "deepseek")) {
         return reader.refuse("{s}: \"model_provider\" routes only claude, codex, and deepseek adapters; a {s} adapter has no provider setting oxap translates it into", .{ where, kind });
@@ -244,6 +362,31 @@ fn readAdapter(reader: Reader, name: []const u8, value: std.json.Value, environ:
         .model_provider = model_provider,
         .model_endpoint = model_endpoint,
     };
+}
+
+const ServiceAdapterKind = enum { memory, oapx, claude, codex, pi, acp, hermes, deepseek, opencode };
+
+fn validateServiceAdapter(reader: Reader, where: []const u8, name: []const u8, object: std.json.ObjectMap) Error!void {
+    const kind = std.meta.stringToEnum(ServiceAdapterKind, name) orelse
+        return reader.refuse("{s}: oxap does not know adapter type \"{s}\"", .{ where, name });
+    const specific: []const []const u8 = switch (kind) {
+        .memory => &.{},
+        .oapx => &.{"environment"},
+        .claude => &.{ "executable", "args", "environment", "working_directory", "model", "allowed_tools", "unrestricted_tools", "model_provider", "model_endpoint" },
+        .codex => &.{ "executable", "args", "environment", "working_directory", "model", "approval_policy", "sandbox", "endpoint", "model_provider", "model_endpoint" },
+        .pi => &.{ "executable", "args", "environment", "working_directory", "model", "model_endpoint" },
+        .acp => &.{ "executable", "args", "environment", "working_directory" },
+        .hermes => &.{ "executable", "args", "environment", "working_directory", "model", "model_endpoint" },
+        .deepseek => &.{ "executable", "args", "environment", "working_directory", "model", "provider", "max_tokens", "model_provider", "model_endpoint" },
+        .opencode => &.{ "executable", "environment", "working_directory", "endpoint", "agent", "model", "model_endpoint" },
+    };
+    for (object.keys()) |key| {
+        if (!listed(&.{ "type", "any_directory", "journal_capacity", "agent_config", "system_prompt" }, key) and !listed(specific, key))
+            return reader.refuse("{s}: unknown field \"{s}\" for type \"{s}\"", .{ where, key, name });
+    }
+    if (try reader.integer(object, where, "journal_capacity")) |capacity| {
+        if (capacity < 0) return reader.refuse("{s}: journal_capacity must not be negative", .{where});
+    }
 }
 
 fn readModelEndpoint(
@@ -430,9 +573,11 @@ fn readToolSource(reader: Reader, id: []const u8, value: std.json.Value, environ
             try headers.append(reader.arena, .{ .name = name, .value = resolved });
         }
     };
-    if (object.get("auth")) |raw| if (raw != .null) {
+    if (object.get("auth")) |raw| if (reader.service_config or raw != .null) {
         if (!std.mem.eql(u8, kind, "remote")) return reader.refuse("{s}: auth requires a remote source", .{where});
         for (headers.items) |header| if (std.ascii.eqlIgnoreCase(header.name, "authorization")) return reader.refuse("{s}: auth conflicts with the authorization header", .{where});
+        if (reader.service_config and raw != .object)
+            return reader.refuse("{s}: auth must name an environment variable using {{env: NAME}}", .{where});
         const bearer = try headerValue(reader, where, raw, environ);
         if (!validBearer(bearer)) return reader.refuse("{s}: invalid bearer token", .{where});
         try headers.append(reader.arena, .{ .name = "Authorization", .value = try std.fmt.allocPrint(reader.arena, "Bearer {s}", .{bearer}) });

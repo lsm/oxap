@@ -1,0 +1,756 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OXAP server configuration",
+  "description": "Validate a decoded service document. The loader also checks duplicate keys, cross-service HTTP ports, named adapter references and the startup environment.",
+  "type": "object",
+  "properties": {"agent": {"$ref": "#/$defs/agentService"}, "provider": {"$ref": "#/$defs/providerService"}},
+  "additionalProperties": false,
+  "minProperties": 1,
+  "not": {
+    "required": ["agent", "provider"],
+    "properties": {
+      "agent": {"required": ["stdio"], "properties": {"stdio": {"const": "multi_session"}}},
+      "provider": {"required": ["stdio"], "properties": {"stdio": {"const": "raw"}}}
+    }
+  },
+  "$defs": {
+    "agentService": {
+      "type": "object",
+      "properties": {
+        "http": {
+          "type": "string",
+          "pattern": "^(127\\.0\\.0\\.1|localhost|\\[::1\\]):([0-9]{1,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+        },
+        "stdio": {"enum": ["raw", "multi_session"]},
+        "adapter": {"$ref": "#/$defs/nonempty"},
+        "adapters": {"$ref": "#/$defs/adapters"},
+        "tool_sources": {
+          "type": ["object", "null"],
+          "default": {},
+          "additionalProperties": {"$ref": "#/$defs/toolSource"}
+        }
+      },
+      "additionalProperties": false,
+      "oneOf": [
+        {"required": ["http"], "not": {"anyOf": [{"required": ["stdio"]}, {"required": ["adapter"]}]}},
+        {
+          "required": ["stdio"],
+          "properties": {"stdio": {"const": "multi_session"}},
+          "not": {"anyOf": [{"required": ["http"]}, {"required": ["adapter"]}]}
+        },
+        {
+          "required": ["stdio", "adapter", "adapters"],
+          "properties": {"stdio": {"const": "raw"}, "adapters": {"type": "object", "minProperties": 1}},
+          "not": {"anyOf": [{"required": ["http"]}]}
+        }
+      ]
+    },
+    "providerService": {
+      "type": "object",
+      "properties": {
+        "http": {
+          "type": "string",
+          "pattern": "^127\\.0\\.0\\.1:([0-9]{1,4}|[0-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+          "not": {"pattern": ":0+$"}
+        },
+        "stdio": {"const": "raw"}
+      },
+      "additionalProperties": false,
+      "oneOf": [{"required": ["http"]}, {"required": ["stdio"]}]
+    },
+    "adapters": {
+      "type": ["object", "null"],
+      "default": {},
+      "properties": {
+        "memory": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/memoryFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "oapx": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/oapxFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "claude": {
+          "anyOf": [
+            false,
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/claudeFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "codex": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/codexFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "pi": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/piFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "acp": {
+          "anyOf": [
+            false,
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/acpFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "hermes": {
+          "anyOf": [
+            false,
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/hermesFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "deepseek": {
+          "anyOf": [
+            false,
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/deepseekFields"}
+                }
+              ]
+            }
+          ]
+        },
+        "opencode": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "allOf": [
+                {"$ref": "#/$defs/adapter"},
+                {
+                  "if": {
+                    "not": {
+                      "required": ["type"],
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "memory",
+                            "oapx",
+                            "claude",
+                            "codex",
+                            "pi",
+                            "acp",
+                            "hermes",
+                            "deepseek",
+                            "opencode"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  "then": {"$ref": "#/$defs/opencodeFields"}
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "additionalProperties": {
+        "allOf": [
+          {"$ref": "#/$defs/adapter"},
+          {
+            "required": ["type"],
+            "properties": {
+              "type": {
+                "enum": ["memory", "oapx", "claude", "codex", "pi", "acp", "hermes", "deepseek", "opencode"]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "properties": {
+        "executable": {"$ref": "#/$defs/optionalString"},
+        "working_directory": {"$ref": "#/$defs/optionalString"},
+        "model": {"$ref": "#/$defs/optionalString"},
+        "approval_policy": {"$ref": "#/$defs/optionalString"},
+        "sandbox": {"$ref": "#/$defs/optionalString"},
+        "provider": {"$ref": "#/$defs/optionalString"},
+        "system_prompt": {"$ref": "#/$defs/optionalString"},
+        "endpoint": {"$ref": "#/$defs/optionalString"},
+        "agent": {"$ref": "#/$defs/optionalString"},
+        "model_provider": {"$ref": "#/$defs/optionalString"},
+        "type": {
+          "enum": ["memory", "oapx", "claude", "codex", "pi", "acp", "hermes", "deepseek", "opencode", null, ""]
+        },
+        "any_directory": {"type": ["boolean", "null"], "default": false},
+        "journal_capacity": {"type": ["integer", "null"], "minimum": 0, "maximum": 9223372036854775807, "default": 256},
+        "agent_config": {},
+        "args": {"$ref": "#/$defs/stringList"},
+        "environment": {"$ref": "#/$defs/stringList"},
+        "allowed_tools": {"$ref": "#/$defs/stringList"},
+        "unrestricted_tools": {"type": ["boolean", "null"], "default": false},
+        "max_tokens": {"type": ["integer", "null"], "minimum": -9223372036854775808, "maximum": 9223372036854775807},
+        "model_endpoint": {"$ref": "#/$defs/modelEndpoint"}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "memory"}}},
+          "then": {"$ref": "#/$defs/memoryFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "oapx"}}},
+          "then": {"$ref": "#/$defs/oapxFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "claude"}}},
+          "then": {"$ref": "#/$defs/claudeFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "codex"}}},
+          "then": {"$ref": "#/$defs/codexFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "pi"}}},
+          "then": {"$ref": "#/$defs/piFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "acp"}}},
+          "then": {"$ref": "#/$defs/acpFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "hermes"}}},
+          "then": {"$ref": "#/$defs/hermesFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "deepseek"}}},
+          "then": {"$ref": "#/$defs/deepseekFields"}
+        },
+        {
+          "if": {"required": ["type"], "properties": {"type": {"const": "opencode"}}},
+          "then": {"$ref": "#/$defs/opencodeFields"}
+        }
+      ],
+      "not": {
+        "allOf": [
+          {"required": ["model_provider"], "properties": {"model_provider": {"$ref": "#/$defs/nonempty"}}},
+          {"required": ["model_endpoint"]}
+        ]
+      }
+    },
+    "memoryFields": {
+      "propertyNames": {"enum": ["type", "any_directory", "journal_capacity", "agent_config", "system_prompt"]}
+    },
+    "oapxFields": {
+      "propertyNames": {
+        "enum": ["type", "any_directory", "journal_capacity", "agent_config", "system_prompt", "environment"]
+      }
+    },
+    "claudeFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "args",
+          "environment",
+          "working_directory",
+          "model",
+          "allowed_tools",
+          "unrestricted_tools",
+          "model_provider",
+          "model_endpoint"
+        ]
+      },
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "required": ["unrestricted_tools"],
+              "properties": {"unrestricted_tools": {"const": true}, "allowed_tools": {"enum": [null, []]}}
+            },
+            {
+              "required": ["allowed_tools"],
+              "properties": {
+                "allowed_tools": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/nonempty"}},
+                "unrestricted_tools": {"enum": [false, null]}
+              }
+            }
+          ]
+        },
+        {"properties": {"model_endpoint": {"properties": {"wire": {"const": "anthropic-messages"}}}}}
+      ]
+    },
+    "codexFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "args",
+          "environment",
+          "working_directory",
+          "model",
+          "approval_policy",
+          "sandbox",
+          "endpoint",
+          "model_provider",
+          "model_endpoint"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {"required": ["endpoint"], "properties": {"endpoint": {"$ref": "#/$defs/nonempty"}}},
+          "then": {
+            "properties": {"endpoint": {"pattern": "^unix://.+"}},
+            "not": {
+              "anyOf": [
+                {"required": ["executable"], "properties": {"executable": {"$ref": "#/$defs/nonempty"}}},
+                {"required": ["args"], "properties": {"args": {"type": "array", "minItems": 1}}},
+                {
+                  "required": ["model_provider"],
+                  "properties": {"model_provider": {"$ref": "#/$defs/nonempty"}}
+                },
+                {"required": ["model_endpoint"]}
+              ]
+            }
+          }
+        },
+        {
+          "properties": {"model_endpoint": {"properties": {"auth": false, "wire": {"const": "openai-responses"}}}}
+        }
+      ]
+    },
+    "piFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "args",
+          "environment",
+          "working_directory",
+          "model",
+          "model_endpoint"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {"required": ["model_endpoint"]},
+          "then": {"required": ["model"], "properties": {"model": {"type": "string", "pattern": "^oapx/.+"}}}
+        },
+        {"properties": {"model_endpoint": {"properties": {"auth": false}, "required": ["wire"]}}}
+      ]
+    },
+    "acpFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "args",
+          "environment",
+          "working_directory"
+        ]
+      },
+      "allOf": [{"required": ["executable"], "properties": {"executable": {"$ref": "#/$defs/nonempty"}}}]
+    },
+    "hermesFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "args",
+          "environment",
+          "working_directory",
+          "model",
+          "model_endpoint"
+        ]
+      },
+      "allOf": [
+        {"required": ["executable"], "properties": {"executable": {"$ref": "#/$defs/nonempty"}}},
+        {
+          "if": {"required": ["model_endpoint"]},
+          "then": {"required": ["model"], "properties": {"model": {"$ref": "#/$defs/nonempty"}}}
+        },
+        {
+          "properties": {"model_endpoint": {"properties": {"auth": false, "wire": {"const": "openai-responses"}}}}
+        }
+      ]
+    },
+    "deepseekFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "args",
+          "environment",
+          "working_directory",
+          "model",
+          "provider",
+          "max_tokens",
+          "model_provider",
+          "model_endpoint"
+        ]
+      },
+      "allOf": [
+        {
+          "required": ["executable", "provider", "model"],
+          "properties": {
+            "executable": {"$ref": "#/$defs/nonempty"},
+            "provider": {"$ref": "#/$defs/nonempty"},
+            "model": {"$ref": "#/$defs/nonempty"}
+          }
+        },
+        {
+          "properties": {"model_endpoint": {"properties": {"auth": false, "wire": {"const": "anthropic-messages"}}}}
+        }
+      ]
+    },
+    "opencodeFields": {
+      "propertyNames": {
+        "enum": [
+          "type",
+          "any_directory",
+          "journal_capacity",
+          "agent_config",
+          "system_prompt",
+          "executable",
+          "environment",
+          "working_directory",
+          "endpoint",
+          "agent",
+          "model",
+          "model_endpoint"
+        ]
+      },
+      "allOf": [
+        {
+          "if": {"required": ["endpoint"], "properties": {"endpoint": {"$ref": "#/$defs/nonempty"}}},
+          "then": {
+            "allOf": [
+              {
+                "not": {"required": ["executable"], "properties": {"executable": {"$ref": "#/$defs/nonempty"}}}
+              },
+              {"not": {"anyOf": [{"required": ["model_endpoint"]}]}}
+            ]
+          }
+        },
+        {
+          "if": {"required": ["model_endpoint"]},
+          "then": {"required": ["model"], "properties": {"model": {"type": "string", "pattern": "^oapx/.+"}}}
+        },
+        {"properties": {"model_endpoint": {"properties": {"auth": false}, "required": ["wire"]}}}
+      ]
+    },
+    "toolSource": {
+      "type": "object",
+      "properties": {
+        "kind": {"enum": ["native", "local", "process", "remote", "hosted"]},
+        "display_name": {"$ref": "#/$defs/optionalString"},
+        "protocol": {"$ref": "#/$defs/optionalString"},
+        "endpoint": {"$ref": "#/$defs/optionalString"},
+        "command": {"$ref": "#/$defs/optionalString"},
+        "args": {"$ref": "#/$defs/stringList"},
+        "environment": {"$ref": "#/$defs/stringList"},
+        "headers": {
+          "type": ["object", "null"],
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$",
+            "not": {
+              "anyOf": [
+                {"pattern": "^[hH][oO][sS][tT]$"},
+                {"pattern": "^[cC][oO][nN][tT][eE][nN][tT]-[lL][eE][nN][gG][tT][hH]$"},
+                {"pattern": "^[tT][rR][aA][nN][sS][fF][eE][rR]-[eE][nN][cC][oO][dD][iI][nN][gG]$"},
+                {"pattern": "^[cC][oO][nN][nN][eE][cC][tT][iI][oO][nN]$"},
+                {"pattern": "^[aA][cC][cC][eE][pP][tT]$"},
+                {"pattern": "^[cC][oO][nN][tT][eE][nN][tT]-[tT][yY][pP][eE]$"},
+                {"pattern": "^[mM][cC][pP]-[sS][eE][sS][sS][iI][oO][nN]-[iI][dD]$"},
+                {
+                  "pattern": "^[mM][cC][pP]-[pP][rR][oO][tT][oO][cC][oO][lL]-[vV][eE][rR][sS][iI][oO][nN]$"
+                }
+              ]
+            }
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {"type": "string", "pattern": "^[^\\x00-\\x08\\x0A-\\x1F\\x7F]*$"},
+              {"$ref": "#/$defs/envReference"}
+            ]
+          }
+        },
+        "auth": {"$ref": "#/$defs/envReference"}
+      },
+      "additionalProperties": false,
+      "required": ["kind"],
+      "allOf": [
+        {
+          "if": {"required": ["kind"], "properties": {"kind": {"const": "process"}}},
+          "then": {"required": ["command"], "properties": {"command": {"$ref": "#/$defs/nonempty"}}}
+        },
+        {
+          "if": {"not": {"required": ["kind"], "properties": {"kind": {"const": "remote"}}}},
+          "then": {"properties": {"headers": {"type": "null"}, "auth": false}}
+        },
+        {
+          "if": {"required": ["auth"]},
+          "then": {
+            "properties": {
+              "headers": {
+                "propertyNames": {"not": {"pattern": "^[aA][uU][tT][hH][oO][rR][iI][zZ][aA][tT][iI][oO][nN]$"}}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "envReference": {
+      "type": "object",
+      "properties": {"env": {"$ref": "#/$defs/nonempty"}},
+      "additionalProperties": false,
+      "required": ["env"]
+    },
+    "modelEndpoint": {
+      "type": "object",
+      "properties": {
+        "base_url": {"$ref": "#/$defs/nonempty"},
+        "credential_env": {"$ref": "#/$defs/nonempty"},
+        "wire": {"enum": ["anthropic-messages", "openai-completions", "openai-responses"]},
+        "auth": {"enum": ["api-key", "bearer"]}
+      },
+      "additionalProperties": false,
+      "required": ["base_url", "credential_env"]
+    },
+    "optionalString": {"type": ["string", "null"]},
+    "stringList": {"type": ["array", "null"], "items": {"type": "string"}, "default": []},
+    "nonempty": {"type": "string", "minLength": 1}
+  }
+}
