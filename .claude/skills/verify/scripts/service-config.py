@@ -12,7 +12,7 @@ import tempfile
 
 
 def cases():
-    fixtures = Path(__file__).resolve().parents[4] / 'fixtures/config/service-invalid.json'
+    fixtures = Path(__file__).resolve().parents[4] / 'go/validation/testdata/service-invalid.json'
     for case in json.loads(fixtures.read_text()):
         yield json.dumps(case['config']), case['diagnostic']
     yield '{}', 'at least one service'

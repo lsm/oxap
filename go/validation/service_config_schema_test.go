@@ -31,7 +31,7 @@ func TestServiceConfigSchema(t *testing.T) {
 		Name   string
 		Config any
 	}
-	badConfigs, err := os.ReadFile("../../fixtures/config/service-invalid.json")
+	badConfigs, err := os.ReadFile("testdata/service-invalid.json")
 	if err != nil {
 		t.Fatal(err)
 	}
