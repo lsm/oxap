@@ -269,6 +269,17 @@ def main():
         assert mismatch['profile'] == AGENT and mismatch['type'] == 'error.response', mismatch
         assert_response(answer, describe)
 
+        for broken, diagnostic in [
+            ('malformed', 'stdin carried a line that is not an OAP envelope'),
+            ({key: value for key, value in capabilities.items() if key != 'id'},
+             'stdin carried an envelope with no id'),
+        ]:
+            result = run({'agent': agent, 'provider': provider}, capabilities, broken)
+            assert result.returncode == 1, result
+            assert_response(json.loads(result.stdout), capabilities)
+            assert diagnostic in result.stderr, result
+        print('composed stdio kept the prior reply and explained two fatal framing failures')
+
         invalid_selection = run({'agent': {**agent, 'provider': 'cohosted'}, 'provider': provider})
         assert invalid_selection.returncode == 1 and not invalid_selection.stdout, invalid_selection
         assert 'cohosted requires provider.http' in invalid_selection.stderr, invalid_selection
