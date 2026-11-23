@@ -1411,7 +1411,7 @@ pub fn build(b: *std.Build) void {
 
     codex_adapter_mod.addImport("harness_pins", harness_pins_mod);
     codex_adapter_mod.addAnonymousImport("codex_conversation", .{
-        .root_source_file = b.path("../fixtures/adapters/codex-appserver-0.167.2-writes/conversation.json"),
+        .root_source_file = b.path(b.fmt("../{s}-writes/conversation.json", .{currentHarnessCorpus(b, "codex-app-server")})),
     });
     const codex_adapter_test = b.addTest(.{ .root_module = codex_adapter_mod });
 
@@ -3835,6 +3835,20 @@ fn tryWriteStrings(gpa: std.mem.Allocator, out: *std.ArrayList(u8), indent_and_n
         out.print(gpa, "\"{f}\"", .{std.zig.fmtString(value)}) catch @panic("out of memory");
     }
     out.appendSlice(gpa, " },\n") catch @panic("out of memory");
+}
+
+fn currentHarnessCorpus(b: *std.Build, id: []const u8) []const u8 {
+    const Entry = struct { versions: []const struct { status: []const u8, corpus: ?[]const u8 = null } };
+    const path = b.fmt("../harnesses/{s}.json", .{id});
+    const bytes = readConfigFile(b, path) catch |err| std.debug.panic("reading {s}: {t}", .{ path, err });
+    const entry = std.json.parseFromSliceLeaky(Entry, b.allocator, bytes, .{ .ignore_unknown_fields = true }) catch |err| std.debug.panic("parsing {s}: {t}", .{ path, err });
+    var current: ?[]const u8 = null;
+    for (entry.versions) |version| {
+        if (!std.mem.eql(u8, version.status, "current")) continue;
+        if (current != null) std.debug.panic("{s} has more than one current version", .{path});
+        current = version.corpus orelse std.debug.panic("{s}: current version has no corpus", .{path});
+    }
+    return current orelse std.debug.panic("{s} has no current version", .{path});
 }
 
 fn harnessPinsModule(b: *std.Build) *std.Build.Module {

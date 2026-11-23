@@ -97,7 +97,7 @@
       "harness": "codex-app-server",
       "pin": "rust-v0.171.0",
       "capability_revision": "codex-appserver-0.171.0-oap-v1",
-      "corpus": "fixtures/adapters/codex-appserver-0.167.2",
+      "corpus": "fixtures/adapters/codex-appserver-0.171.0",
       "cells": [
         {
           "column": "open-submit-complete",
