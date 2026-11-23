@@ -91,6 +91,7 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
             raw["session_id"] = binding
             print(json.dumps(raw), flush=True)
 
+        observe(dict(init, model="earlier-buffered-model"))
         for observed in frames[3:6]:
             native = observed["raw"]
             if "command_uuid" in native:
@@ -98,6 +99,7 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
             observe(native)
 
         echo = frames[6]["raw"]
+        observe(dict(init, model="foreign-model", user_message_uuid="foreign"))
         observe(dict(echo, user_message_uuid="foreign", user_message_uuids=["foreign"]))
         observe(dict(echo, user_message_uuid=frame["uuid"], user_message_uuids=[], parent_tool_use_id="child"))
         observe(dict(frames[8]["raw"], user_message_uuid=frame["uuid"], user_message_uuids=[],

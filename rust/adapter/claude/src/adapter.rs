@@ -321,7 +321,12 @@ impl AdapterContract for Adapter {
                 ..SessionState::default()
             };
             bind(&mut state, &id);
-            let session = OpenedSession::new(process, state, self.config.expand_prompts)?;
+            let session = OpenedSession::new(
+                process,
+                state,
+                self.config.expand_prompts,
+                self.runtime.clone(),
+            )?;
             session.exchange("initialize exchange", initialize)?;
             if flags != FlagSettings::default() {
                 let settings = apply_flag_settings_request(&flags).map_err(Error::harness)?;
