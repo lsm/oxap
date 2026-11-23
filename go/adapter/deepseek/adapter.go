@@ -239,7 +239,11 @@ func (a *Adapter) Open(ctx context.Context, req base.OpenRequest) (base.Session,
 	if err := base.RefuseUnadvertisedSettings(req, descriptor.Capabilities); err != nil {
 		return nil, err
 	}
-	client, model, err := a.resumed(ctx, req, "")
+	boundModel := ""
+	if req.Reopen && a.process != nil && req.BoundModelID != a.config.Model {
+		boundModel = req.BoundModelID
+	}
+	client, model, err := a.resumed(ctx, req, boundModel)
 	if err != nil {
 		return nil, err
 	}

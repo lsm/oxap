@@ -138,6 +138,7 @@ pub const OpenRequest = struct {
     tool_sources_json: ?[]const u8 = null,
     reopen: bool = false,
     native_session_id: []const u8 = "",
+    bound_model_id: []const u8 = "",
     adopted: bool = false,
     reasoning_level: ?[]const u8 = null,
     compaction_policy_json: ?[]const u8 = null,

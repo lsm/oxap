@@ -1694,9 +1694,12 @@ nowhere to put a reason (D12).
   not from the adapter's reply. A successful reopen's state declares
   `recovery.recovered`, and a binding store records it as `reopened`. The binding
   retains its selected directory across a restart, and a reopen uses that recorded
-  directory. An explicit different directory on a stdio reopen, or an adapter
-  now fixed to a different configured directory, is refused `invalid_request` before opening the
-  adapter. Close is an ordinary close of the adapter's session in both trees,
+  directory. DeepSeek initializes the runtime on the model in the binding
+  before resuming the same native session. A binding without a model uses the
+  adapter's configured default. An explicit different directory on a stdio
+  reopen, or an adapter now fixed to a different configured directory, is
+  refused `invalid_request` before opening the adapter. Close is an ordinary
+  close of the adapter's session in both trees,
   so an adapter that keeps what it closed can be asked to reopen it. Pinned by
   `TestHubOpenDirectory`, `TestAReopenDirectoryConflictIsABadRequest`,
   `TestAReopenIsRecordedAsReopenedAfterTheClose`,

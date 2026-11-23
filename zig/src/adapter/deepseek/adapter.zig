@@ -190,8 +190,9 @@ pub const Session = struct {
             return refusal.fail(error.BackendFailed, "the deepseek harness needs an absolute working directory, a provider and a model");
         }
         const effort = try effortFor(request, refusal);
+        const model = if (request.reopen and request.bound_model_id.len > 0) request.bound_model_id else config.model;
         var rejected = false;
-        const self = try start(owner, arena, request, config.model, effort, &rejected, refusal);
+        const self = try start(owner, arena, request, model, effort, &rejected, refusal);
         errdefer self.destroy();
         if (request.reasoning_level) |level| self.reported_level = try self.owned().dupe(u8, level);
         if (request.compaction_policy_json) |policy| self.reported_policy = try self.owned().dupe(u8, policy);
@@ -414,7 +415,7 @@ pub const Session = struct {
             const message = try std.fmt.allocPrint(arena, "the deepseek harness identified as \"{s}\"/\"{s}\", not the pinned {s}/{s}", .{ text(info, "name"), text(info, "version"), server_name, server_version });
             return refusal.fail(error.BackendFailed, message);
         }
-        session.initialize(&self.reducer, model) catch |err| return lift(err);
+        session.initialize(&self.reducer, try self.owned().dupe(u8, model)) catch |err| return lift(err);
     }
 
     const Received = struct { message: rpc.Message, document: std.json.Value };

@@ -193,6 +193,7 @@ impl Hub {
                 .filter(|bound| bound.record.adapter == adapter)
                 .ok_or_else(|| HubError::UnknownSession(request.session_id.clone()))?;
             request.native_session_id = bound.record.native_session_id.clone();
+            request.bound_model_id = bound.record.model.clone();
             request.adopted = bound.record.adopted;
             directory = bound.record.directory.clone();
         }
