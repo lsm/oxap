@@ -107,9 +107,30 @@ impl From<ObservationError> for Error {
     }
 }
 
+#[derive(Debug)]
+pub(crate) enum PromptStartError {
+    Refused(Error),
+    Uncertain(Error),
+}
+
+impl From<Error> for PromptStartError {
+    fn from(error: Error) -> Self {
+        Self::Uncertain(error)
+    }
+}
+
+impl From<PromptStartError> for Error {
+    fn from(error: PromptStartError) -> Self {
+        match error {
+            PromptStartError::Refused(error) | PromptStartError::Uncertain(error) => error,
+        }
+    }
+}
+
 pub struct GatewaySession {
     _stop_relay: Sender<()>,
-    process: Process,
+    pub(crate) process: Arc<Process>,
+    pub(crate) observed_settlement: bool,
     inbound: Receiver<Inbound>,
     buffered_observations: VecDeque<Observation>,
     runtime_id: String,
@@ -222,7 +243,8 @@ impl GatewaySession {
         let (runtime_id, stored_id, result) = load(&process.client)?;
         let session = Self {
             _stop_relay: stop_relay,
-            process,
+            process: Arc::new(process),
+            observed_settlement: false,
             inbound,
             buffered_observations: VecDeque::new(),
             runtime_id,
@@ -323,28 +345,58 @@ impl GatewaySession {
     }
 
     pub fn submit_prompt(&self, text: &str, deadline: Option<Instant>) -> Result<(), Error> {
-        let result: PromptSubmitResult = call(
-            self.client(),
-            METHOD_PROMPT_SUBMIT,
-            &PromptSubmitParams {
-                session_id: self.runtime_id(),
-                text,
-            },
-            deadline,
-        )?;
-        if result.status != SUBMIT_STREAMING {
-            return Err(Error::harness(format!(
-                "hermes adapter: invalid native protocol observation: prompt.submit returned status {}",
-                go_quote(&result.status)
-            )));
+        self.submit_prompt_receipt(text, deadline)
+            .map_err(Into::into)
+    }
+
+    fn submit_prompt_receipt(
+        &self,
+        text: &str,
+        deadline: Option<Instant>,
+    ) -> Result<(), PromptStartError> {
+        let params = serde_json::value::to_raw_value(&PromptSubmitParams {
+            session_id: self.runtime_id(),
+            text,
+        })
+        .map_err(Error::harness)?;
+        let result = self
+            .client()
+            .call(METHOD_PROMPT_SUBMIT, Some(params), deadline)
+            .map_err(|error| match error.fault {
+                Fault::Remote { .. } => PromptStartError::Refused(Error::harness(error)),
+                _ => PromptStartError::Uncertain(Error::harness(error)),
+            })?;
+        let result: PromptSubmitResult =
+            decode_strict(result.get().as_bytes()).map_err(|error| {
+                Error::harness(format!("decode {METHOD_PROMPT_SUBMIT} response: {error}"))
+            })?;
+        if result.status == SUBMIT_STREAMING {
+            return Ok(());
         }
-        Ok(())
+        let error = Error::harness(format!(
+            "hermes adapter: invalid native protocol observation: prompt.submit returned status {}",
+            go_quote(&result.status)
+        ));
+        match result.status.as_str() {
+            "queued" | "steered" | "redirected" => Err(PromptStartError::Refused(error)),
+            _ => Err(PromptStartError::Uncertain(error)),
+        }
     }
 
     pub fn start_prompt(&mut self, text: &str, deadline: Option<Instant>) -> Result<Event, Error> {
-        self.submit_prompt(text, deadline)?;
+        self.start_prompt_classified(text, deadline)
+            .map_err(Into::into)
+    }
+
+    pub(crate) fn start_prompt_classified(
+        &mut self,
+        text: &str,
+        deadline: Option<Instant>,
+    ) -> Result<Event, PromptStartError> {
+        self.observed_settlement = false;
+        self.submit_prompt_receipt(text, deadline)?;
         loop {
-            let observation = self.read_observation(deadline)?;
+            let observation = self.read_observation(deadline).map_err(Error::from)?;
             let Observation::Event(event) = observation else {
                 self.buffered_observations.push_back(observation);
                 continue;
@@ -364,7 +416,7 @@ impl GatewaySession {
             if parent_settlement {
                 return Err(Error::harness(
                     "hermes adapter: invalid native protocol observation: settlement before the turn opened",
-                ));
+                ).into());
             }
         }
     }

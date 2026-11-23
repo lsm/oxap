@@ -1,9 +1,11 @@
 import json
 import os
+import select
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def frames(path):
@@ -55,6 +57,27 @@ def answered_frames(corpus):
 
 REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
 REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
+SHARED_BACKLOG = 300
+
+
+def shared_submit_frames(corpus):
+    native_path = corpus / "streaming-provenance/native.jsonl"
+    replay = [frame for frame in frames(corpus / "admission-busy/native.jsonl")
+              if frame["direction"] != "harness-control"]
+    for index in range(2):
+        for frame in frames(native_path):
+            raw = frame["raw"]
+            if "id" in raw:
+                raw["id"] += 3 + index
+            if "seq" in raw.get("params", {}):
+                params = raw["params"]
+                if index == 0 and params["seq"] == 2:
+                    for seq in range(2, SHARED_BACKLOG + 2):
+                        replay.append({**frame, "raw": {**raw, "params": {**params, "seq": seq}}})
+                if index != 0 or params["seq"] >= 2:
+                    params["seq"] += SHARED_BACKLOG + 7 * index
+            replay.append(frame)
+    return replay
 
 
 def gateway(corpus, case):
@@ -85,9 +108,11 @@ def gateway(corpus, case):
         Path("resume-received").touch()
         assert sys.stdin.read() == ""
         return
+    shared_submit = case == "shared-submit"
     if case != "malformed-frame" and case not in REOPEN_CASES:
         send(frames(corpus / "ready-handshake/native.jsonl")[0]["raw"])
-        assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create", "params": {}}
+        assert read() == {"jsonrpc": "2.0", "id": 1, "method": "session.create",
+                          "params": {"model": "hermes-test"} if shared_submit else {}}
         send({"jsonrpc": "2.0", "id": 1, "result": {
             "session_id": "sess0001", "stored_session_id": "stored",
         }})
@@ -95,8 +120,12 @@ def gateway(corpus, case):
         replay = answered_frames(corpus)
     elif case in GATE_CHECKS:
         replay = gate_frames(corpus, case)
+    elif shared_submit:
+        replay = shared_submit_frames(corpus)
     else:
         replay = frames(corpus / case / "native.jsonl")
+    pending_start = False
+    shared_run = 0
     for frame in replay:
         if frame["direction"] == "host-to-gateway":
             raw = frame["raw"]
@@ -110,11 +139,28 @@ def gateway(corpus, case):
             else:
                 assert read() == (json.loads(raw) if isinstance(raw, str) else raw)
         elif frame["direction"] == "gateway-to-host":
-            send(frame["raw"])
+            raw = frame["raw"]
+            if shared_submit and raw.get("id") == 2:
+                Path("prompt-received").touch()
+                deadline = time.monotonic() + 10
+                while not Path("release-refusal").exists():
+                    assert time.monotonic() < deadline, "consumer did not inspect admission"
+                    assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
+            send(raw)
+            if shared_submit and raw.get("params", {}).get("type") == "message.start":
+                pending_start = True
+        elif frame["action"] == "wait-submit" and pending_start:
+            pending_start = False
+            shared_run += 1
+            release = Path(f"release-run-{shared_run}")
+            deadline = time.monotonic() + 10
+            while not release.exists():
+                assert time.monotonic() < deadline, "consumer did not receive admission"
+                assert not select.select([sys.stdin], [], [], 0.01)[0], "unexpected gateway write or EOF"
         elif frame["action"] == "process-exit":
             return
     assert sys.stdin.read() == ""
-    if case in REOPEN_CASES:
+    if case in REOPEN_CASES or shared_submit:
         Path("replay-complete").touch()
 
 
@@ -178,6 +224,8 @@ GATE_CHECKS = {
 
 def verify(binary, corpus, mode, case):
     fixture = "interaction-gates" if case == "answered-gates" else case
+    if case == "shared-submit":
+        fixture = "streaming-provenance"
     if case in REOPEN_TIMEOUT_CASES:
         fixture = "session-reopen"
     expected_path = corpus / fixture / "expected-oap.json"
@@ -195,7 +243,7 @@ def verify(binary, corpus, mode, case):
             f"from pathlib import Path\n"
             f"runpy.run_path({str(script)!r})['gateway'](Path({str(corpus)!r}), {case!r})\n"
         )
-        model = ["hermes-test"] if case == "malformed-frame" else []
+        model = ["hermes-test"] if case in {"malformed-frame", "shared-submit"} else []
         if case == "answered-gates":
             answers_file = root / "answers.json"
             expected = json.loads(expected_path.read_text())
@@ -216,7 +264,9 @@ def verify(binary, corpus, mode, case):
         mismatch = root / "replay-mismatch"
         if mismatch.exists():
             print(mismatch.read_text(), file=sys.stderr)
-    if case not in GATE_CHECKS and case != "answered-gates" and case not in REOPEN_CASES:
+    if mode == "--shared-submit":
+        print("\n".join(line for line in result.stdout.splitlines() if not line.startswith("envelope: ")))
+    elif case not in GATE_CHECKS and case != "answered-gates" and case not in REOPEN_CASES:
         print(result.stdout, end="")
     print(result.stderr, end="", file=sys.stderr)
     print(f"GATEWAY EXAMPLE EXIT: {result.returncode}")
@@ -260,6 +310,44 @@ def verify(binary, corpus, mode, case):
         assert "stored session ID: stored" in lines
         assert shutdowns == 1 and replay_complete
         print("MATCHED SHARED CREATED STATE: 1\nGATEWAY EOF: 1")
+        return
+    if mode == "--shared-submit":
+        assert "PENDING ADMISSION: queued" in lines
+        assert "REFUSALS RETURNED TO IDLE: 3" in lines
+        admissions = [json.loads(line[11:]) for line in lines if line.startswith("admission: ")]
+        events = [json.loads(line[10:]) for line in lines if line.startswith("envelope: ")]
+        expected = json.loads(expected_path.read_text())
+        first_run = expected[:1] + [expected[1]] * SHARED_BACKLOG + expected[1:]
+        assert len(admissions) == 2 and len(events) == len(first_run) + len(expected)
+        assert len({event["id"] for event in events}) == len(events)
+        assert len({admission["run_id"] for admission in admissions}) == len(admissions)
+        for admission, fixture_run in zip(admissions, (first_run, expected)):
+            (message_id,) = admission["message_ids"]
+            assert message_id and admission["run_id"]
+            assert admission == {
+                "session_id": "session", "accepted": True, "submission_id": message_id,
+                "requested_delivery": "auto", "effective_delivery": "start",
+                "delivery_resolution": "session_idle", "admission": "started",
+                "run_id": admission["run_id"], "status": "running", "model_id": "hermes-test",
+                "message_ids": [message_id],
+            }
+            run_events = [event for event in events if event["run_id"] == admission["run_id"]]
+            assert len(run_events) == len(fixture_run)
+            for sequence, (event, fixture) in enumerate(zip(run_events, fixture_run), start=1):
+                assert event["run_id"] == event["payload"]["run_id"] == admission["run_id"]
+                assert event["type"] == fixture["type"]
+                assert event["sequence"] == sequence
+                assert event["session_id"] == event["payload"]["session_id"] == "session"
+                for key in ("part", "usage", "stop_reason"):
+                    assert event["payload"].get(key) == fixture["payload"].get(key)
+                if event["type"] == "content.delta":
+                    assert event["payload"]["message_id"] == message_id
+            response = run_events[-1]["payload"]["final_response"]
+            assert response["content"] == expected[-1]["payload"]["final_response"]["content"]
+            assert response["id"] == message_id
+        assert shutdowns == 1 and replay_complete
+        print(f"SHARED ADMISSIONS: {len(admissions)}\nSEQUENCED ENVELOPES: {len(events)}"
+              f"\nBACKLOG DELTAS: {SHARED_BACKLOG}\nGATEWAY EOF: 1")
         return
     if mode == "--run":
         envelopes = [line[10:] for line in lines if line.startswith("envelope: ")]
