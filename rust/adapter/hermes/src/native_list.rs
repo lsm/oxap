@@ -27,9 +27,10 @@ pub(crate) fn list(
     let reply = process
         .client
         .call("session.list", Some(params), Some(deadline));
-    let _ = process.close();
+    let closed = process.close();
     let _ = drain.join();
     let reply = reply.map_err(Error::harness)?;
+    closed.map_err(Error::harness)?;
     Ok(serde_json::from_str::<Page>(reply.get())
         .unwrap_or_default()
         .sessions

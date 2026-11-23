@@ -282,6 +282,7 @@ Check reasoning settings and native session listing through the shared API:
 for case in shared-settings shared-settings-reopen native-list; do
   python3 "$replay" "$example" "--$case" "$case" || exit $?
 done
+python3 "$replay" "$example" --native-list native-list-exit-error
 ```
 
 The gateway sees `off` as `none` on create and on the restored runtime
@@ -290,4 +291,5 @@ idle update returns the previous and new levels and finishes before an
 overlapping submit reaches Hermes. An update during the resulting run is
 refused. The isolated listing calls `session.list` with the requested limit,
 skips rows without IDs, falls back to preview and converts seconds to
-milliseconds. All three cases observe clean gateway EOF.
+milliseconds. All three cases observe clean gateway EOF. The failed exit
+case returns a gateway error after the listing reply and emits no success.
