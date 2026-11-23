@@ -1042,7 +1042,7 @@ const ConfiguredServer = struct {
     fn runAgent(self: *ConfiguredServer, service: ?*const oap_remote_provider_transport.Config, provider_stdio: bool, notices: std.Io.File) !void {
         const agent = self.config.agent.?;
         return switch (agent.binding) {
-            .raw_stdio => |entry| runRawAgent(self.allocator, self.arena, self.environ, entry, agent.registry.tool_sources, service, provider_stdio, self.stdin, notices, self.stderr),
+            .raw_stdio => |entry| runRawAgent(self.allocator, self.arena, self.environ, entry, agent.registry.tool_sources, service, provider_stdio, true, self.stdin, notices, self.stderr),
             .http, .multi_session_stdio => runMultiSessionAgent(self.allocator, self.arena, self.environ, agent.registry, .{
                 .address = if (agent.binding == .http) agent.binding.http.address else null,
                 .configured = true,
@@ -1052,7 +1052,7 @@ const ConfiguredServer = struct {
     }
 
     fn runProvider(self: *ConfiguredServer) !void {
-        return runProviderStdio(self.allocator, self.stdin, self.stdout, self.stderr, false, null);
+        return runProviderStdio(self.allocator, self.stdin, self.stdout, self.stderr, false, null, null);
     }
 
     fn backgroundAgent(self: *ConfiguredServer) void {
@@ -5077,7 +5077,7 @@ fn runOapProviderMode(
     answers_specimens: bool,
 ) !void {
     endpoint_signals.install() catch {};
-    return runProviderStdio(allocator, stdin, stdout, stderr, answers_specimens, null);
+    return runProviderStdio(allocator, stdin, stdout, stderr, answers_specimens, null, null);
 }
 
 fn runProviderStdio(
@@ -5087,6 +5087,7 @@ fn runProviderStdio(
     stderr: std.Io.File,
     answers_specimens: bool,
     agent: ?*adapter_endpoint.Endpoint,
+    auth: ?*StdioAgentAuth,
 ) !void {
     var registry = api_registry.ApiRegistry.init(allocator);
     defer registry.deinit();
@@ -5157,13 +5158,16 @@ fn runProviderStdio(
 
             if (agent) |endpoint| {
                 if (!try isProviderOapLine(allocator, line)) {
+                    did_work = true;
+                    if (auth) |state| {
+                        if (try state.adapter.handleLine(line)) continue;
+                    }
                     endpoint.handleAgentLine(line, true) catch |err| {
                         _ = try writeEndpointOutbound(&output, allocator, endpoint);
                         if (serveFatalMessage(err)) |message| try compat.stdio.writeAll(stderr, message);
                         return err;
                     };
                     _ = try writeEndpointOutbound(&output, allocator, endpoint);
-                    did_work = true;
                     continue;
                 }
             }
@@ -5199,6 +5203,10 @@ fn runProviderStdio(
             if (endpoint.sessionCount() > 0 and try endpoint.pump(if (did_work) 0 else STDIO_IDLE_SLEEP_NS)) did_work = true;
             if (try writeEndpointOutbound(&output, allocator, endpoint)) did_work = true;
             if (endpoint_signals.received()) done = try endpoint.shutdownComplete();
+            if (auth) |state| {
+                if (try state.advance(&output, oapInputDrained(stdin_stream) or endpoint.shutdown == .force, true)) did_work = true;
+                if (endpoint.shutdown != .force and state.adapter.hasPendingFlows()) done = false;
+            }
         }
         if (done and running.items.len == 0 and !did_work) break;
         if (!did_work) compat.time.sleepNs(STDIO_IDLE_SLEEP_NS);
@@ -5333,10 +5341,36 @@ fn runOapMode(
     return runOapxServe(allocator, stdin, stdout, stderr, serve_provider, parsed.answers_specimens, default_model_id, if (remote_config) |*config| config else null);
 }
 
-const served_features = [_]adapter_contract.Feature{
+const served_auth_features = [_]adapter_contract.Feature{
     .{ .key = "auth.providers", .level = .native },
     .{ .key = "auth.login", .level = .native },
+};
+
+const served_features = served_auth_features ++ [_]adapter_contract.Feature{
     .{ .key = adapter_contract.feature_models_list, .level = .native, .reason = "the catalog the endpoint loaded at start" },
+};
+
+const StdioAgentAuth = struct {
+    server: AuthProtocolServer,
+    adapter: oap_auth_adapter.Adapter,
+
+    fn init(self: *StdioAgentAuth, allocator: std.mem.Allocator) void {
+        self.server = AuthProtocolServer.init(allocator, .{ .answers_prompts = false });
+        self.adapter = oap_auth_adapter.Adapter.init(allocator, &self.server);
+        self.adapter.setCapabilityRevision(oapx_adapter.capability_revision);
+    }
+
+    fn deinit(self: *StdioAgentAuth) void {
+        self.adapter.deinit();
+        self.server.deinit();
+    }
+
+    fn advance(self: *StdioAgentAuth, output: *bounded_output.Output, disconnect: bool, reload_catalog: bool) !bool {
+        const pumped = try self.adapter.pump() > 0;
+        if (self.adapter.takeSignIn() and reload_catalog) startServedOapReload();
+        if (disconnect) try self.adapter.cancelAllOnDisconnect();
+        return (try writeOapAuthOutbound(output, self.adapter.allocator, &self.adapter)) or pumped;
+    }
 };
 
 fn runOapxServe(
@@ -5391,11 +5425,10 @@ fn runOapxServe(
     var notices = StderrNotice{ .file = stderr };
     endpoint.notices = notices.notice();
 
-    var oap_auth_server = AuthProtocolServer.init(allocator, .{ .answers_prompts = false });
-    defer oap_auth_server.deinit();
-    var auth_adapter = oap_auth_adapter.Adapter.init(allocator, &oap_auth_server);
-    defer auth_adapter.deinit();
-    auth_adapter.setCapabilityRevision(oapx_adapter.capability_revision);
+    var auth: StdioAgentAuth = undefined;
+    auth.init(allocator);
+    defer auth.deinit();
+    const auth_adapter = &auth.adapter;
 
     var provider_registry = api_registry.ApiRegistry.init(allocator);
     defer provider_registry.deinit();
@@ -5506,17 +5539,17 @@ fn runOapxServe(
         }
 
         if (try writeEndpointOutbound(&output, allocator, &endpoint)) did_work = true;
-        if (try writeOapAuthOutbound(&output, allocator, &auth_adapter)) did_work = true;
+        if (try writeOapAuthOutbound(&output, allocator, auth_adapter)) did_work = true;
         if (serve_provider and try drainOapProviderOutbound(&output, allocator, &provider_server)) did_work = true;
 
-        const co_hosted_idle = running_inferences.items.len == 0 and oap_auth_server.activeFlowCount() == 0;
+        const co_hosted_idle = running_inferences.items.len == 0 and auth.server.activeFlowCount() == 0;
         if (try endpoint.shutdownComplete() and (endpoint.shutdown == .force or co_hosted_idle)) break;
         if (oapInputDrained(stdin_stream) and !did_work and co_hosted_idle) break;
         if (!did_work) compat.time.sleepNs(STDIO_IDLE_SLEEP_NS);
     }
     try endpoint.finish(if (endpoint.shutdown == .force) 0 else adapter_endpoint.default_settle_window_ns, backendClock);
     _ = try writeEndpointOutbound(&output, allocator, &endpoint);
-    _ = try writeOapAuthOutbound(&output, allocator, &auth_adapter);
+    _ = try writeOapAuthOutbound(&output, allocator, auth_adapter);
     if (serve_provider) _ = try drainOapProviderOutbound(&output, allocator, &provider_server);
 }
 
@@ -6361,7 +6394,7 @@ fn runBackendMode(
     var configured_sources: []const adapter_config.ToolSource = &.{};
     const surface = withSurface(endpoint_config_surface, arena, stderr);
     const entry = try backendEntry(surface, arena, name, config_path, &environ, &configured_sources);
-    return runRawAgent(allocator, arena, &environ, entry, configured_sources, null, false, stdin, stdout, stderr);
+    return runRawAgent(allocator, arena, &environ, entry, configured_sources, null, false, false, stdin, stdout, stderr);
 }
 
 fn runRawAgent(
@@ -6372,6 +6405,7 @@ fn runRawAgent(
     configured_sources: []const adapter_config.ToolSource,
     provider_service: ?*const oap_remote_provider_transport.Config,
     provider_stdio: bool,
+    configured: bool,
     stdin: std.Io.File,
     stdout: std.Io.File,
     stderr: std.Io.File,
@@ -6381,13 +6415,21 @@ fn runRawAgent(
     var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources, .provider_service = provider_service };
     defer registry.deinit();
     const served = try registry.make(arena, entry);
+    var auth_state: StdioAgentAuth = undefined;
+    const auth = if (configured) enabled: {
+        const built = registry.builtins.getLastOrNull() orelse break :enabled null;
+        try built.advertise(&served_auth_features);
+        auth_state.init(allocator);
+        break :enabled &auth_state;
+    } else null;
+    defer if (auth) |state| state.deinit();
 
     var endpoint = adapter_endpoint.Endpoint.init(allocator, served, .{ .tool_sources = tool_sources });
     defer endpoint.deinit();
     var notices = StderrNotice{ .file = stderr };
     endpoint.notices = notices.notice();
 
-    if (provider_stdio) return runProviderStdio(allocator, stdin, stdout, stderr, false, &endpoint);
+    if (provider_stdio) return runProviderStdio(allocator, stdin, stdout, stderr, false, &endpoint, auth);
 
     unblockOutput(stdout);
     var output = bounded_output.Output.init(stdout, backend_write_stall_ns);
@@ -6407,30 +6449,42 @@ fn runRawAgent(
             defer owned.deinit(allocator);
             const line = std.mem.trim(u8, owned.data, " \t\r\n");
             if (line.len == 0) continue;
+            did_work = true;
+            if (auth) |state| {
+                if (try state.adapter.handleLine(line)) continue;
+            }
             endpoint.handleLine(line) catch |err| {
                 _ = try writeEndpointOutbound(&output, allocator, &endpoint);
                 if (backendFatalMessage(err)) |message| try compat.stdio.writeAll(stderr, message);
                 return err;
             };
             _ = try writeEndpointOutbound(&output, allocator, &endpoint);
-            did_work = true;
         }
-        if (stdin_stream.isDone() and !stdin_stream.hasPending()) {
-            const failure = stdin_stream.getError() orelse break;
-            _ = try writeEndpointOutbound(&output, allocator, &endpoint);
-            if (std.mem.eql(u8, failure, "stdio line too large")) {
-                try compat.stdio.writeAll(stderr, BACKEND_FRAME_TOO_LARGE_MESSAGE);
-                return error.FrameTooLarge;
+        const input_drained = oapInputDrained(stdin_stream);
+        if (input_drained) {
+            if (stdin_stream.getError()) |failure| {
+                _ = try writeEndpointOutbound(&output, allocator, &endpoint);
+                if (std.mem.eql(u8, failure, "stdio line too large")) {
+                    try compat.stdio.writeAll(stderr, BACKEND_FRAME_TOO_LARGE_MESSAGE);
+                    return error.FrameTooLarge;
+                }
+                try surface.refuse("stdin failed: {s}", .{failure});
+                return error.StdinFailed;
             }
-            try surface.refuse("stdin failed: {s}", .{failure});
-            return error.StdinFailed;
+            if (auth == null) break;
         }
         if (endpoint.sessionCount() > 0) {
             if (try endpoint.pump(if (did_work) 0 else STDIO_IDLE_SLEEP_NS)) did_work = true;
         }
-        if (!did_work) compat.time.sleepNs(STDIO_IDLE_SLEEP_NS);
         _ = try writeEndpointOutbound(&output, allocator, &endpoint);
-        if (try endpoint.shutdownComplete()) break;
+        var auth_idle = true;
+        if (auth) |state| {
+            if (try state.advance(&output, input_drained or endpoint.shutdown == .force, false)) did_work = true;
+            auth_idle = !state.adapter.hasPendingFlows();
+        }
+        if (try endpoint.shutdownComplete() and (endpoint.shutdown == .force or auth_idle)) break;
+        if (input_drained and auth_idle) break;
+        if (!did_work) compat.time.sleepNs(STDIO_IDLE_SLEEP_NS);
     }
     try endpoint.finish(if (endpoint.shutdown == .force) 0 else adapter_endpoint.default_settle_window_ns, backendClock);
     _ = try writeEndpointOutbound(&output, allocator, &endpoint);
