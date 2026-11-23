@@ -59,7 +59,7 @@ REOPEN_CASES = {"session-reopen", "session-reopen-auto-continue"}
 REOPEN_TIMEOUT_CASES = {"reopen-ready-timeout", "reopen-resume-timeout"}
 SHARED_BACKLOG = 300
 SHARED_CANCEL_CASES = {"shared-cancel", "shared-cancel-race"}
-SHARED_RESUME_CASES = {"shared-resume", "shared-resume-tiny", "shared-resume-exit"}
+SHARED_RESUME_CASES = {"shared-resume", "shared-resume-tiny", "shared-resume-exit", "shared-resume-stalled"}
 IDLE_CASES = {"reconciliation", "replay-epoch", "idle-orphan", "idle-foreign"}
 
 
@@ -335,7 +335,17 @@ def gateway(corpus, case):
         elif frame["direction"] == "gateway-to-host":
             raw = frame["raw"]
             event_type = raw.get("params", {}).get("type") if isinstance(raw, dict) else None
-            if case == "shared-resume-exit" and event_type == "message.complete":
+            if case in {"shared-resume-exit", "shared-resume-stalled"} and event_type == "message.complete":
+                if case == "shared-resume-stalled":
+                    malformed = next(frame["raw"] for frame in frames(corpus / "malformed-frame/native.jsonl")
+                                     if frame["action"] == "decode-error")
+                    send(malformed)
+                    assert sys.stdin.read() == ""
+                    deadline = time.monotonic() + 5
+                    while not Path("terminal-observed").exists():
+                        if time.monotonic() >= deadline:
+                            sys.exit(8)
+                        time.sleep(0.01)
                 Path("replay-complete").touch()
                 return
             if shared_submit and raw.get("id") == 2:
@@ -455,7 +465,7 @@ def verify(binary, corpus, mode, case):
             (root / "check-resume-window").touch()
         if case in IDLE_CASES:
             (root / "idle-case").write_text(case)
-        if case in {"shared-resume-tiny", "shared-resume-exit"}:
+        if case in SHARED_RESUME_CASES - {"shared-resume"}:
             (root / case).touch()
         if case == "replay-epoch":
             (root / "shared-resume-tiny").touch()
@@ -540,6 +550,8 @@ def verify(binary, corpus, mode, case):
     if case in SHARED_RESUME_CASES:
         assert "LIVE REPLAY ENVELOPES: 2" in lines
         assert "COMPLETED REPLAY ENVELOPES: 1" in lines
+        if case == "shared-resume-stalled":
+            assert "TERMINALS BEFORE GATEWAY EXIT: 1" in lines
         assert shutdowns == 1 and replay_complete
         return
     if case in IDLE_CASES:

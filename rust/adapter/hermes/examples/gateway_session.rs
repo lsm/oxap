@@ -76,6 +76,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         path: python.clone(),
         args: vec!["-m".into(), "tui_gateway.entry".into()],
         dir: source.clone(),
+        exit_timeout: std::path::Path::new(state)
+            .join("shared-resume-stalled")
+            .exists()
+            .then_some(Duration::from_millis(250)),
         env: Some(vec![
             "PATH=/usr/bin:/bin".into(),
             "NODE_ENV=test".into(),
@@ -721,12 +725,22 @@ fn shared_resume(
     assert_eq!(replay_wires(follow)?, original);
     println!("LIVE REPLAY ENVELOPES: {}", original.len());
     let (ended, suffix) = resume(1)?;
-    if state_dir.join("shared-resume-exit").exists() {
+    let stalled = state_dir.join("shared-resume-stalled").exists();
+    if stalled || state_dir.join("shared-resume-exit").exists() {
         assert_eq!(ended.state.status, SessionStatus::ERROR);
         let terminal: serde_json::Value = serde_json::from_str(&original[1])?;
         assert_eq!(terminal["type"], "run.failed");
         assert_eq!(terminal["payload"]["error"]["code"], "hermes_process_exit");
-        println!("REPLAY AFTER GATEWAY EXIT: 1");
+        if stalled {
+            assert_eq!(
+                terminal["payload"]["error"]["message"],
+                "hermes rpc: invalid JSON-RPC message: frame must be exactly one JSON object"
+            );
+            std::fs::write(state_dir.join("terminal-observed"), "")?;
+            println!("TERMINALS BEFORE GATEWAY EXIT: 1");
+        } else {
+            println!("REPLAY AFTER GATEWAY EXIT: 1");
+        }
     } else {
         assert_eq!(ended.state.status, SessionStatus::IDLE);
     }
