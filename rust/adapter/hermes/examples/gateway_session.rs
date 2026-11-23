@@ -377,6 +377,16 @@ fn shared_submit(
         assert_eq!(first.envelope_type, EnvelopeType::RUN_STARTED);
         println!("envelope: {}", serde_json::to_string(&first)?);
         std::fs::write(state_dir.join(format!("release-run-{index}")), "")?;
+        if index == 1 {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while block_on(session.state())?.status != SessionStatus::IDLE {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "run did not settle while the stream was unread"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
         while let Some(event) = block_on(poll_fn(|cx| stream.as_mut().poll_next(cx))) {
             println!("envelope: {}", serde_json::to_string(&event?)?);
         }
