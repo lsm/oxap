@@ -172,7 +172,7 @@ def inference_journeys(run, start, home, provider):
             auth = envelope(AGENT, 'provider.credential.grant.request', 'grant',
                             {'provider_id': 'synthetic', 'nonce': 'agent', 'ttl_ms': 1000})
             models_query = envelope(AGENT, 'models.request', 'models', {
-                'session_id': session, 'allow_degraded_features': ['models.list']
+                'session_id': session
             })
             models_query['session_id'] = session
             bound_provider = {'http': f'127.0.0.1:{port}'}
