@@ -1,14 +1,20 @@
 #![cfg(unix)]
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    thread,
+    time::{Duration, Instant},
+};
 
 use futures::executor::block_on;
 use oxap_adapter::{Adapter as _, Error, OpenRequest};
 use oxap_adapter_claude::{adapter::pin, Adapter, Config, ToolPosture};
-use oxap_protocol::ReasoningLevel;
+use oxap_protocol::{ReasoningLevel, ToolsListRequest, FEATURE_TOOLS_LIST};
 use serde_json::{json, Value};
 
-fn open_fixture(mode: &str) {
+fn fixture(mode: &str) -> (Adapter, tempfile::TempDir, Vec<Value>) {
     let directory = tempfile::tempdir().unwrap();
     let peer = directory.path().join("peer");
     fs::write(&peer, include_str!("session_open_peer.py")).unwrap();
@@ -16,6 +22,16 @@ fn open_fixture(mode: &str) {
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .join(&pin().corpus);
+    let corpus = corpus.join(if mode == "catalog" {
+        "tools-catalog-sources/native.jsonl"
+    } else {
+        "initialize-lifecycle/native.jsonl"
+    });
+    let frames = fs::read_to_string(&corpus)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
     let adapter = Adapter::new(Config {
         executable: Some(peer.display().to_string()),
         tools: ToolPosture::Unrestricted,
@@ -25,15 +41,17 @@ fn open_fixture(mode: &str) {
             format!("PATH={}", std::env::var("PATH").unwrap()),
             format!("HOME={}", directory.path().display()),
             "NODE_ENV=test".into(),
-            format!(
-                "FIXTURE={}",
-                corpus.join("initialize-lifecycle/native.jsonl").display()
-            ),
+            format!("FIXTURE={}", corpus.display()),
             format!("MODE={mode}"),
         ],
         ..Default::default()
     })
     .unwrap();
+    (adapter, directory, frames)
+}
+
+fn open_fixture(mode: &str) {
+    let (adapter, directory, _) = fixture(mode);
     let reasoning = if mode == "plain" {
         ReasoningLevel::default()
     } else {
@@ -96,4 +114,81 @@ fn opens_and_closes_the_corpus_gateway() {
         open_fixture(mode);
     }
     println!("4/4 Claude startup cases passed");
+}
+
+#[test]
+fn lists_the_idle_gateway_catalog_and_replaces_it_on_refresh() {
+    let (adapter, directory, frames) = fixture("catalog");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let lister = session
+        .tool_lister()
+        .expect("Claude serves action.tools.list");
+    assert!(matches!(
+        block_on(lister.tools(ToolsListRequest {
+            session_id: Some("session".into()),
+            ..Default::default()
+        })),
+        Err(Error::DegradedControl(feature)) if feature == FEATURE_TOOLS_LIST
+    ));
+    let request = ToolsListRequest {
+        session_id: Some("session".into()),
+        allow_degraded_features: vec![FEATURE_TOOLS_LIST.into()],
+    };
+    assert!(matches!(
+        block_on(lister.tools(ToolsListRequest {
+            session_id: Some("other".into()),
+            ..request.clone()
+        })),
+        Err(Error::RunNotFound)
+    ));
+    let mut expected = frames
+        .iter()
+        .map(|frame| &frame["raw"]["catalog"])
+        .filter(|catalog| !catalog.is_null());
+    let empty = expected.next().unwrap();
+    let populated = expected.next().unwrap();
+    let list = || {
+        let reply = block_on(lister.tools(request.clone())).unwrap();
+        assert_eq!(reply.revision, pin().capability_revision);
+        serde_json::to_value(reply.tools).unwrap()
+    };
+    let publish = |step: &str| {
+        fs::write(directory.path().join(step), []).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while block_on(session.state()).unwrap().current_model_id != step {
+            assert!(Instant::now() < deadline, "idle init {step} did not arrive");
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
+    assert_eq!(&list(), empty);
+    publish("publish-initial");
+    assert_eq!(&list(), populated);
+    let mut unscoped = empty.clone();
+    unscoped.as_object_mut().unwrap().remove("session_id");
+    for session_id in [None, Some("".into())] {
+        let reply = block_on(lister.tools(ToolsListRequest {
+            session_id,
+            ..request.clone()
+        }))
+        .unwrap();
+        assert_eq!(serde_json::to_value(reply.tools).unwrap(), unscoped);
+    }
+    publish("publish-refresh");
+    let mut refreshed = populated.clone();
+    refreshed["sources"].as_array_mut().unwrap().truncate(2);
+    let tool = &mut refreshed["tools"][3];
+    tool["source"] = json!("mcp:files");
+    refreshed["tools"] = json!([tool]);
+    assert_eq!(list(), refreshed);
+    block_on(session.close()).unwrap();
+    assert!(matches!(
+        block_on(lister.tools(request)),
+        Err(Error::SessionClosed)
+    ));
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS catalog: two corpus catalogs, scoped refresh, refusals and gateway EOF");
 }
