@@ -9,7 +9,7 @@ import oxap_sdk
 
 
 def test_distribution_is_oxap_sdk_at_the_package_version() -> None:
-    assert importlib.metadata.version("oxap-sdk") == oxap_sdk.__version__ == "0.1.0a42"
+    assert importlib.metadata.version("oxap-sdk") == oxap_sdk.__version__ == "0.1.0a43"
 
 
 def test_the_old_import_name_is_not_provided() -> None:
