@@ -67,10 +67,12 @@ Pass the declared identities and all required answers to
 to the matching gateway request. A successful reply produces a linked
 `user.input.resolved` and returns the run to running or to its remaining
 input gate. Gateway withdrawals cancel the linked input and update the run status.
-Run settlement cancels any remaining input requests. An observation stream that
-disconnects after the run starts produces an inferred `run.failed` with the
-transport diagnostic. A read deadline allows the caller to retry. Other
-native observations pass through without consuming a sequence number.
+Run settlement cancels any remaining input requests. On disconnect, the run
+drains queued observations before surfacing an inferred `run.failed` with
+the child exit error or, on a clean exit, the reader's diagnostic. A read
+deadline allows the caller to retry. Unknown reverse methods with string IDs
+receive JSON-RPC error `-32601`. Other native observations pass through
+without consuming a sequence number.
 Reading ends after settlement. To interrupt a running turn, use
 `GatewayRun::interrupt` and continue reading its settlement.
 

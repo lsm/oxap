@@ -285,12 +285,6 @@ impl GatewayRun<'_> {
                     continue;
                 }
                 PromptObservation::Other(Observation::Request(request)) => {
-                    if !matches!(
-                        request.method.as_str(),
-                        REQUEST_APPROVAL | REQUEST_CLARIFY | REQUEST_SUDO | REQUEST_SECRET
-                    ) {
-                        return Ok(Some(RunObservation::Other(Observation::Request(request))));
-                    }
                     self.open_gate(request)?;
                     continue;
                 }

@@ -112,19 +112,24 @@ targeted gateway session suite also checks that duplicate starts and
 unmatched completions fail the run and that unfinished tools fail before
 run settlement.
 
-Replay a malformed frame and a gateway that closes stdout after emitting a delta:
+Replay active transport failures and reverse RPC refusals:
 
 ```sh
-for case in malformed-frame process-exit; do
+for case in malformed-frame process-exit process-exit-status reverse-method; do
   python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
     "${CARGO_TARGET_DIR:-rust/target}/debug/examples/gateway_session" --run "$case" || exit $?
 done
 ```
 
-Expect three matched envelopes and one clean shutdown per case. The last
-envelope is an inferred `run.failed` with `hermes_process_exit` and the
-transport diagnostic. The process-exit fixture supplies a synthetic error
-message. The replay expects `EOF`, the diagnostic from the real stdio closure.
+Expect three matched envelopes per case, with the queued delta before an
+inferred `run.failed` with `hermes_process_exit`. The last envelope carries
+the malformed-frame diagnostic, `EOF` for a clean process exit, or
+`exit status 7` for the nonzero exit. The nonzero case also reports status 7
+at close. The process-exit variants replay the fixture's native
+frames and substitute the live diagnostics for its synthetic error message.
+The reverse-method case checks two byte-matched JSON-RPC `-32601` replies,
+one before the submit receipt and one during the run. Both allow the run
+to proceed.
 
 Replay the four reverse requests from the interaction corpus in one run:
 
