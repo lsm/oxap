@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use oxap_adapter::runtime::Runtime;
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
     Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, OpenRequest,
@@ -11,8 +12,13 @@ use oxap_protocol::{
     FEATURE_RUN_COMPACTION, FEATURE_SESSION_REASONING, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
     MODE_SESSION_LIVE, MODE_SESSION_OPEN, PROFILE, SCOPE_RUN, TOOL_SOURCE_NATIVE, VERSION,
 };
+use oxap_protocol::{SessionState, SessionStatus};
 
-use crate::native::settings_flags;
+use crate::{
+    native::{apply_flag_settings_request, initialize_request, settings_flags, FlagSettings},
+    rpc::{Process, ProcessConfig},
+    session::{bind, OpenedSession},
+};
 
 pub(crate) const ENDPOINT_ID: &str = "claude-code.cli";
 const NATIVE_TOOL_SOURCE: &str = "claude-code-native";
@@ -105,6 +111,7 @@ pub struct SpawnPlan {
 #[derive(Clone)]
 pub struct Adapter {
     config: Config,
+    runtime: Runtime,
 }
 
 pub fn pin() -> &'static oxap_harness::Version {
@@ -117,7 +124,10 @@ impl Adapter {
         if config.journal_capacity == 0 {
             config.journal_capacity = DEFAULT_JOURNAL_CAPACITY;
         }
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            runtime: Runtime::default(),
+        })
     }
 
     pub fn spawn_plan(&self) -> Result<SpawnPlan, Error> {
@@ -158,10 +168,14 @@ impl Adapter {
     }
 
     pub fn admit(&self, request: &OpenRequest) -> Result<(), Error> {
+        self.admit_flags(request).map(|_| ())
+    }
+
+    fn admit_flags(&self, request: &OpenRequest) -> Result<FlagSettings<'static>, Error> {
         refuse_unadvertised_tools(request, &[])?;
         refuse_unadvertised_tool_sources(request, &[])?;
         refuse_unadvertised_settings(request, &self.describe().capabilities)?;
-        settings_flags(
+        let flags = settings_flags(
             request.reasoning_level.clone(),
             request.compaction_policy.as_ref(),
             false,
@@ -171,7 +185,7 @@ impl Adapter {
                 "the binding must name a Claude Code session UUID",
             ));
         }
-        Ok(())
+        Ok(flags)
     }
 
     pub fn describe(&self) -> Descriptor {
@@ -257,12 +271,59 @@ impl AdapterContract for Adapter {
 
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {
         Box::pin(async move {
-            self.admit(&request)?;
-            Err(Error::Harness(
-                "claude adapter: opening a session is not implemented yet".into(),
-            ))
+            let flags = self.admit_flags(&request)?;
+            if request.reopen {
+                return Err(reopen_refused(
+                    "reopening requires native settings recovery",
+                ));
+            }
+            let initialize = initialize_request(&[]).map_err(Error::harness)?;
+            let mut launch = self.spawn_plan()?;
+            let id = native_uuid()?;
+            launch.args.extend(["--session-id".into(), id.clone()]);
+            let process = Process::start(
+                &ProcessConfig {
+                    path: launch.path,
+                    args: launch.args,
+                    dir: launch.dir,
+                    env: Some(launch.env),
+                    ..ProcessConfig::default()
+                },
+                None,
+            )
+            .map_err(Error::harness)?;
+            let mut state = SessionState {
+                session_id: if request.session_id.as_str().is_empty() {
+                    self.runtime.new_id("session").into()
+                } else {
+                    request.session_id
+                },
+                status: SessionStatus::IDLE,
+                current_model_id: self.config.model.clone().unwrap_or_default(),
+                updated_at_ms: self.runtime.now_ms(),
+                reasoning_level: request.reasoning_level,
+                compaction_policy: request.compaction_policy,
+                ..SessionState::default()
+            };
+            bind(&mut state, &id);
+            let session = OpenedSession::new(process, state)?;
+            session.exchange("initialize exchange", initialize)?;
+            if flags != FlagSettings::default() {
+                let settings = apply_flag_settings_request(&flags).map_err(Error::harness)?;
+                session.exchange("apply_flag_settings", settings)?;
+            }
+            Ok(Box::new(session) as Box<dyn SessionContract>)
         })
     }
+}
+
+fn native_uuid() -> Result<String, Error> {
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).map_err(Error::harness)?;
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] = bytes;
+    Ok(format!("{a:02x}{b:02x}{c:02x}{d:02x}-{e:02x}{f:02x}-{g:02x}{h:02x}-{i:02x}{j:02x}-{k:02x}{l:02x}{m:02x}{n:02x}{o:02x}{p:02x}"))
 }
 
 fn reopen_refused(detail: &str) -> Error {

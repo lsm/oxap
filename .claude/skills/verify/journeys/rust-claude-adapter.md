@@ -240,3 +240,21 @@ descriptor: the key-set test must fail. Accept an `off` level in
 `settings_flags`: the level-refusal test must fail. Accept any reopen id: the
 reopen test must fail. Reorder `--allowedTools` before `--tools` in
 `spawn_plan`: the argv test must fail.
+
+## Fresh session over stdio
+
+On the test host or in CI, run the public adapter against a credential-free
+peer with the pinned corpus's initialize exchange and native init frame:
+
+```sh
+cargo test --locked --manifest-path rust/Cargo.toml \
+  -p oxap-adapter-claude --test session_open -- --nocapture
+```
+
+Require exit 0 and four passing startup cases. The peer checks the fresh
+native UUID and the initialize request, then sends its init observation
+before the receipt. The caller sees the native model and binding on return.
+Check that an open without settings writes only initialize, that opening with
+an effort sends it after initialize, and that either control refusal closes
+the process before the adapter returns the error. Successful opens close on
+stdin EOF and reject later state queries.
