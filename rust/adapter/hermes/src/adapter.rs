@@ -3,12 +3,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures_channel::oneshot;
+use futures_channel::{mpsc, oneshot};
 use oxap_adapter::{
     refuse_unadvertised_controls, refuse_unadvertised_settings, refuse_unadvertised_tool_sources,
-    refuse_unadvertised_tools, runtime::Runtime, subscriber::Subscriber,
-    Adapter as AdapterContract, BoxFuture, Descriptor, Error, EventStream, InteractionResolution,
-    OpenRequest, Recovery, ResumeRequest, Session, SubmitRequest,
+    refuse_unadvertised_tools, runtime::Runtime, Adapter as AdapterContract, BoxFuture, Descriptor,
+    Error, EventStream, InteractionResolution, OpenRequest, Recovery, ResumeRequest, Session,
+    SubmitRequest,
 };
 use oxap_protocol::{
     ActiveRun, CapabilityDescriptor, ContentPartType, EndpointDescriptor, Envelope, EnvelopeType,
@@ -22,8 +22,6 @@ use crate::{
     process::{Process, ProcessConfig},
     GatewayRun, GatewaySession, Observation, RunObservation,
 };
-
-const STREAM_CAPACITY: usize = 256;
 
 pub struct Adapter {
     process: ProcessConfig,
@@ -272,15 +270,15 @@ impl Session for OpenedSession {
                     }
                     slot.state = state;
                 }
-                let events = Subscriber::new(STREAM_CAPACITY);
-                let _ = reply.send(Ok((response, events.stream())));
+                let (events, stream) = mpsc::unbounded();
+                let stream: EventStream = Box::pin(stream);
+                let _ = reply.send(Ok((response, stream)));
                 let terminal = forward_run(&events, &mut run);
                 let gateway = gateway.observed_settlement.then_some(gateway);
                 lock_slot(&slot).settle(gateway, &runtime);
                 if let Ok(Some(event)) = terminal {
-                    events.offer(event, true);
+                    let _ = events.unbounded_send(Ok(event));
                 }
-                events.close();
             });
             admission.await.unwrap_or(Err(Error::SessionClosed))
         })
@@ -299,7 +297,10 @@ impl Session for OpenedSession {
     }
 }
 
-fn forward_run(events: &Subscriber, run: &mut GatewayRun<'_>) -> Result<Option<Envelope>, Error> {
+fn forward_run(
+    events: &mpsc::UnboundedSender<Result<Envelope, Error>>,
+    run: &mut GatewayRun<'_>,
+) -> Result<Option<Envelope>, Error> {
     loop {
         match run.observe(None, false) {
             Ok(Some(RunObservation::Event(event))) => {
@@ -308,7 +309,7 @@ fn forward_run(events: &Subscriber, run: &mut GatewayRun<'_>) -> Result<Option<E
                 {
                     return Ok(Some(*event));
                 }
-                events.offer(*event, false);
+                let _ = events.unbounded_send(Ok(*event));
             }
             Ok(Some(RunObservation::Other(Observation::Event(_)))) => {}
             Ok(Some(RunObservation::Other(Observation::Request(_)))) => {

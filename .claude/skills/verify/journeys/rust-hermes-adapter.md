@@ -217,9 +217,10 @@ python3 .claude/skills/verify/scripts/rust-hermes-prompt-projection.py \
 
 Expect queued state with no run IDs while the gateway withholds its first
 receipt. A concurrent submit returns `RunActive`. Each of the three recorded
-refusals returns the session to idle. Expect two subsequent admissions, ten
-corpus-matched envelopes with independent run IDs and sequences, and one
-clean gateway EOF. The gateway withholds each run's
-deltas until the caller observes a running session and a busy refusal. A
-model override must be refused before a gateway write. After each terminal,
-the shared session returns to idle and can admit another prompt.
+refusals returns the session to idle. Expect two subsequent admissions, 310
+sequenced envelopes with independent run IDs, and one clean gateway EOF.
+The gateway withholds each run's deltas until the caller observes a running
+session and a busy refusal. The first run adds 300 deltas to the corpus
+replay. The caller waits for idle before draining them and checks every
+sequence through the terminal. The second run follows the original corpus.
+A model override must be refused before a gateway write.
