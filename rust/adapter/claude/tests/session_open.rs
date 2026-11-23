@@ -13,8 +13,10 @@ use futures::executor::block_on;
 use oxap_adapter::{Adapter as _, Error, OpenRequest, SubmitRequest};
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
-    Message, MessageContent, MessageRole, MessageSubmitRequest, ReasoningLevel, ToolsListRequest,
-    FEATURE_TOOLS_LIST,
+    ContentPart, ContentPartType, Message, MessageContent, MessageRole, MessageSubmitRequest,
+    ReasoningLevel, RequestedDeliveryMode, ToolsListRequest, FEATURE_DELIVERY_BTW,
+    FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION,
+    FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
 };
 use serde_json::{json, Value};
 
@@ -166,14 +168,37 @@ fn text_submit(text: &str) -> SubmitRequest {
 
 #[test]
 fn writes_one_native_turn_without_admitting_on_write() {
-    let (adapter, directory, _) = fixture("submit-text");
+    verify_submit("submit-text", text_submit("hello"), false);
+    let mut request = text_submit("");
+    request.request.delivery = RequestedDeliveryMode::AUTO;
+    request.request.messages[0].content = MessageContent::from_parts(&[
+        ContentPart {
+            part_type: ContentPartType::TEXT,
+            text: "你好 <&>".into(),
+            ..Default::default()
+        },
+        ContentPart {
+            part_type: ContentPartType::TEXT,
+            text: "second line".into(),
+            ..Default::default()
+        },
+    ]);
+    verify_submit("submit-parts", request, true);
+    println!("2/2 Claude submit peer cases passed");
+}
+
+fn verify_submit(mode: &str, request: SubmitRequest, expand_prompts: bool) {
+    let (mut config, directory, _) = fixture_config(mode);
+    config.expand_prompts = expand_prompts;
+    let adapter = Adapter::new(config).unwrap();
     let session = block_on(adapter.open(OpenRequest {
         session_id: "session".into(),
         ..Default::default()
     }))
     .unwrap();
 
-    let mut submission = session.submit(text_submit("hello"));
+    check_invalid_submits(session.as_ref());
+    let mut submission = session.submit(request);
     let mut context = Context::from_waker(futures::task::noop_waker_ref());
     match submission.as_mut().poll(&mut context) {
         Poll::Pending => {}
@@ -192,15 +217,95 @@ fn writes_one_native_turn_without_admitting_on_write() {
     ));
     assert!(matches!(block_on(session.close()), Err(Error::RunActive)));
     let state = block_on(session.state()).unwrap();
+    assert_eq!(state.status.as_str(), "idle");
     assert!(state.active_run_id.is_none());
     assert!(state.active_runs.is_empty());
     fs::write(directory.path().join("release-turn"), []).unwrap();
     assert!(matches!(block_on(submission), Err(Error::SessionClosed)));
+    assert!(matches!(
+        block_on(session.submit(text_submit("after EOF"))),
+        Err(Error::SessionClosed)
+    ));
     block_on(session.close()).unwrap();
     assert!(directory.path().join("no-extra-turn").is_file());
-    println!(
-        "PASS text submit: corpus turn reached stdin once, overlap refused, no premature admission"
+    println!("PASS {mode}: one native turn, invalid and overlapping submits refused, no premature admission");
+}
+
+fn check_invalid_submits(session: &dyn oxap_adapter::Session) {
+    let original = serde_json::to_value(text_submit("invalid").request).unwrap();
+    let submit_changed = |field: &str, value| {
+        let mut wire = original.clone();
+        wire[field] = value;
+        block_on(session.submit(SubmitRequest {
+            request: serde_json::from_value(wire).unwrap(),
+            ..Default::default()
+        }))
+        .err()
+        .expect("invalid request admitted")
+    };
+    let user_message = &original["messages"][0];
+    for (field, invalid) in [
+        ("session_id", json!("")),
+        ("messages", json!([])),
+        ("messages", json!([user_message, user_message])),
+        (
+            "messages",
+            json!([{"role": "assistant", "content": "invalid"}]),
+        ),
+        (
+            "messages",
+            json!([{"role": "user", "content": [{"type": "image"}]}]),
+        ),
+        ("delivery", json!("start")),
+    ] {
+        assert_eq!(submit_changed(field, invalid), Error::InvalidSubmission);
+    }
+    assert_eq!(
+        submit_changed("session_id", json!("other")),
+        Error::RunNotFound
     );
+    for (field, value, feature) in [
+        ("delivery", json!("queue"), FEATURE_DELIVERY_QUEUE),
+        ("delivery", json!("steer"), FEATURE_DELIVERY_STEER),
+        ("delivery", json!("btw"), FEATURE_DELIVERY_BTW),
+        ("instructions", json!("invalid"), FEATURE_INSTRUCTIONS),
+        ("model_id", json!("other"), FEATURE_MODEL_SELECTION),
+        ("output_schema", json!({}), FEATURE_STRUCTURED_OUTPUT),
+        (
+            "tool_choice",
+            json!({"allowed": ["Read"]}),
+            FEATURE_TOOL_SELECTION,
+        ),
+    ] {
+        assert!(
+            matches!(submit_changed(field, value), Error::UnsupportedControl(control) if control.feature == feature && control.reason == "unadvertised")
+        );
+    }
+}
+
+#[test]
+fn a_failed_native_write_retires_the_session() {
+    let (adapter, directory, _) = fixture("submit-write-refused");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    assert!(matches!(
+        block_on(session.submit(text_submit("undeliverable"))),
+        Err(Error::Harness(detail)) if detail.contains("Broken pipe")
+    ));
+    assert!(matches!(
+        block_on(session.state()),
+        Err(Error::SessionClosed)
+    ));
+    assert!(matches!(
+        block_on(session.submit(text_submit("retry"))),
+        Err(Error::SessionClosed)
+    ));
+    fs::write(directory.path().join("release-turn"), []).unwrap();
+    block_on(session.close()).unwrap();
+    println!("PASS submit-write-refused: broken native stdin returned a write error and closed the session");
 }
 
 #[test]

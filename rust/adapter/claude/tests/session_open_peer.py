@@ -23,12 +23,14 @@ Path("binding").write_text(binding)
 frames = [json.loads(line) for line in Path(os.environ["FIXTURE"]).read_text().splitlines()]
 
 
-def exchange(expected, reply, refuse=False, observation=None):
+def exchange(expected, reply, refuse=False, observation=None, close_stdin=False):
     line = sys.stdin.readline()
     actual = json.loads(line)
     wire = {"request": dict(sorted(expected["request"].items())),
             "request_id": actual["request_id"], "type": expected["type"]}
     assert line == json.dumps(wire, separators=(",", ":")) + "\n", line
+    if close_stdin:
+        os.close(0)
     reply["response"]["request_id"] = actual["request_id"]
     if refuse:
         reply["response"].update(subtype="error", error="fixture refusal")
@@ -42,7 +44,12 @@ init = next(frame["raw"] for frame in frames if isinstance(frame["raw"], dict)
             and frame["raw"].get("subtype") == "init")
 init["session_id"] = binding
 exchange(frames[0]["raw"], frames[1]["raw"], mode == "initialize-refusal",
-         None if mode == "catalog" else init)
+         None if mode == "catalog" else init, close_stdin=mode == "submit-write-refused")
+if mode == "submit-write-refused":
+    deadline = time.monotonic() + 5
+    while not Path("release-turn").exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    sys.exit(0)
 if mode == "catalog":
     for step in ("publish-initial", "publish-refresh"):
         deadline = time.monotonic() + 10
@@ -65,12 +72,20 @@ if mode in {"settings", "settings-refusal"}:
         {"type": "control_response", "response": {"subtype": "success", "response": {}}},
         mode == "settings-refusal",
     )
-if mode == "submit-text":
-    frame = json.loads(sys.stdin.readline())
+if mode in {"submit-text", "submit-parts"}:
+    raw = sys.stdin.readline()
+    frame = json.loads(raw)
     assert frame["uuid"].startswith("turn-")
+    assert uuid.UUID(frame["uuid"].removeprefix("turn-")).version == 4
     expected = frames[2]["raw"]
     expected["uuid"] = frame["uuid"]
+    if mode == "submit-parts":
+        del expected["client_composed"]
+        expected["message"]["content"] = "你好 <&>\nsecond line"
     assert frame == expected, frame
+    wire = json.dumps(expected, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+    wire = wire.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    assert raw == wire + "\n", raw
     Path("turn-observed").touch()
     deadline = time.monotonic() + 10
     while not Path("release-turn").exists():

@@ -3,42 +3,72 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_channel::oneshot;
 use oxap_adapter::{
-    BoxFuture, Error, EventStream, InteractionResolution, Recovery, ResumeRequest, Session,
-    SubmitRequest, ToolCatalog, ToolLister,
+    refuse_unadvertised_controls, BoxFuture, Error, EventStream, InteractionResolution, Recovery,
+    ResumeRequest, Session, SubmitRequest, ToolCatalog, ToolLister,
 };
 use oxap_protocol::{
-    MessageSubmitResponse, RunCancelResponse, RunId, SessionState, SessionStatus, ToolsListRequest,
+    ContentPartType, MessageRole, MessageSubmitRequest, MessageSubmitResponse,
+    RequestedDeliveryMode, RunCancelResponse, RunId, SessionState, SessionStatus, ToolsListRequest,
     FEATURE_TOOLS_LIST,
 };
 use serde_json::value::to_raw_value;
 
 use crate::{
-    adapter::pin,
+    adapter::{native_uuid, pin},
     catalog::Catalog,
     native::{self, Observation},
-    rpc::{Inbound, Process},
+    rpc::{ClientError, Inbound, Process},
 };
 
-const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(60);
+const RPC_TIMEOUT: Duration = Duration::from_secs(60);
+type Admission = Result<(MessageSubmitResponse, EventStream), Error>;
 
 pub(crate) struct OpenedSession {
     process: Process,
-    state: Arc<Mutex<IdleState>>,
+    state: Arc<Mutex<SessionData>>,
+    expand_prompts: bool,
 }
 
-struct IdleState {
+struct SessionData {
     session: SessionState,
     catalog: Catalog,
+    pending: Option<PendingTurn>,
+}
+
+struct PendingTurn {
+    uuid: String,
+    admission: oneshot::Sender<Admission>,
+}
+
+impl SessionData {
+    fn reject_write(&mut self, uuid: &str, retire: bool) {
+        if self.pending.as_ref().is_some_and(|turn| turn.uuid == uuid) {
+            self.pending.take();
+        }
+        if retire {
+            self.session.status = SessionStatus::CLOSED;
+        }
+    }
 }
 
 impl OpenedSession {
-    pub(crate) fn new(process: Process, state: SessionState) -> Result<Self, Error> {
-        let state = Arc::new(Mutex::new(IdleState {
+    pub(crate) fn new(
+        process: Process,
+        state: SessionState,
+        expand_prompts: bool,
+    ) -> Result<Self, Error> {
+        let state = Arc::new(Mutex::new(SessionData {
             session: state,
             catalog: Catalog::default(),
+            pending: None,
         }));
-        let session = Self { process, state };
+        let session = Self {
+            process,
+            state,
+            expand_prompts,
+        };
         let inbound = session.process.client.inbound();
         let state = session.state.clone();
         std::thread::Builder::new()
@@ -56,20 +86,24 @@ impl OpenedSession {
                             }
                         }
                         Inbound::Control(control) => {
-                            let deadline = Some(Instant::now() + INITIALIZE_TIMEOUT);
+                            let deadline = Some(Instant::now() + RPC_TIMEOUT);
                             let _ = control.respond_error("claude adapter: no owned run", deadline);
                         }
                         _ => {}
                     }
                 }
-                state.lock().unwrap().session.status = SessionStatus::CLOSED;
+                let mut state = state.lock().unwrap();
+                state.session.status = SessionStatus::CLOSED;
+                if let Some(turn) = state.pending.take() {
+                    let _ = turn.admission.send(Err(Error::SessionClosed));
+                }
             })
             .map_err(Error::harness)?;
         Ok(session)
     }
 
     pub(crate) fn exchange(&self, name: &str, body: String) -> Result<(), Error> {
-        let deadline = Some(Instant::now() + INITIALIZE_TIMEOUT);
+        let deadline = Some(Instant::now() + RPC_TIMEOUT);
         let result = self
             .process
             .client
@@ -87,6 +121,83 @@ impl OpenedSession {
         }
         Ok(())
     }
+
+    async fn submit_turn(&self, request: MessageSubmitRequest) -> Admission {
+        let text = submit_text(&request)?;
+        let uuid = format!("turn-{}", native_uuid()?);
+        native::validate_turn_uuid(&uuid).map_err(Error::harness)?;
+        let frame =
+            native::new_user_turn(&uuid, &text, !self.expand_prompts).map_err(Error::harness)?;
+        let (reply, admission) = oneshot::channel();
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.session.status == SessionStatus::CLOSED {
+                return Err(Error::SessionClosed);
+            }
+            if state.session.session_id != request.session_id {
+                return Err(Error::RunNotFound);
+            }
+            if state.pending.is_some() || state.session.status != SessionStatus::IDLE {
+                return Err(Error::RunActive);
+            }
+            state.pending = Some(PendingTurn {
+                uuid: uuid.clone(),
+                admission: reply,
+            });
+        }
+
+        let (written, write_result) = oneshot::channel();
+        let client = self.process.client.clone();
+        let state = self.state.clone();
+        let turn_uuid = uuid.clone();
+        let worker = std::thread::Builder::new().spawn(move || {
+            let result = client.write_user(frame.as_bytes(), Some(Instant::now() + RPC_TIMEOUT));
+            if let Err(error) = &result {
+                state
+                    .lock()
+                    .unwrap()
+                    .reject_write(&turn_uuid, *error != ClientError::WriteQueue);
+            }
+            let _ = written.send(result.map_err(Error::harness));
+        });
+        if let Err(error) = worker {
+            self.state.lock().unwrap().reject_write(&uuid, false);
+            return Err(Error::harness(error));
+        }
+        write_result.await.map_err(|_| Error::SessionClosed)??;
+        admission.await.unwrap_or(Err(Error::SessionClosed))
+    }
+}
+
+fn submit_text(request: &MessageSubmitRequest) -> Result<String, Error> {
+    refuse_unadvertised_controls(request, &[])?;
+    let [message] = request.messages.as_slice() else {
+        return Err(Error::InvalidSubmission);
+    };
+    if request.session_id.as_str().is_empty()
+        || message.role != MessageRole::USER
+        || (!request.delivery.is_empty() && request.delivery != RequestedDeliveryMode::AUTO)
+    {
+        return Err(Error::InvalidSubmission);
+    }
+    if let Some(text) = message.content.text() {
+        return Ok(text);
+    }
+    if message.content.raw().is_some_and(|raw| raw.get() == "null") {
+        return Ok(String::new());
+    }
+    let parts = message.content.parts().ok_or(Error::InvalidSubmission)?;
+    if parts
+        .iter()
+        .any(|part| part.part_type != ContentPartType::TEXT)
+    {
+        return Err(Error::InvalidSubmission);
+    }
+    Ok(parts
+        .into_iter()
+        .map(|part| part.text)
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 pub(crate) fn bind(state: &mut SessionState, id: &str) {
@@ -115,13 +226,19 @@ impl Session for OpenedSession {
 
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {
-            self.state.lock().unwrap().session.status = SessionStatus::CLOSED;
+            {
+                let mut state = self.state.lock().unwrap();
+                if state.pending.is_some() {
+                    return Err(Error::RunActive);
+                }
+                state.session.status = SessionStatus::CLOSED;
+            }
             self.process.close(None).map_err(Error::harness)
         })
     }
 
-    fn submit(&self, _: SubmitRequest) -> BoxFuture<'_, (MessageSubmitResponse, EventStream)> {
-        Box::pin(async { Err(Error::UnsupportedInput) })
+    fn submit(&self, submit: SubmitRequest) -> BoxFuture<'_, (MessageSubmitResponse, EventStream)> {
+        Box::pin(self.submit_turn(submit.request))
     }
 
     fn resolve(&self, _: InteractionResolution) -> BoxFuture<'_, ()> {

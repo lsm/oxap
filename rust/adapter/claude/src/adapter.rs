@@ -96,6 +96,7 @@ pub struct Config {
     pub executable: Option<String>,
     pub model: Option<String>,
     pub tools: ToolPosture,
+    pub expand_prompts: bool,
     pub environment: Vec<String>,
     pub provider: Option<Provider>,
     pub headers: Vec<Header>,
@@ -243,7 +244,7 @@ impl Adapter {
             ("user_input", feature(SupportLevel::NATIVE, "permission gates over the control plane")),
             (FEATURE_TOOL_SELECTION, FeatureSupport {
                 scope: SCOPE_RUN.into(),
-                ..feature(SupportLevel::EMULATED, "enforced per call: a PreToolUse hook, and the can_use_tool gate behind it, refuse an excluded tool before it runs and the call settles refused_by_policy; not retained past the run")
+                ..feature(SupportLevel::UNAVAILABLE, "per-run tool selection requires native permission handling")
             }),
         ]
         .into_iter()
@@ -320,7 +321,7 @@ impl AdapterContract for Adapter {
                 ..SessionState::default()
             };
             bind(&mut state, &id);
-            let session = OpenedSession::new(process, state)?;
+            let session = OpenedSession::new(process, state, self.config.expand_prompts)?;
             session.exchange("initialize exchange", initialize)?;
             if flags != FlagSettings::default() {
                 let settings = apply_flag_settings_request(&flags).map_err(Error::harness)?;
@@ -331,7 +332,7 @@ impl AdapterContract for Adapter {
     }
 }
 
-fn native_uuid() -> Result<String, Error> {
+pub(crate) fn native_uuid() -> Result<String, Error> {
     let mut bytes = [0; 16];
     getrandom::fill(&mut bytes).map_err(Error::harness)?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
