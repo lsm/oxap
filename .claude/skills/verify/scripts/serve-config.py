@@ -237,13 +237,30 @@ def main():
             return subprocess.Popen([*command, config], cwd=root, env=env, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
+        built_in = {'stdio': 'raw', 'adapter': 'loop', 'adapters': {'loop': {'type': 'oapx'}}}
+        auth = envelope(AGENT, 'auth.providers.request', 'auth')
+        count = 0
+        for document, requests in [
+            ({'agent': built_in, 'provider': provider}, [auth, describe]),
+            ({'agent': built_in}, [auth]),
+        ]:
+            result = run(document, *requests)
+            assert result.returncode == 0, result
+            frames = [json.loads(line) for line in result.stdout.splitlines()]
+            assert len(frames) == len(requests), frames
+            replies = {reply['in_reply_to']: reply for reply in frames}
+            for request in requests:
+                assert_response(replies[request['id']], request)
+            assert replies['auth']['payload']['providers'], replies['auth']
+            count += len(replies)
+            print(f'{list(document)} built-in Agent discovered auth providers, answered {len(replies)} requests and exited {result.returncode}')
+
         conflict = run({'agent': {'stdio': 'multi_session'}, 'provider': provider})
         assert conflict.returncode == 1 and not conflict.stdout, conflict
         assert 'exclusive use of stdio' in conflict.stderr, conflict
         assert not list(home.iterdir()), conflict
         print(f'conflicting stdio bindings exited {conflict.returncode}')
 
-        count = 0
         for document, requests in [
             ({'agent': agent}, [capabilities]),
             ({'provider': provider}, [describe]),
