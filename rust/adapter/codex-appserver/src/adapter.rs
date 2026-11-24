@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use oxap_adapter::gojson::{decode, go_quote, Decode};
 use oxap_adapter::runtime::Runtime;
@@ -10,15 +10,16 @@ use oxap_adapter::{
 use oxap_protocol::{
     CapabilityDescriptor, CompactionKind, EndpointDescriptor, FeatureSupport, ReasoningLevel,
     RecoveryMetadata, SessionState, SessionStatus, SupportLevel, FEATURE_COMPACTION_POLICY,
-    FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION, FEATURE_OPEN_REOPEN, FEATURE_SESSION_REASONING,
-    FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOL_SELECTION, MODE_SESSION_LIVE, MODE_SESSION_OPEN,
-    PROFILE, SCOPE_RUN, VERSION,
+    FEATURE_CONTENT_IMAGE, FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION, FEATURE_OPEN_REOPEN,
+    FEATURE_SESSION_REASONING, FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOL_SELECTION,
+    MODE_SESSION_LIVE, MODE_SESSION_OPEN, PROFILE, SCOPE_RUN, VERSION,
 };
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::caller::Caller;
 use crate::client::{Client, ClientFactory};
+use crate::images::ImageModels;
 use crate::native::{
     ThreadResumeParams, ThreadResumeResponse, ThreadStartParams, ThreadStartResponse,
     METHOD_THREAD_RESUME, METHOD_THREAD_START,
@@ -26,7 +27,7 @@ use crate::native::{
 use crate::permissions::confirm;
 use crate::process::{ClientInfo, ProcessConfig, ProcessFactory};
 use crate::rpc::{self, error, Fault};
-use crate::session::{Session, Shared};
+use crate::session::{Session, Shared, TurnRoute};
 
 pub(crate) const ENDPOINT_ID: &str = "codex.app-server";
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
@@ -47,6 +48,7 @@ pub struct Config {
 pub struct Adapter {
     config: Config,
     factory: Arc<dyn ClientFactory>,
+    images: Arc<OnceLock<Arc<ImageModels>>>,
 }
 
 pub fn pin() -> &'static oxap_harness::Version {
@@ -72,7 +74,16 @@ impl Adapter {
             };
             Arc::new(ProcessFactory(process))
         });
-        Ok(Self { config, factory })
+        let images = if config.factory.is_some() {
+            OnceLock::from(Arc::new(ImageModels::default()))
+        } else {
+            OnceLock::new()
+        };
+        Ok(Self {
+            config,
+            factory,
+            images: Arc::new(images),
+        })
     }
 
     pub fn open(&self, request: OpenRequest) -> Result<Session, Error> {
@@ -82,7 +93,8 @@ impl Adapter {
     pub(crate) fn open_as(&self, request: OpenRequest, caller: &Caller) -> Result<Session, Error> {
         refuse_unadvertised_tool_sources(&request, &[])?;
         refuse_unadvertised_tools(&request, &[])?;
-        refuse_unadvertised_settings(&request, &self.describe().capabilities)?;
+        let descriptor = self.describe();
+        refuse_unadvertised_settings(&request, &descriptor.capabilities)?;
         let settings = thread_config(&request)?;
         if request.participant.id.as_str().is_empty() {
             return Err(Error::InvalidParticipant);
@@ -105,6 +117,7 @@ impl Adapter {
             }
         }
         let mut model = self.config.model.clone();
+        let mut native_model = String::new();
         let mut level = request.reasoning_level.clone();
         let mut recovery = None;
         if thread_id.is_empty() {
@@ -121,6 +134,7 @@ impl Adapter {
                     fail(Error::Harness(format!("start Codex thread: {failure}")))
                 })?;
             thread_id = response.thread.id;
+            native_model = response.model;
             if thread_id.is_empty() {
                 return Err(fail(native_protocol("thread/start returned no thread id")));
             }
@@ -176,7 +190,11 @@ impl Adapter {
         let state = SessionState {
             session_id,
             status: SessionStatus::IDLE,
-            current_model_id: model.clone(),
+            current_model_id: if model.is_empty() {
+                native_model
+            } else {
+                model.clone()
+            },
             updated_at_ms: self.config.runtime.now_ms(),
             recovery,
             reasoning_level: level,
@@ -187,14 +205,49 @@ impl Adapter {
             client,
             thread_id,
             request.participant.id.clone(),
-            model,
+            TurnRoute {
+                model,
+                images: self.images().clone(),
+                revision: descriptor.capability_revision,
+                frame_limit: if self.config.process.frame_limit == 0 {
+                    oxap_adapter::jsonrpc::DEFAULT_FRAME_LIMIT
+                } else {
+                    self.config.process.frame_limit
+                },
+            },
             self.config.runtime.clone(),
             self.config.journal_capacity,
             state,
         )))
     }
 
+    fn images(&self) -> &Arc<ImageModels> {
+        self.images.get_or_init(|| {
+            Arc::new(ImageModels::discover(
+                &*self.factory,
+                &self.config.model,
+                &self.config.process.dir,
+            ))
+        })
+    }
+
     pub fn describe(&self) -> Descriptor {
+        let images = self.images();
+        let model = if self.config.model.is_empty() {
+            &images.default_model
+        } else {
+            &self.config.model
+        };
+        let mut features = features();
+        let mut revision = pin().capability_revision.clone();
+        if images.supports(model) {
+            features.insert(FEATURE_CONTENT_IMAGE.into(), FeatureSupport {
+                level: SupportLevel::NATIVE,
+                reason: "inline image input on the configured model; a per-turn model must also advertise image input".into(),
+                ..FeatureSupport::default()
+            });
+            revision.push_str("-image");
+        }
         Descriptor {
             capabilities: CapabilityDescriptor {
                 endpoint: EndpointDescriptor {
@@ -205,10 +258,10 @@ impl Adapter {
                 },
                 protocol_versions: vec![VERSION.into()],
                 profiles: vec![PROFILE.into()],
-                features: features(),
+                features,
                 ..CapabilityDescriptor::default()
             },
-            capability_revision: pin().capability_revision.clone(),
+            capability_revision: revision,
             journal: JournalDescriptor {
                 scope: "session".into(),
                 persistence: "process_memory".into(),
@@ -245,7 +298,13 @@ pub(crate) fn call<T: Decode>(
 ) -> Result<T, rpc::Error> {
     let params = serde_json::value::to_raw_value(params)
         .map_err(|failure| error(Fault::Encode(failure.to_string())))?;
-    let result = client.call(method, params, None)?;
+    decode_reply(method, &client.call(method, params, None)?)
+}
+
+pub(crate) fn decode_reply<T: Decode>(
+    method: &str,
+    result: &serde_json::value::RawValue,
+) -> Result<T, rpc::Error> {
     decode(result.get().as_bytes()).map_err(|failure| {
         error(Fault::Decode {
             method: method.into(),

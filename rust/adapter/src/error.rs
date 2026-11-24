@@ -55,6 +55,8 @@ pub enum Error {
     RunActive,
     #[error("adapter: invalid submission")]
     InvalidSubmission,
+    #[error("{0}")]
+    InvalidSubmissionDetail(&'static str),
     #[error("adapter: invalid request")]
     InvalidRequest,
     #[error("adapter: run not found")]

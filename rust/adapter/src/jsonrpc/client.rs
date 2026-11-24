@@ -209,19 +209,22 @@ impl RpcClient {
         }
     }
 
+    pub fn reserve_request_id(&self) -> RequestId {
+        RequestId::Integer(
+            self.0
+                .next_id
+                .fetch_add(1, Ordering::SeqCst)
+                .wrapping_add(1),
+        )
+    }
+
     pub fn call(
         &self,
         method: &str,
         params: Option<Box<RawValue>>,
         deadline: Option<Instant>,
     ) -> CallResult {
-        let id = RequestId::Integer(
-            self.0
-                .next_id
-                .fetch_add(1, Ordering::SeqCst)
-                .wrapping_add(1),
-        );
-        self.call_id(id, method, params, deadline, None)
+        self.call_id(self.reserve_request_id(), method, params, deadline, None)
     }
 
     pub fn call_id(

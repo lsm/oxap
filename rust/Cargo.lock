@@ -1065,6 +1065,7 @@ dependencies = [
 name = "oxap-adapter-codex-appserver"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "crossbeam-channel",
  "futures",
  "futures-channel",

@@ -252,6 +252,19 @@ impl Client for ProcessClient {
         self.0.client.call(method, Some(params), deadline)
     }
 
+    fn reserve_request_id(&self) -> crate::rpc::RequestId {
+        self.0.client.reserve_request_id()
+    }
+
+    fn call_reserved(
+        &self,
+        id: crate::rpc::RequestId,
+        method: &str,
+        params: Box<RawValue>,
+    ) -> Result<Box<RawValue>, Error> {
+        self.0.client.call_id(id, method, Some(params), None, None)
+    }
+
     fn inbound(&self) -> Receiver<Inbound> {
         self.0.client.inbound()
     }

@@ -929,6 +929,9 @@ pub(crate) fn refusal(err: &HubError) -> Option<WireError> {
             }
             Some(detailed("unsupported_feature", err, details))
         }
+        HubError::Adapter(Error::InvalidSubmissionDetail(detail)) => {
+            Some(wire("invalid_submission", detail))
+        }
         HubError::Adapter(Error::DegradedControl(feature)) => Some(detailed(
             "capability_degraded",
             err,

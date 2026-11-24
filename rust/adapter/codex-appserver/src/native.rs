@@ -157,6 +157,8 @@ pub struct UserInput {
     pub kind: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub url: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
