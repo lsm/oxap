@@ -17,7 +17,8 @@ answers receive errors. Validate both emitted traces. The routing journey
 checks that an unresolved ask closes before the terminal event and that
 an ask after the terminal never becomes a gate.
 
-The peer also withdraws two open native asks. Require a linked cancelled
-resolution, a running state, and refusal of a late answer. The CLI receives
-no reply to a withdrawn ask. The routing journey also checks that a
-withdrawal buffered during admission never produces a public gate.
+The peer also withdraws three open native asks across two runs. With two
+asks open, closing the first keeps the run waiting and names the remaining
+interaction. Closing the last returns the run to running. Require linked
+cancelled resolutions, refusal of a late answer, and no native replies to
+withdrawn asks. A withdrawal buffered during admission never produces a gate.

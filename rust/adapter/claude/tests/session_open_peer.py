@@ -152,6 +152,8 @@ if mode.startswith("run-"):
             assert turn == dict(raw, uuid=native_uuid)
             buffered = []
         elif action == "observe":
+            if raw.get("request", {}).get("subtype") == "can_use_tool":
+                permission_ask = raw
             if mode == "run-tools-edges":
                 if raw["type"] == "assistant":
                     blocks = raw["message"]["content"]
@@ -194,9 +196,15 @@ if mode.startswith("run-"):
                 send(raw, corpus_uuid, native_uuid)
                 run_index += 1
         elif action == "expect-write" and mode == "run-permission-withdrawal" and raw["response"]["request_id"].startswith("ask-"):
+            if run_index == 1:
+                send(dict(permission_ask, request_id="overlapping-ask"), corpus_uuid, native_uuid)
             wait_for_host(f"withdraw-{run_index}")
             print(json.dumps({"type": "control_cancel_request",
                               "request_id": raw["response"]["request_id"]}), flush=True)
+            if run_index == 1:
+                wait_for_host("withdraw-overlapping")
+                print(json.dumps({"type": "control_cancel_request",
+                                  "request_id": "overlapping-ask"}), flush=True)
             wait_for_host(f"withdrawn-{run_index}")
         elif action == "expect-write" and mode.startswith("run-permission"):
             assert select.select([sys.stdin], [], [], 5)[0], "missing native control reply"

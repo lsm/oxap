@@ -428,6 +428,15 @@ fn claude_permission_gates_retire_native_withdrawals() {
         assert_eq!(requested.envelope_type.as_str(), "user.input.requested");
         let waiting = block_on(stream.next()).unwrap().unwrap();
         assert_eq!(waiting.envelope_type.as_str(), "run.status.updated");
+        let overlapping = if index == 1 {
+            let gate = block_on(stream.next()).unwrap().unwrap();
+            assert_eq!(gate.envelope_type.as_str(), "user.input.requested");
+            let waiting = block_on(stream.next()).unwrap().unwrap();
+            assert_eq!(waiting.envelope_type.as_str(), "run.status.updated");
+            Some(gate)
+        } else {
+            None
+        };
         fs::write(
             directory.path().join(format!("continue-withdraw-{index}")),
             [],
@@ -440,8 +449,28 @@ fn claude_permission_gates_retire_native_withdrawals() {
         assert_eq!(resolved.in_reply_to.as_ref(), Some(&requested.id));
         let payload = serde_json::to_value(&resolved).unwrap();
         assert_eq!(payload["payload"]["status"], "cancelled");
-        let running = block_on(stream.next()).unwrap().unwrap();
-        assert_eq!(running.envelope_type.as_str(), "run.status.updated");
+        let status = block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(status.envelope_type.as_str(), "run.status.updated");
+        if let Some(gate) = overlapping {
+            let payload = serde_json::to_value(&status).unwrap();
+            assert_eq!(payload["payload"]["status"], "waiting_for_input");
+            assert_eq!(
+                payload["payload"]["pending_user_input_id"],
+                gate.turn_id.unwrap().as_str()
+            );
+            assert_eq!(
+                block_on(session.state()).unwrap().status.as_str(),
+                "waiting_for_input"
+            );
+            fs::write(directory.path().join("continue-withdraw-overlapping"), []).unwrap();
+            let cancelled = block_on(stream.next()).unwrap().unwrap();
+            assert_eq!(cancelled.envelope_type.as_str(), "user.input.resolved");
+            assert_eq!(cancelled.in_reply_to.as_ref(), Some(&gate.id));
+            let running = block_on(stream.next()).unwrap().unwrap();
+            assert_eq!(running.envelope_type.as_str(), "run.status.updated");
+            let payload = serde_json::to_value(&running).unwrap();
+            assert_eq!(payload["payload"]["status"], "running");
+        }
         assert_eq!(
             block_on(session.state()).unwrap().status.as_str(),
             "running"
@@ -482,7 +511,7 @@ fn claude_permission_gates_retire_native_withdrawals() {
     }
     block_on(session.close()).unwrap();
     assert!(directory.path().join("eof").is_file());
-    println!("PASS native withdrawals: two gates retired, both runs resumed, no native replies");
+    println!("PASS native withdrawals: three gates retired, an overlapping gate kept the run waiting, no native replies");
 }
 
 #[test]
