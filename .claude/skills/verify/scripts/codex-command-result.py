@@ -32,6 +32,8 @@ def native():
         if method == "initialize":
             result = {"userAgent": "codex-fixture", "codexHome": "/fixture",
                       "platformFamily": "unix", "platformOs": "linux"}
+        elif method == "model/list":
+            result = {"data": [], "nextCursor": None}
         elif method == "thread/start":
             result = {"thread": {"id": "thread-1"}}
         elif method == "turn/start":

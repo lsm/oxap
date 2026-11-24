@@ -163,6 +163,7 @@ def main():
             worker.join()
         assert server.observed == [
             ("/gateway/responses", None, "Bearer " + key),
+            ("/gateway/responses", None, "Bearer " + key),
             ("/gateway/v1/messages", key, None),
         ], "stub upstream saw the wrong paths or authentication"
         print(f"PASS: stub upstream observed {len(server.observed)} requests with expected auth")

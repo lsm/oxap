@@ -68,7 +68,12 @@ def peer(kind):
     elif kind == "codex":
         rpc(request("initialize"), userAgent="fixture", codexHome="/codex", platformFamily="unix", platformOs="linux")
         request("initialized")
-        rpc(request("thread/start"), thread={"id": SESSION})
+        first = read()
+        if first.get("method") == "model/list":
+            rpc(first, data=[], nextCursor=None)
+            return
+        assert first.get("method") == "thread/start", first
+        rpc(first, thread={"id": SESSION})
         turn = {"id": "turn-1", "status": "inProgress"}
         rpc(request("turn/start"), turn=turn)
         fields = {"threadId": SESSION, "turnId": turn["id"]}

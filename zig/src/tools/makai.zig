@@ -583,6 +583,7 @@ const AgentRegistry = struct {
             const built = try arena.create(codex_adapter.Adapter);
             built.* = codex_adapter.Adapter.init(self.allocator, config);
             try self.codexes.append(self.allocator, built);
+            try built.discoverModels(arena);
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "pi")) {

@@ -122,9 +122,9 @@ def envelope(kind, payload):
 
 
 class Hub:
-    def __init__(self, command, root, label):
+    def __init__(self, command, root, label, home=None):
         self.errors = (root / (label + "-stderr.txt")).open("w")
-        env = {"PATH": os.environ["PATH"], "HOME": str(root / "home"), "NODE_ENV": "test"}
+        env = {"PATH": os.environ["PATH"], "HOME": str(home or root / "home"), "NODE_ENV": "test" if home is None else "production"}
         self.process = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=self.errors, text=True)
         self.lines = queue.Queue()
