@@ -10,7 +10,9 @@ use std::{
 };
 
 use futures::{executor::block_on, FutureExt, StreamExt};
-use oxap_adapter::{Adapter as _, Error, OpenRequest, ReplayGap, ResumeRequest, SubmitRequest};
+use oxap_adapter::{
+    testkit::RunTrace, Adapter as _, Error, OpenRequest, ReplayGap, ResumeRequest, SubmitRequest,
+};
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
     ContentPart, ContentPartType, Envelope, Message, MessageContent, MessageRole,
@@ -348,6 +350,83 @@ fn claude_tools_replay_corpus() {
     replay_run_events("run-tools", "tool-lifecycle");
 }
 
+#[test]
+fn claude_tools_settle_open_calls_and_ignore_foreign_results() {
+    let (adapter, directory, frames) = fixture("run-tools-edges");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    for (index, frame) in frames
+        .iter()
+        .filter(|frame| frame["action"] == "submit")
+        .enumerate()
+    {
+        let (admission, stream) = block_on(session.submit(text_submit(
+            frame["raw"]["message"]["content"].as_str().unwrap(),
+        )))
+        .unwrap();
+        fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+        let events = block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let actions: Vec<_> = events
+            .iter()
+            .filter(|event| event.tool_call_id.is_some())
+            .collect();
+        let terminal = events.last().unwrap();
+        match index {
+            0 => {
+                assert_eq!(
+                    actions
+                        .iter()
+                        .map(|event| event.envelope_type.as_str())
+                        .collect::<Vec<_>>(),
+                    [
+                        "action.call.requested",
+                        "action.call.started",
+                        "action.call.requested",
+                        "action.call.started",
+                        "action.call.cancelled",
+                        "action.call.cancelled"
+                    ]
+                );
+                assert_eq!(actions[4].in_reply_to.as_ref(), Some(&actions[1].id));
+                assert_eq!(actions[5].in_reply_to.as_ref(), Some(&actions[3].id));
+                let request = serde_json::to_value(actions[2]).unwrap();
+                assert_eq!(request["payload"]["name"], "Task");
+                assert_eq!(request["payload"].get("arguments_json"), Some(&Value::Null));
+                assert_eq!(terminal.envelope_type.as_str(), "run.completed");
+            }
+            1 => {
+                assert_eq!(actions.len(), 3);
+                assert_eq!(actions[2].envelope_type.as_str(), "action.call.completed");
+                assert_eq!(
+                    serde_json::to_value(actions[2]).unwrap()["payload"]["result"],
+                    json!([{"type": "text", "text": "data"}])
+                );
+                assert_eq!(terminal.envelope_type.as_str(), "run.completed");
+            }
+            2 => {
+                assert_eq!(actions.len(), 3);
+                assert_eq!(actions[2].envelope_type.as_str(), "action.call.cancelled");
+                assert_eq!(terminal.envelope_type.as_str(), "run.failed");
+                assert_eq!(
+                    serde_json::to_value(terminal).unwrap()["payload"]["error"],
+                    json!({"code":"claude_tool_lifecycle","message":"duplicate tool call"})
+                );
+            }
+            _ => unreachable!(),
+        }
+        RunTrace::new(admission, adapter.describe(), events).assert_valid();
+    }
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS tool edges: ordered cleanup, foreign and late results, structured result, duplicate call");
+}
+
 fn replay_run_events(mode: &str, case: &str) {
     let (adapter, directory, frames) = fixture(mode);
     let session = block_on(adapter.open(OpenRequest {
@@ -395,6 +474,9 @@ fn replay_run_events(mode: &str, case: &str) {
         assert!(idle.active_run_id.is_none());
         assert!(idle.active_runs.is_empty());
         assert_eq!(idle.transcript_cursor, expected.len().to_string());
+        if case == "tool-lifecycle" {
+            RunTrace::new(admission, adapter.describe(), actual).assert_valid();
+        }
     }
     block_on(session.close()).unwrap();
     assert!(directory.path().join("eof").is_file());

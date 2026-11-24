@@ -11,18 +11,18 @@ use oxap_adapter::{
     ToolCatalog, ToolLister,
 };
 use oxap_protocol::{
-    ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart, ContentPartType,
-    EffectiveDeliveryMode, Envelope, EnvelopeType, Message, MessageContent, MessageId, MessageRole,
-    MessageSubmitRequest, MessageSubmitResponse, ProtocolError, RequestedDeliveryMode,
-    RunCancelResponse, RunCancelledPayload, RunCompletedPayload, RunFailedPayload, RunId,
-    RunStartedPayload, RunStatus, SessionId, SessionState, SessionStatus, ToolsListRequest, Usage,
-    FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
+    ActionCallPayload, ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart,
+    ContentPartType, EffectiveDeliveryMode, Envelope, EnvelopeId, EnvelopeType, Message,
+    MessageContent, MessageId, MessageRole, MessageSubmitRequest, MessageSubmitResponse,
+    ProtocolError, RequestedDeliveryMode, RunCancelResponse, RunCancelledPayload,
+    RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus, SessionId,
+    SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
 };
 use serde::Deserialize;
 use serde_json::value::to_raw_value;
 
 use crate::{
-    adapter::{native_uuid, pin},
+    adapter::{native_uuid, pin, ENDPOINT_ID},
     catalog::Catalog,
     native::{self, Observation},
     rpc::{ClientError, Inbound, ObservationMessage, Process, DEFAULT_QUEUE_CAPACITY},
@@ -47,6 +47,7 @@ struct SessionData {
     active: Option<ActiveTurn>,
     interrupt: Option<Interrupt>,
     settled_runs: HashMap<RunId, RunStatus>,
+    tool_calls: HashMap<String, (RunId, usize)>,
     unusable: bool,
 }
 
@@ -80,6 +81,25 @@ struct ActiveTurn {
     run_id: RunId,
     message_id: MessageId,
     cancel_accepted: bool,
+    tools: Vec<ObservedTool>,
+}
+
+struct ObservedTool {
+    payload: ActionCallPayload,
+    started: Option<EnvelopeId>,
+}
+
+fn tool_event(
+    kind: EnvelopeType,
+    payload: &ActionCallPayload,
+    reply: Option<EnvelopeId>,
+    runtime: &Runtime,
+) -> Envelope {
+    let mut event =
+        Envelope::new(kind, runtime.new_id("event"), payload).expect("tool payload serializes");
+    event.tool_call_id = Some(payload.tool_call_id.clone());
+    event.in_reply_to = reply;
+    event
 }
 
 #[derive(Deserialize)]
@@ -218,12 +238,142 @@ impl SessionData {
                 }
                 turn.terminal(session_id, &frame, runtime.new_id("event"))
             }
+            Observation::Assistant(frame) => {
+                return self.apply_tools(frame.message.content.unwrap_or_default(), true, runtime);
+            }
+            Observation::User(frame) => {
+                return self.apply_tools(frame.blocks().unwrap_or_default(), false, runtime);
+            }
             _ => return,
         };
         self.publish(event, runtime);
     }
 
-    fn publish(&mut self, mut event: Envelope, runtime: &Runtime) {
+    fn apply_tools(
+        &mut self,
+        blocks: Vec<native::ContentBlock>,
+        assistant: bool,
+        runtime: &Runtime,
+    ) {
+        for block in blocks {
+            let outcome = match (assistant, block.kind.as_str()) {
+                (true, "tool_use") if !block.id.is_empty() => self.start_tool(block, runtime),
+                (false, "tool_result") if !block.tool_use_id.is_empty() => {
+                    self.finish_tool(block, runtime)
+                }
+                _ => continue,
+            };
+            if let Err(message) = outcome {
+                let payload = RunFailedPayload {
+                    session_id: self.session.session_id.clone(),
+                    run_id: self.active.as_ref().unwrap().run_id.clone(),
+                    error: ProtocolError {
+                        code: "claude_tool_lifecycle".into(),
+                        message: message.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let event =
+                    Envelope::new(EnvelopeType::RUN_FAILED, runtime.new_id("event"), &payload)
+                        .expect("tool lifecycle failure serializes");
+                self.publish(event, runtime);
+                return;
+            }
+        }
+    }
+
+    fn start_tool(
+        &mut self,
+        block: native::ContentBlock,
+        runtime: &Runtime,
+    ) -> Result<(), &'static str> {
+        if block.name.is_empty() {
+            return Err("tool call without a name");
+        }
+        if self.tool_calls.contains_key(&block.id) {
+            return Err("duplicate tool call");
+        }
+        let turn = self.active.as_mut().unwrap();
+        self.tool_calls
+            .insert(block.id, (turn.run_id.clone(), turn.tools.len()));
+        let mut payload = ActionCallPayload {
+            session_id: self.session.session_id.clone(),
+            run_id: turn.run_id.clone(),
+            tool_call_id: runtime.new_id("tool-call").into(),
+            requested_by: Some(ENDPOINT_ID.into()),
+            execution_owner: "claude-code".into(),
+            source: self.catalog.attribution_for(&block.name).into(),
+            name: block.name,
+            arguments_json: Some(block.input.unwrap_or_else(|| to_raw_value(&()).unwrap())),
+            ..Default::default()
+        };
+        let requested = tool_event(EnvelopeType::ACTION_CALL_REQUESTED, &payload, None, runtime);
+        payload.arguments_json = None;
+        let started = tool_event(
+            EnvelopeType::ACTION_CALL_STARTED,
+            &payload,
+            Some(requested.id.clone()),
+            runtime,
+        );
+        turn.tools.push(ObservedTool {
+            payload,
+            started: Some(started.id.clone()),
+        });
+        self.append_event(requested, false, runtime);
+        self.append_event(started, false, runtime);
+        Ok(())
+    }
+
+    fn finish_tool(
+        &mut self,
+        block: native::ContentBlock,
+        runtime: &Runtime,
+    ) -> Result<(), &'static str> {
+        let Some((run, index)) = self.tool_calls.get(&block.tool_use_id) else {
+            return Err("unmatched tool completion");
+        };
+        let turn = self.active.as_mut().unwrap();
+        if *run != turn.run_id {
+            return Ok(());
+        }
+        let tool = &mut turn.tools[*index];
+        let started = tool.started.take().ok_or("unmatched tool completion")?;
+        let mut payload = tool.payload.clone();
+        let kind = if block.is_error == Some(true) {
+            let message = block
+                .content
+                .as_deref()
+                .and_then(|raw| native::source::decode::<String>(raw.get()).ok())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "tool call failed".into());
+            payload.error = Some(ProtocolError {
+                code: "claude_tool_error".into(),
+                message,
+                ..Default::default()
+            });
+            EnvelopeType::ACTION_CALL_FAILED
+        } else {
+            payload.result = Some(match block.content {
+                Some(raw) if raw.get().starts_with('"') => {
+                    let text =
+                        native::source::decode::<String>(raw.get()).expect("raw JSON string");
+                    to_raw_value(&text).unwrap()
+                }
+                Some(raw) if raw.get() != "null" => raw,
+                _ => to_raw_value("").unwrap(),
+            });
+            EnvelopeType::ACTION_CALL_COMPLETED
+        };
+        self.append_event(
+            tool_event(kind, &payload, Some(started), runtime),
+            false,
+            runtime,
+        );
+        Ok(())
+    }
+
+    fn append_event(&mut self, mut event: Envelope, terminal: bool, runtime: &Runtime) {
         let turn = self
             .active
             .as_ref()
@@ -237,19 +387,38 @@ impl SessionData {
         event.session_id = Some(self.session.session_id.clone());
         event.run_id = Some(turn.run_id.clone());
         event.capability_revision = Some(pin().capability_revision.clone());
+        self.journal.append(event, terminal);
+    }
+
+    fn publish(&mut self, event: Envelope, runtime: &Runtime) {
         let settled = match event.envelope_type.as_str() {
             "run.completed" => Some(RunStatus::COMPLETED),
             "run.failed" => Some(RunStatus::FAILED),
             "run.cancelled" => Some(RunStatus::CANCELLED),
             _ => None,
         };
-        self.journal.append(event, settled.is_some());
         if let Some(status) = settled {
-            self.settled_runs.insert(turn.run_id.clone(), status);
+            let turn = self.active.as_mut().unwrap();
+            let run_id = turn.run_id.clone();
+            for tool in std::mem::take(&mut turn.tools) {
+                if let Some(started) = tool.started {
+                    let cancelled = tool_event(
+                        EnvelopeType::ACTION_CALL_CANCELLED,
+                        &tool.payload,
+                        Some(started),
+                        runtime,
+                    );
+                    self.append_event(cancelled, false, runtime);
+                }
+            }
+            self.append_event(event, true, runtime);
+            self.settled_runs.insert(run_id, status);
             self.active = None;
             self.session.status = SessionStatus::IDLE;
             self.session.active_run_id = None;
             self.session.active_runs.clear();
+        } else {
+            self.append_event(event, false, runtime);
         }
     }
 
@@ -330,6 +499,7 @@ impl SessionData {
             run_id: run_id.clone(),
             message_id: message_id.clone(),
             cancel_accepted: false,
+            tools: Vec::new(),
         });
         for (observation, corroborates) in turn.buffered {
             self.apply(observation, corroborates, runtime);
@@ -510,6 +680,7 @@ impl OpenedSession {
             active: None,
             interrupt: None,
             settled_runs: HashMap::new(),
+            tool_calls: HashMap::new(),
             unusable: false,
         }));
         let session = Self {
