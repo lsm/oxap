@@ -1397,7 +1397,9 @@ test "a reopen reports the reasoning level the thread resumed under" {
     const off = (try reopenedLevel("none", null)).?;
     defer testing.allocator.free(off);
     try testing.expectEqualStrings("off", off);
-    try testing.expectEqualStrings("ultra", (try reopenedLevel("ultra", null)) orelse "");
+    const ultra = (try reopenedLevel("ultra", null)).?;
+    defer testing.allocator.free(ultra);
+    try testing.expectEqualStrings("ultra", ultra);
     try testing.expectEqual(@as(?[]const u8, null), try reopenedLevel("persistent", null));
     const requested = (try reopenedLevel("high", "low")).?;
     defer testing.allocator.free(requested);
