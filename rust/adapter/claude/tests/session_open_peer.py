@@ -193,6 +193,9 @@ if mode.startswith("run-"):
             if raw["type"] == "result":
                 send(raw, corpus_uuid, native_uuid)
                 run_index += 1
+        elif action == "expect-write" and mode == "run-permissions":
+            assert select.select([sys.stdin], [], [], 5)[0], "missing native control reply"
+            assert json.loads(sys.stdin.readline()) == raw, raw
         elif action == "decode-error":
             print(raw, flush=True)
             break
@@ -257,7 +260,7 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
         send_control("barrier", "barrier")
         read_reply("barrier", subtype="error", error="claude adapter: no owned run")
         Path("controls-buffered").touch()
-        read_reply("before-terminal", subtype="error", error="claude adapter: permission gate unavailable")
+        read_reply("before-terminal", subtype="error", error="claude adapter: run settled")
         read_reply("after-terminal", subtype="error",
                    error="claude adapter: permission ask outside an owned run")
         assert select.select([sys.stdin], [], [], 5)[0], "session did not close"

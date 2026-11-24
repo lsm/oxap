@@ -11,14 +11,16 @@ use std::{
 
 use futures::{executor::block_on, FutureExt, StreamExt};
 use oxap_adapter::{
-    testkit::RunTrace, Adapter as _, Error, OpenRequest, ReplayGap, ResumeRequest, SubmitRequest,
+    testkit::RunTrace, Adapter as _, Error, InteractionResolution, OpenRequest, ReplayGap,
+    ResumeRequest, SubmitRequest,
 };
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
-    ContentPart, ContentPartType, Envelope, Message, MessageContent, MessageRole,
+    ContentPart, ContentPartType, Envelope, InputAnswer, Message, MessageContent, MessageRole,
     MessageSubmitRequest, ReasoningLevel, RequestedDeliveryMode, ToolsListRequest,
-    FEATURE_DELIVERY_BTW, FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_INSTRUCTIONS,
-    FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
+    UserInputRequestedPayload, UserInputResolveRequest, FEATURE_DELIVERY_BTW,
+    FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION,
+    FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
 };
 use serde_json::{json, Value};
 
@@ -41,6 +43,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-settlement" => "settlement-statuses/native.jsonl",
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
+        "run-permissions" => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-tools") => "tool-lifecycle/native.jsonl",
         mode if mode.starts_with("run-interrupt-") => "interrupt-cancel/native.jsonl",
         "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
@@ -358,7 +361,13 @@ fn claude_control_routing_preserves_native_order_across_admission() {
             .iter()
             .map(|event| event.envelope_type.as_str())
             .collect::<Vec<_>>(),
-        ["run.started", "run.completed"]
+        [
+            "run.started",
+            "user.input.requested",
+            "run.status.updated",
+            "user.input.resolved",
+            "run.completed"
+        ]
     );
     assert!(events.iter().all(|event| event.run_id == admission.run_id));
     assert_eq!(
@@ -366,8 +375,11 @@ fn claude_control_routing_preserves_native_order_across_admission() {
             .iter()
             .map(|event| event.sequence)
             .collect::<Vec<_>>(),
-        [Some(1), Some(2)]
+        [Some(1), Some(2), Some(3), Some(4), Some(5)]
     );
+    let resolved = serde_json::to_value(&events[3]).unwrap();
+    assert_eq!(resolved["payload"]["status"], "cancelled");
+    assert_eq!(events[3].in_reply_to.as_ref(), Some(&events[1].id));
     block_on(session.close()).unwrap();
     assert!(
         directory.path().join("eof").is_file(),
@@ -393,6 +405,99 @@ fn claude_run_replays_streaming_and_settlement() {
 #[test]
 fn claude_tools_replay_corpus() {
     replay_run_events("run-tools", "tool-lifecycle");
+}
+
+#[test]
+fn claude_permission_gates_replay_corpus() {
+    let (adapter, directory, frames) = fixture("run-permissions");
+    let mut open = OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    };
+    open.participant.id = "operator".into();
+    let session = block_on(adapter.open(open.clone())).unwrap();
+    let expected = expected_run_events("permission-gates");
+    for ((index, expected), frame) in expected
+        .chunks(9)
+        .enumerate()
+        .zip(frames.iter().filter(|frame| frame["action"] == "submit"))
+    {
+        let submit = text_submit(frame["raw"]["message"]["content"].as_str().unwrap());
+        let (admission, mut stream) = block_on(session.submit(submit.clone())).unwrap();
+        fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+        let mut events = Vec::new();
+        let gate = loop {
+            let event = block_on(stream.next())
+                .expect("permission was not published")
+                .unwrap();
+            let gate = (event.envelope_type.as_str() == "user.input.requested").then(|| {
+                serde_json::from_value::<UserInputRequestedPayload>(
+                    serde_json::to_value(&event).unwrap()["payload"].clone(),
+                )
+                .unwrap()
+            });
+            events.push(event);
+            if let Some(gate) = gate {
+                break gate;
+            }
+        };
+        assert_eq!(gate.responded_by.as_str(), "operator");
+        let waiting = block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(waiting.envelope_type.as_str(), "run.status.updated");
+        events.push(waiting);
+        let mut answer = InteractionResolution {
+            run_id: gate.run_id.clone(),
+            responded_by: "bystander".into(),
+            input: Some(UserInputResolveRequest {
+                interaction_id: gate.interaction_id,
+                run_id: gate.run_id,
+                session_id: gate.session_id,
+                requested_by: gate.requested_by,
+                responded_by: gate.responded_by,
+                answers: vec![InputAnswer {
+                    question_id: "decision".into(),
+                    selected_option_ids: vec!["retry".into()],
+                    ..Default::default()
+                }],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            block_on(session.resolve(answer.clone())),
+            Err(Error::WrongResponder)
+        );
+        answer.responded_by = "operator".into();
+        assert_eq!(
+            block_on(session.resolve(answer.clone())),
+            Err(Error::InvalidResolution)
+        );
+        answer.input.as_mut().unwrap().answers[0].selected_option_ids =
+            vec![if index == 0 { "allow" } else { "deny" }.into()];
+        block_on(session.resolve(answer.clone())).unwrap();
+        assert_eq!(
+            block_on(session.resolve(answer)),
+            Err(Error::InteractionNotFound)
+        );
+        events.extend(
+            block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .map(Result::unwrap),
+        );
+        let mut expected = expected.to_vec();
+        for event in &mut expected {
+            if event["payload"]["responded_by"] == "user" {
+                event["payload"]["responded_by"] = json!("operator");
+            }
+        }
+        assert_run_events(&admission, &events, &expected, "permission-gates");
+        let mut trace = RunTrace::new(admission, adapter.describe(), events);
+        trace.opened = Some(open.clone());
+        trace.submitted = Some(submit.request);
+        trace.assert_valid();
+    }
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS permission gates: 2 runs and 18 corpus envelopes, exact native decisions");
 }
 
 #[test]
@@ -810,6 +915,7 @@ fn assert_run_events(
     );
     let mut event_ids = std::collections::HashMap::<String, Value>::new();
     let mut tool_ids = std::collections::HashMap::new();
+    let mut interaction_ids = std::collections::HashMap::new();
     for (event, expected) in actual.iter().zip(expected) {
         let mut event = serde_json::to_value(event).unwrap();
         if !event["in_reply_to"].is_null() {
@@ -831,6 +937,24 @@ fn assert_run_events(
             let normalized = tool_ids[id].clone();
             event["tool_call_id"] = normalized.clone();
             event["payload"]["tool_call_id"] = normalized;
+        }
+        if let Some(id) = event["turn_id"].as_str() {
+            assert_eq!(event["payload"]["interaction_id"], id);
+            if event["type"] == "user.input.requested" {
+                assert!(interaction_ids
+                    .insert(id.to_owned(), expected["turn_id"].clone())
+                    .is_none());
+            }
+            let normalized = interaction_ids[id].clone();
+            event["turn_id"] = normalized.clone();
+            event["payload"]["interaction_id"] = normalized;
+        }
+        if let Some(id) = event["payload"]["pending_user_input_id"].as_str() {
+            event["payload"]["pending_user_input_id"] = interaction_ids[id].clone();
+        }
+        if event["type"] == "run.status.updated" {
+            assert!(event["payload"]["updated_at_ms"].as_i64().unwrap() > 0);
+            event["payload"]["updated_at_ms"] = expected["payload"]["updated_at_ms"].clone();
         }
         assert_eq!(event["run_id"], admission.run_id.as_ref().unwrap().as_str());
         assert_eq!(event["payload"]["run_id"], event["run_id"]);
