@@ -5,6 +5,7 @@ use std::{
 };
 
 use futures_channel::oneshot;
+use oxap_adapter::validate_input_answer;
 use oxap_adapter::{
     journal::Journal, refuse_unadvertised_controls, runtime::Runtime, BoxFuture, Error,
     EventStream, InteractionResolution, Recovery, ResumeRequest, Session, SubmitRequest,
@@ -17,6 +18,10 @@ use oxap_protocol::{
     ProtocolError, RequestedDeliveryMode, RunCancelResponse, RunCancelledPayload,
     RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus, SessionId,
     SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
+};
+use oxap_protocol::{
+    InputAnswer, InputOption, InputQuestion, RunStatusUpdatedPayload, UserInputRequestedPayload,
+    UserInputResolvedPayload,
 };
 use serde::Deserialize;
 use serde_json::value::to_raw_value;
@@ -31,6 +36,9 @@ use crate::{
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
+fn deadline() -> Option<Instant> {
+    Some(Instant::now() + RPC_TIMEOUT)
+}
 type Admission = Result<(MessageSubmitResponse, EventStream), Error>;
 type CancelResult = Result<RunCancelResponse, Error>;
 
@@ -50,6 +58,7 @@ struct SessionData {
     interrupt: Option<Interrupt>,
     settled_runs: HashMap<RunId, RunStatus>,
     tool_calls: HashMap<String, (RunId, usize)>,
+    participant: oxap_protocol::ParticipantId,
     unusable: bool,
 }
 
@@ -88,11 +97,43 @@ struct ActiveTurn {
     message_id: MessageId,
     cancel_accepted: bool,
     tools: Vec<ObservedTool>,
+    gates: Vec<PermissionGate>,
 }
 
 struct ObservedTool {
     payload: ActionCallPayload,
     started: Option<EnvelopeId>,
+}
+
+struct PermissionGate {
+    control: Arc<IncomingControl>,
+    payload: UserInputRequestedPayload,
+    request_id: EnvelopeId,
+}
+
+impl PermissionGate {
+    fn resolved(self, answers: Vec<InputAnswer>, runtime: &Runtime) -> Envelope {
+        let request = self.payload;
+        let status = if answers.is_empty() {
+            "cancelled"
+        } else {
+            "submitted"
+        };
+        let payload = UserInputResolvedPayload {
+            interaction_id: request.interaction_id,
+            requested_by: request.requested_by,
+            responded_by: request.responded_by,
+            session_id: request.session_id,
+            run_id: request.run_id,
+            status: status.into(),
+            answers,
+        };
+        let id = runtime.new_id("event");
+        let mut event = Envelope::new(EnvelopeType::USER_INPUT_RESOLVED, id, &payload).unwrap();
+        event.turn_id = Some(payload.interaction_id);
+        event.in_reply_to = Some(self.request_id);
+        event
+    }
 }
 
 fn tool_event(
@@ -171,7 +212,7 @@ impl SessionData {
         }
     }
 
-    fn route_control(&mut self, control: Arc<IncomingControl>) {
+    fn route_control(&mut self, control: Arc<IncomingControl>, runtime: &Runtime) {
         let deadline = Some(Instant::now() + RPC_TIMEOUT);
         let rejection = match &control.value {
             ControlRequest::HookCallback(hook)
@@ -195,7 +236,7 @@ impl SessionData {
                         return;
                     }
                 } else {
-                    self.apply_permission(&control);
+                    self.apply_permission(control, runtime);
                     return;
                 }
             }
@@ -204,13 +245,161 @@ impl SessionData {
         let _ = control.respond_error(rejection, deadline);
     }
 
-    fn apply_permission(&self, control: &IncomingControl) {
-        let rejection = if self.active.is_some() && !self.interrupt_has_terminal() {
-            "claude adapter: permission gate unavailable"
-        } else {
-            "claude adapter: permission ask outside an owned run"
+    fn apply_permission(&mut self, control: Arc<IncomingControl>, runtime: &Runtime) {
+        let settled = self.interrupt_has_terminal();
+        let Some(turn) = self.active.as_mut().filter(|_| !settled) else {
+            let message = "claude adapter: permission ask outside an owned run";
+            let _ = control.respond_error(message, deadline());
+            return;
         };
-        let _ = control.respond_error(rejection, Some(Instant::now() + RPC_TIMEOUT));
+        let ControlRequest::CanUseTool(ask) = &control.value else {
+            unreachable!()
+        };
+        let tool_call_id = self
+            .tool_calls
+            .get(&ask.tool_use_id)
+            .filter(|(run, _)| *run == turn.run_id)
+            .map(|(_, index)| turn.tools[*index].payload.tool_call_id.clone());
+        let name = &ask.tool_name;
+        let display = |value: &str| (!value.is_empty()).then(|| value.to_owned());
+        let option = |id: &str, label: &str| InputOption {
+            id: id.into(),
+            label: label.into(),
+            ..Default::default()
+        };
+        let payload = UserInputRequestedPayload {
+            interaction_id: runtime.new_id("interaction").into(),
+            requested_by: ENDPOINT_ID.into(),
+            responded_by: display(self.participant.as_str())
+                .unwrap_or_else(|| "user".into())
+                .into(),
+            session_id: self.session.session_id.clone(),
+            run_id: turn.run_id.clone(),
+            tool_call_id,
+            title: display(&ask.title).unwrap_or_else(|| format!("Use {name}")),
+            description: display(&ask.description).unwrap_or_else(|| ask.decision_reason.clone()),
+            questions: vec![InputQuestion {
+                id: "decision".into(),
+                prompt: format!("{name} {}", ask.input.as_ref().unwrap().get()),
+                kind: "single_choice".into(),
+                required: true,
+                options: vec![option("allow", "Allow"), option("deny", "Deny")],
+            }],
+            allow_cancel: true,
+            ..Default::default()
+        };
+        let id = runtime.new_id("event");
+        let mut event = Envelope::new(EnvelopeType::USER_INPUT_REQUESTED, id, &payload).unwrap();
+        event.turn_id = Some(payload.interaction_id.clone());
+        event.tool_call_id = payload.tool_call_id.clone();
+        turn.gates.push(PermissionGate {
+            control,
+            payload,
+            request_id: event.id.clone(),
+        });
+        self.append_event(event, false, runtime);
+        self.permission_status(runtime);
+    }
+
+    fn resolve_gate(
+        &mut self,
+        resolution: InteractionResolution,
+        runtime: &Runtime,
+    ) -> Result<(), Error> {
+        let input = resolution.input.filter(|_| !self.interrupt_has_terminal());
+        let answer = input.ok_or(Error::InteractionNotFound)?;
+        let turn = self.active.as_mut().ok_or(Error::InteractionNotFound)?;
+        let index = turn
+            .gates
+            .iter()
+            .position(|gate| gate.payload.interaction_id == answer.interaction_id)
+            .ok_or(Error::InteractionNotFound)?;
+        let gate = &turn.gates[index];
+        let request = &gate.payload;
+        let responders = [resolution.responded_by, answer.responded_by];
+        let differs = |given: &str, expected: &str| !given.is_empty() && given != expected;
+        let responder = request.responded_by.as_str();
+        if !responders.contains(&request.responded_by)
+            || responders.iter().any(|id| differs(id.as_str(), responder))
+        {
+            return Err(Error::WrongResponder);
+        }
+        let run = request.run_id.as_str();
+        if differs(resolution.run_id.as_str(), run)
+            || differs(answer.run_id.as_str(), run)
+            || differs(answer.session_id.as_str(), request.session_id.as_str())
+            || differs(answer.requested_by.as_str(), ENDPOINT_ID)
+        {
+            return Err(Error::InvalidResolution);
+        }
+        let [decision] = answer.answers.as_slice() else {
+            return Err(Error::InvalidResolution);
+        };
+        validate_input_answer(&request.questions[0], decision)?;
+        let ControlRequest::CanUseTool(ask) = &gate.control.value else {
+            unreachable!()
+        };
+        let body = if decision.selected_option_ids[0] == "allow" {
+            native::permission_allow(ask.input.as_deref())
+        } else {
+            native::permission_deny("Denied by the operator", false)
+        }
+        .and_then(serde_json::value::RawValue::from_string)
+        .map_err(Error::harness)?;
+        gate.control
+            .respond(Some(&body), deadline())
+            .map_err(|error| match error {
+                ClientError::ReverseResolved => Error::InteractionNotFound,
+                _ => Error::harness(error),
+            })?;
+        self.finish_gate(index, answer.answers, runtime);
+        Ok(())
+    }
+
+    fn withdraw_gate(&mut self, request_id: &str, runtime: &Runtime) {
+        if let Some(turn) = &mut self.pending {
+            turn.buffered.retain(|frame| {
+                !matches!(frame, TurnFrame::Permission(control) if control.id == request_id)
+            });
+        }
+        if let Some(turn) = &self.active {
+            if let Some(index) = turn
+                .gates
+                .iter()
+                .position(|gate| gate.control.id == request_id)
+            {
+                self.finish_gate(index, Vec::new(), runtime);
+            }
+        }
+    }
+
+    fn finish_gate(&mut self, index: usize, answers: Vec<InputAnswer>, runtime: &Runtime) {
+        let gate = self.active.as_mut().unwrap().gates.remove(index);
+        let event = gate.resolved(answers, runtime);
+        self.append_event(event, false, runtime);
+        self.permission_status(runtime);
+    }
+
+    fn permission_status(&mut self, runtime: &Runtime) {
+        let gates = &self.active.as_ref().unwrap().gates;
+        let pending = gates.last().map(|gate| gate.payload.interaction_id.clone());
+        let run = &mut self.session.active_runs[0];
+        run.status = if pending.is_some() {
+            RunStatus::WAITING_FOR_INPUT
+        } else {
+            RunStatus::RUNNING
+        };
+        self.session.status = run.status.as_str().into();
+        let payload = RunStatusUpdatedPayload {
+            session_id: self.session.session_id.clone(),
+            run_id: run.run_id.clone(),
+            status: run.status.clone(),
+            pending_user_input_id: pending,
+            updated_at_ms: runtime.now_ms(),
+        };
+        let id = runtime.new_id("event");
+        let event = Envelope::new(EnvelopeType::RUN_STATUS_UPDATED, id, &payload).unwrap();
+        self.append_event(event, false, runtime);
     }
 
     fn observe(&mut self, observation: ObservationMessage, runtime: &Runtime) {
@@ -460,6 +649,12 @@ impl SessionData {
                     self.append_event(cancelled, false, runtime);
                 }
             }
+            for gate in std::mem::take(&mut self.active.as_mut().unwrap().gates) {
+                let _ = gate
+                    .control
+                    .respond_error("claude adapter: run settled", deadline());
+                self.append_event(gate.resolved(Vec::new(), runtime), false, runtime);
+            }
             self.append_event(event, true, runtime);
             self.settled_runs.insert(run_id, status);
             self.active = None;
@@ -549,13 +744,14 @@ impl SessionData {
             message_id: message_id.clone(),
             cancel_accepted: false,
             tools: Vec::new(),
+            gates: Vec::new(),
         });
         for entry in turn.buffered {
             match entry {
                 TurnFrame::Observation(frame, corroborates) => {
                     self.apply(frame, corroborates, runtime)
                 }
-                TurnFrame::Permission(control) => self.apply_permission(&control),
+                TurnFrame::Permission(control) => self.apply_permission(control, runtime),
             }
         }
         Ok((
@@ -722,6 +918,7 @@ impl OpenedSession {
     pub(crate) fn new(
         process: Process,
         state: SessionState,
+        participant: oxap_protocol::ParticipantId,
         expand_prompts: bool,
         journal_capacity: usize,
         runtime: Runtime,
@@ -735,6 +932,7 @@ impl OpenedSession {
             interrupt: None,
             settled_runs: HashMap::new(),
             tool_calls: HashMap::new(),
+            participant,
             unusable: false,
         }));
         let session = Self {
@@ -755,7 +953,13 @@ impl OpenedSession {
                             state.lock().unwrap().observe(observation, &runtime);
                         }
                         Inbound::Control(control) => {
-                            state.lock().unwrap().route_control(control);
+                            state.lock().unwrap().route_control(control, &runtime);
+                        }
+                        Inbound::Cancel(notice) => {
+                            state
+                                .lock()
+                                .unwrap()
+                                .withdraw_gate(&notice.request_id, &runtime);
                         }
                         _ => {}
                     }
@@ -983,8 +1187,11 @@ impl Session for OpenedSession {
         Box::pin(self.submit_turn(submit.request))
     }
 
-    fn resolve(&self, _: InteractionResolution) -> BoxFuture<'_, ()> {
-        Box::pin(async { Err(Error::InteractionNotFound) })
+    fn resolve(&self, resolution: InteractionResolution) -> BoxFuture<'_, ()> {
+        Box::pin(async {
+            let mut state = self.state.lock().unwrap();
+            state.resolve_gate(resolution, &self.runtime)
+        })
     }
 
     fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {

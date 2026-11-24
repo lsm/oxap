@@ -324,6 +324,7 @@ impl AdapterContract for Adapter {
             let session = OpenedSession::new(
                 process,
                 state,
+                request.participant.id,
                 self.config.expand_prompts,
                 self.config.journal_capacity,
                 self.runtime.clone(),

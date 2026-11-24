@@ -25,6 +25,16 @@ Rust adapter reports `unavailable` and refuses `tool_choice` at submit until
 it can enforce choices through those controls. Served parity for this feature
 requires the Rust enforcement path.
 
+Rust requires an explicit responder matching the opening participant on a
+permission decision and rejects conflicting responder fields. Go permits
+an omitted responder at the adapter boundary.
+
+When one of several open permission asks closes, Go emits `running` without a
+pending input ID. Rust keeps the run in `waiting_for_input` and names the most
+recent remaining ask in `pending_user_input_id`. It emits `running` after the
+last ask closes. This keeps the outstanding decision visible to status
+consumers. The Rust process replay exercises overlapping asks and withdrawals.
+
 Go accepts a matching `user_message_uuid` or `user_message_uuids` marker as
 admission evidence on child and injected observations. Rust requires evidence
 from the main turn because a matching marker alone does not distinguish

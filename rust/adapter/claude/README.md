@@ -129,8 +129,11 @@ retired session.
 Per-run tool selection is unavailable until permission handling can enforce it.
 A registered PreToolUse hook receives the native continuation response.
 After a pending turn is corroborated, permission asks and observations are
-replayed in arrival order. Permission asks still receive an error while
-interactive resolution is unavailable.
+replayed in arrival order. An owned ask publishes an allow or deny choice
+for the opening participant. The decision names that participant, and the
+adapter confirms the native reply before publishing resolution. Native
+withdrawal cancels the gate and the run continues. An open ask is cancelled
+before the run terminal.
 
 Each session keeps a bounded in-memory journal of its sequenced run events.
 Resume replays the retained suffix after a run's cursor and follows a live run
