@@ -504,7 +504,9 @@ jobs:
         run: python3 .claude/skills/verify/scripts/codex-context-usage.py /tmp/oapx-hub/bin/oxap
 
       - name: Verify Codex inline image prompts
-        run: python3 .claude/skills/verify/scripts/codex-inline-images.py /tmp/oapx-hub/bin/oxap
+        run: |
+          python3 .claude/skills/verify/scripts/codex-inline-images.py /tmp/oapx-hub/bin/oxap
+          python3 .claude/skills/verify/scripts/codex-inline-images.py /tmp/oapx-hub/bin/goap --hub go
 
       - name: Verify DeepSeek inline image prompts
         run: |
