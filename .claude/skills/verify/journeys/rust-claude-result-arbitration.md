@@ -22,5 +22,5 @@ The native-wins cases exercise object and null structured output. The abort
 case combines an abort with max-turn evidence and expects an observed failure
 because the session has no accepted cancel exchange. Admission regressions
 check that a disconnect before the caller resumes still refuses a submission
-that has no conclusive result. Journal recovery and accepted cancellation are
-covered by later slices.
+that has no conclusive result. The [journal journey](rust-claude-journal.md)
+checks replay after disconnect. Accepted cancellation is a later slice.

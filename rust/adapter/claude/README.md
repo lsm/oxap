@@ -115,3 +115,11 @@ without an accepted cancel exchange settles as an observed failure. Interrupt
 handling and queued continuations follow in later slices. Hosts can set a
 deadline by dropping the submit future and closing the retired session.
 Per-run tool selection is unavailable until permission handling can enforce it.
+
+Each session keeps a bounded in-memory journal of its sequenced run events.
+Resume replays the retained suffix after a run's cursor and follows a live run
+through its terminal. An evicted suffix reports a replay gap, a cursor beyond
+the run head reports a future cursor, and an unknown run ID is refused. A
+settled run remains readable after the native process exits, until the caller
+closes the session. Recovery sends no native command and does not reopen the
+conversation.

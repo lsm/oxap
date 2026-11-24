@@ -325,6 +325,7 @@ impl AdapterContract for Adapter {
                 process,
                 state,
                 self.config.expand_prompts,
+                self.config.journal_capacity,
                 self.runtime.clone(),
             )?;
             session.exchange("initialize exchange", initialize)?;
