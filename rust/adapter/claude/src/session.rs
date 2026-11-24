@@ -5,7 +5,7 @@ use std::{
 
 use futures_channel::oneshot;
 use oxap_adapter::{
-    refuse_unadvertised_controls, runtime::Runtime, subscriber::Subscriber, BoxFuture, Error,
+    journal::Journal, refuse_unadvertised_controls, runtime::Runtime, BoxFuture, Error,
     EventStream, InteractionResolution, Recovery, ResumeRequest, Session, SubmitRequest,
     ToolCatalog, ToolLister,
 };
@@ -40,8 +40,10 @@ pub(crate) struct OpenedSession {
 struct SessionData {
     session: SessionState,
     catalog: Catalog,
+    journal: Journal,
     pending: Option<PendingTurn>,
     active: Option<ActiveTurn>,
+    unusable: bool,
 }
 
 struct PendingTurn {
@@ -68,7 +70,6 @@ struct ActiveTurn {
     uuid: String,
     run_id: RunId,
     message_id: MessageId,
-    events: Subscriber,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +112,10 @@ impl Echo {
 }
 
 impl SessionData {
+    fn unavailable(&self) -> bool {
+        self.unusable || self.session.status == SessionStatus::CLOSED
+    }
+
     fn observe(&mut self, observation: ObservationMessage, runtime: &Runtime) {
         if let Some(turn) = &mut self.pending {
             let Some(corroborates) = Echo::corroborates(&observation, &turn.uuid) else {
@@ -122,7 +127,7 @@ impl SessionData {
             if turn.buffered.len() == DEFAULT_QUEUE_CAPACITY {
                 if !turn.has_terminal() {
                     self.pending.take();
-                    self.session.status = SessionStatus::CLOSED;
+                    self.unusable = true;
                 }
                 return;
             }
@@ -196,7 +201,7 @@ impl SessionData {
         event.capability_revision = Some(pin().capability_revision.clone());
         let terminal = event.envelope_type == EnvelopeType::RUN_COMPLETED
             || event.envelope_type == EnvelopeType::RUN_FAILED;
-        turn.events.offer(event, terminal);
+        self.journal.append(event, terminal);
         if terminal {
             self.active = None;
             self.session.status = SessionStatus::IDLE;
@@ -233,12 +238,11 @@ impl SessionData {
         if !self.pending.as_ref().is_some_and(PendingTurn::has_terminal) {
             self.pending = None;
         }
-        self.session.status = SessionStatus::CLOSED;
+        self.unusable = true;
     }
 
     fn start(&mut self, runtime: &Runtime) -> Admission {
         let turn = self.pending.take().ok_or(Error::SessionClosed)?;
-        let disconnected = self.session.status == SessionStatus::CLOSED;
         let session_id = self.session.session_id.clone();
         let message_id: MessageId = runtime.new_id("message").into();
         let run_id: RunId = runtime.new_id("run").into();
@@ -261,8 +265,8 @@ impl SessionData {
         start.sequence = Some(1);
         start.timestamp_ms = Some(now);
         start.capability_revision = Some(pin().capability_revision.clone());
-        let events = Subscriber::new(DEFAULT_QUEUE_CAPACITY);
-        events.offer(start, false);
+        let stream = self.journal.follow(run_id.as_str(), 0);
+        self.journal.append(start, false);
         self.session.status = SessionStatus::RUNNING;
         self.session.transcript_cursor = "1".into();
         self.session.updated_at_ms = now;
@@ -278,13 +282,9 @@ impl SessionData {
             uuid: turn.uuid,
             run_id: run_id.clone(),
             message_id: message_id.clone(),
-            events: events.clone(),
         });
         for (observation, corroborates) in turn.buffered {
             self.apply(observation, corroborates, runtime);
-        }
-        if disconnected {
-            self.session.status = SessionStatus::CLOSED;
         }
         Ok((
             MessageSubmitResponse {
@@ -301,7 +301,7 @@ impl SessionData {
                 message_ids: vec![message_id],
                 ..Default::default()
             },
-            events.stream(),
+            stream,
         ))
     }
 
@@ -309,7 +309,7 @@ impl SessionData {
         if self.pending.as_ref().is_some_and(|turn| turn.uuid == uuid) {
             self.pending.take();
             if retire {
-                self.session.status = SessionStatus::CLOSED;
+                self.unusable = true;
             }
         }
     }
@@ -438,13 +438,16 @@ impl OpenedSession {
         process: Process,
         state: SessionState,
         expand_prompts: bool,
+        journal_capacity: usize,
         runtime: Runtime,
     ) -> Result<Self, Error> {
         let state = Arc::new(Mutex::new(SessionData {
             session: state,
             catalog: Catalog::default(),
+            journal: Journal::new(journal_capacity),
             pending: None,
             active: None,
+            unusable: false,
         }));
         let session = Self {
             process,
@@ -505,7 +508,7 @@ impl OpenedSession {
         let (signal, corroborated) = oneshot::channel();
         {
             let mut state = self.state.lock().unwrap();
-            if state.session.status == SessionStatus::CLOSED {
+            if state.unavailable() {
                 return Err(Error::SessionClosed);
             }
             if state.session.session_id != request.session_id {
@@ -593,7 +596,7 @@ impl Session for OpenedSession {
     fn state(&self) -> BoxFuture<'_, SessionState> {
         Box::pin(async {
             let state = self.state.lock().unwrap();
-            if state.session.status == SessionStatus::CLOSED {
+            if state.unavailable() {
                 return Err(Error::SessionClosed);
             }
             Ok(state.session.clone())
@@ -614,6 +617,7 @@ impl Session for OpenedSession {
                     return Err(Error::RunActive);
                 }
                 state.session.status = SessionStatus::CLOSED;
+                state.journal.close();
             }
             self.process.close(None).map_err(Error::harness)
         })
@@ -631,8 +635,26 @@ impl Session for OpenedSession {
         Box::pin(async { Err(Error::RunNotFound) })
     }
 
-    fn resume(&self, _: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
-        Box::pin(async { Err(Error::RunNotFound) })
+    fn resume(&self, request: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {
+        Box::pin(async move {
+            let state = self.state.lock().unwrap();
+            if state.session.status == SessionStatus::CLOSED {
+                return Err(Error::SessionClosed);
+            }
+            let run = request.run_id.as_str();
+            let latest = state.journal.latest(run).ok_or(Error::RunNotFound)?;
+            if request.after_sequence > latest {
+                return Err(Error::ReplayCursorFuture);
+            }
+            let (recovery, stream) =
+                state
+                    .journal
+                    .resume(state.session.clone(), run, request.after_sequence, latest);
+            if let Some(gap) = recovery.replay_gap {
+                return Err(Error::ReplayGap(gap));
+            }
+            Ok((recovery, stream))
+        })
     }
 
     fn tool_lister(&self) -> Option<&dyn ToolLister> {
@@ -644,7 +666,7 @@ impl ToolLister for OpenedSession {
     fn tools(&self, request: ToolsListRequest) -> BoxFuture<'_, ToolCatalog> {
         Box::pin(async move {
             let mut state = self.state.lock().unwrap();
-            if state.session.status == SessionStatus::CLOSED {
+            if state.unavailable() {
                 return Err(Error::SessionClosed);
             }
             let id = request.session_id.as_ref();

@@ -10,7 +10,7 @@ use std::{
 };
 
 use futures::{executor::block_on, FutureExt, StreamExt};
-use oxap_adapter::{Adapter as _, Error, OpenRequest, SubmitRequest};
+use oxap_adapter::{Adapter as _, Error, OpenRequest, ReplayGap, ResumeRequest, SubmitRequest};
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
     ContentPart, ContentPartType, Envelope, Message, MessageContent, MessageRole,
@@ -385,6 +385,109 @@ fn claude_run_replays_streaming_and_settlement() {
             expected.len()
         );
     }
+}
+
+#[test]
+fn claude_journal_recovers_live_and_completed_runs() {
+    let (config, directory, _) = fixture_config("run-streaming");
+    let adapter = Adapter::new(Config {
+        journal_capacity: 2,
+        ..config
+    })
+    .unwrap();
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let (admission, original) = block_on(session.submit(text_submit("hello"))).unwrap();
+    let run_id = admission.run_id.unwrap();
+    let resume = |after_sequence| {
+        block_on(session.resume(ResumeRequest {
+            run_id: run_id.clone(),
+            after_sequence,
+        }))
+    };
+    let (live, replay) = resume(0).expect("resume the live run from the beginning");
+    assert_eq!((live.replayed_from, live.replayed_through), (1, 1));
+    assert_eq!(live.state.active_run_id.as_ref(), Some(&run_id));
+    let (head, mut follow) = resume(1).unwrap();
+    assert_eq!((head.replayed_from, head.replayed_through), (1, 1));
+    assert!(follow.next().now_or_never().is_none());
+    assert!(matches!(resume(2), Err(Error::ReplayCursorFuture)));
+    assert!(matches!(
+        block_on(session.resume(ResumeRequest {
+            run_id: session.native_session_id().unwrap().into(),
+            after_sequence: 0,
+        })),
+        Err(Error::RunNotFound)
+    ));
+
+    fs::write(directory.path().join("continue-0"), []).unwrap();
+    let original = stream_bytes(original);
+    assert_eq!(original.len(), 5);
+    assert_eq!(stream_bytes(replay), original);
+    assert_eq!(stream_bytes(follow), original[1..]);
+    println!(
+        "PASS live recovery: {} original envelopes matched byte for byte",
+        original.len()
+    );
+
+    assert!(matches!(
+        resume(2),
+        Err(Error::ReplayGap(ReplayGap {
+            requested_after: 2,
+            oldest_available: 4,
+            latest_available: 5,
+        }))
+    ));
+    let (done, suffix) = resume(3).unwrap();
+    assert_eq!(done.state.status.as_str(), "idle");
+    assert_eq!((done.replayed_from, done.replayed_through), (4, 5));
+    assert_eq!(stream_bytes(suffix), original[3..]);
+    let (done, eof) = resume(5).unwrap();
+    assert_eq!((done.replayed_from, done.replayed_through), (5, 5));
+    assert!(stream_bytes(eof).is_empty());
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    assert!(matches!(resume(5), Err(Error::SessionClosed)));
+    println!("PASS completed recovery: cursor gap 2/4/5, 2 retained envelopes, empty replay at end and explicit close");
+}
+
+#[test]
+fn claude_journal_recovers_the_inferred_terminal_after_disconnect() {
+    let (adapter, directory, _) = fixture("run-process-exit");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let (admission, original) = block_on(session.submit(text_submit("hello"))).unwrap();
+    fs::write(directory.path().join("continue-0"), []).unwrap();
+    let original = stream_bytes(original);
+    wait_until_closed(session.as_ref());
+    let (recovery, replay) = block_on(session.resume(ResumeRequest {
+        run_id: admission.run_id.unwrap(),
+        after_sequence: 1,
+    }))
+    .expect("resume the settled run after native EOF");
+    assert_eq!((recovery.replayed_from, recovery.replayed_through), (2, 3));
+    assert_eq!(recovery.state.status.as_str(), "idle");
+    assert_eq!(original.len(), 3);
+    assert_eq!(stream_bytes(replay), original[1..]);
+    block_on(session.close()).unwrap();
+    println!(
+        "PASS disconnect recovery: {} retained envelopes including inferred failure",
+        original.len() - 1
+    );
+}
+
+fn stream_bytes(stream: oxap_adapter::EventStream) -> Vec<Vec<u8>> {
+    block_on(
+        stream
+            .map(|event| serde_json::to_vec(&event.unwrap()).unwrap())
+            .collect(),
+    )
 }
 
 fn expected_run_events(case: &str) -> Vec<Value> {
