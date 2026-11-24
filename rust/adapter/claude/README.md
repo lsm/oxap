@@ -110,10 +110,17 @@ structured output, and returns a connected session to idle. A native terminal
 takes precedence over a subsequent disconnect. Without one, the adapter
 drains valid observations before publishing an inferred failure for an
 admitted run. Transport loss before the run is installed refuses the pending
-submit unless the drain already captured a matching terminal. An abort
-without an accepted cancel exchange settles as an observed failure. Interrupt
-handling and queued continuations follow in later slices. Hosts can set a
-deadline by dropping the submit future and closing the retired session.
+submit unless the drain already captured a matching terminal.
+Cancellation sends a native interrupt for the owned run and shares its
+receipt with repeated callers. An accepted receipt acknowledges intent.
+Only a matching aborted result confirms cancellation. An abort without an
+accepted receipt settles as an observed failure. Completion and other
+failures can still settle the run. The session retains ownership through
+settlement and waits for an in-flight interrupt before starting another run.
+A retry for a cancelled run reports its terminal status without another
+interrupt. Completion and failure return the corresponding terminal error.
+Hosts can set a deadline by dropping the submit future and closing the
+retired session.
 Per-run tool selection is unavailable until permission handling can enforce it.
 
 Each session keeps a bounded in-memory journal of its sequenced run events.

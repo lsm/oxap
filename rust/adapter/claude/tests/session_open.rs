@@ -39,6 +39,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-settlement" => "settlement-statuses/native.jsonl",
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
+        mode if mode.starts_with("run-interrupt-") => "interrupt-cancel/native.jsonl",
         "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
             "hygiene-recovery/native.jsonl"
         }
@@ -490,6 +491,153 @@ fn stream_bytes(stream: oxap_adapter::EventStream) -> Vec<Vec<u8>> {
     )
 }
 
+#[test]
+fn claude_interrupt_replays_the_corpus_and_keeps_ownership() {
+    check_interrupt("run-interrupt-held", "run.cancelled");
+    check_interrupt("run-interrupt-immediate", "run.cancelled");
+}
+
+#[test]
+fn claude_interrupt_arbitrates_terminal_and_receipt_order() {
+    check_interrupt("run-interrupt-terminal-first", "run.cancelled");
+    check_interrupt("run-interrupt-completion", "run.completed");
+}
+
+#[test]
+fn claude_interrupt_requires_a_valid_receipt_for_cancellation() {
+    check_interrupt("run-interrupt-refused", "run.failed");
+    check_interrupt("run-interrupt-malformed", "run.failed");
+    check_interrupt("run-interrupt-no-receipt", "run.failed");
+}
+
+fn check_interrupt(mode: &str, terminal: &str) {
+    let (adapter, directory, _) = fixture(mode);
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let (admission, mut stream) = block_on(session.submit(text_submit("hello"))).unwrap();
+    let run = admission.run_id.as_ref().unwrap();
+    let mut events = vec![
+        block_on(stream.next()).unwrap().unwrap(),
+        block_on(stream.next()).unwrap().unwrap(),
+    ];
+    assert!(matches!(
+        block_on(session.cancel("unknown".into())),
+        Err(Error::RunNotFound)
+    ));
+    let mut cancel = session.cancel(run.clone());
+    let mut context = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(
+        cancel.as_mut().poll(&mut context).is_pending(),
+        "{mode}: interrupt did not wait for receipt"
+    );
+    wait_for_peer(directory.path(), "interrupt-observed");
+    let mut duplicate = session.cancel(run.clone());
+    assert!(duplicate.as_mut().poll(&mut context).is_pending());
+    fs::write(directory.path().join("continue-0"), []).unwrap();
+    if mode == "run-interrupt-completion" {
+        events.push(block_on(stream.next()).unwrap().unwrap());
+        assert_eq!(events[2].envelope_type.as_str(), terminal);
+        assert!(matches!(
+            block_on(session.submit(text_submit("too early"))),
+            Err(Error::RunActive)
+        ));
+        fs::write(directory.path().join("continue-1"), []).unwrap();
+    }
+    if mode == "run-interrupt-terminal-first" {
+        wait_for_peer(directory.path(), "terminal-sent");
+        fs::write(directory.path().join("continue-1"), []).unwrap();
+    }
+    let ack = block_on(cancel);
+    assert_eq!(block_on(duplicate), ack);
+    if mode == "run-interrupt-held" {
+        assert_eq!(block_on(session.cancel(run.clone())), ack);
+        assert!(matches!(
+            block_on(session.submit(text_submit("too early"))),
+            Err(Error::RunActive)
+        ));
+        assert!(matches!(block_on(session.close()), Err(Error::RunActive)));
+        assert_eq!(
+            block_on(session.state()).unwrap().active_run_id.as_ref(),
+            Some(run)
+        );
+        assert!(stream.next().now_or_never().is_none());
+        fs::write(directory.path().join("continue-1"), []).unwrap();
+    }
+    if terminal == "run.failed" {
+        assert!(matches!(ack, Err(Error::Harness(_))), "{mode}: {ack:?}");
+    } else {
+        let ack = ack.unwrap();
+        assert!(ack.accepted);
+        assert_eq!(ack.status.as_str(), "cancelling");
+        assert_eq!(&ack.run_id, run);
+        assert_eq!(ack.session_id, admission.session_id);
+    }
+    events.extend(
+        block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .map(Result::unwrap),
+    );
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[2].envelope_type.as_str(), terminal);
+    assert_eq!(events[2].sequence, Some(3));
+    if terminal == "run.cancelled" {
+        assert_run_events(
+            &admission,
+            &events,
+            &expected_run_events("interrupt-cancel"),
+            mode,
+        );
+    }
+    if terminal == "run.failed" {
+        let event = serde_json::to_value(&events[2]).unwrap();
+        assert_eq!(
+            event["payload"]["error"]["code"],
+            "claude_aborted_streaming"
+        );
+    }
+    let retry = block_on(session.cancel(run.clone()));
+    let status = terminal.strip_prefix("run.").unwrap();
+    if status == "cancelled" {
+        let retry = retry.unwrap();
+        assert!(retry.accepted);
+        assert_eq!(retry.status.as_str(), status);
+        assert_eq!(&retry.run_id, run);
+    } else {
+        assert!(
+            matches!(
+                retry,
+                Err(Error::RunAlreadyTerminal {
+                    run_id: Some(ref id),
+                    status: Some(ref actual),
+                }) if id == run && actual.as_str() == status
+            ),
+            "{mode}: {retry:?}"
+        );
+    }
+    let (recovery, replay) = block_on(session.resume(ResumeRequest {
+        run_id: run.clone(),
+        after_sequence: 2,
+    }))
+    .unwrap();
+    assert!(recovery.state.active_run_id.is_none());
+    assert_eq!(
+        stream_bytes(replay),
+        [serde_json::to_vec(&events[2]).unwrap()]
+    );
+    block_on(session.close()).unwrap();
+    assert!(matches!(
+        block_on(session.cancel(run.clone())),
+        Err(Error::SessionClosed)
+    ));
+    if mode != "run-interrupt-no-receipt" {
+        assert!(directory.path().join("eof").is_file());
+    }
+    println!("PASS {mode}: 3 envelopes, one {terminal}, one native interrupt");
+}
+
 fn expected_run_events(case: &str) -> Vec<Value> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
@@ -609,10 +757,14 @@ fn wait_until_closed(session: &dyn oxap_adapter::Session) {
 }
 
 fn wait_for_turn(directory: &Path) {
-    let observed = directory.join("turn-observed");
+    wait_for_peer(directory, "turn-observed");
+}
+
+fn wait_for_peer(directory: &Path, marker: &str) {
+    let observed = directory.join(marker);
     let deadline = Instant::now() + Duration::from_secs(5);
     while !observed.is_file() {
-        assert!(Instant::now() < deadline, "no turn reached native stdin");
+        assert!(Instant::now() < deadline, "peer did not write {marker}");
         thread::sleep(Duration::from_millis(10));
     }
 }
