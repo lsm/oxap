@@ -188,6 +188,7 @@ fn requests_marshal_with_go_s_member_names_and_omit_what_go_omits() {
         input: vec![UserInput {
             kind: "text".into(),
             text: "hi".into(),
+            ..UserInput::default()
         }],
         effort: "high".into(),
         output_schema: Some(RawValue::from_string(r#"{"type":"object"}"#.into()).unwrap()),

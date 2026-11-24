@@ -19,13 +19,12 @@ use oxap_protocol::{
 use oxap_validation::OutputSchema;
 use serde_json::value::RawValue;
 
-use crate::adapter::{call, native_protocol};
+use crate::adapter::{call, decode_reply, native_protocol};
 use crate::caller::Caller;
 use crate::client::Client;
-use crate::native::{
-    TokenUsageBreakdown, TurnStartParams, TurnStartResponse, UserInput, METHOD_TURN_START,
-};
-use crate::rpc::{Inbound, IncomingRequest};
+use crate::images::{append_content, unsupported_image, ImageModels, MAX_IMAGE_TURN_FRAME};
+use crate::native::{TokenUsageBreakdown, TurnStartParams, TurnStartResponse, METHOD_TURN_START};
+use crate::rpc::{Inbound, IncomingRequest, Message, DIALECT};
 
 pub(crate) struct Run {
     pub(crate) model: String,
@@ -78,11 +77,18 @@ pub(crate) struct Inner {
     pub(crate) effort: String,
 }
 
+pub(crate) struct TurnRoute {
+    pub(crate) model: String,
+    pub(crate) images: Arc<ImageModels>,
+    pub(crate) revision: String,
+    pub(crate) frame_limit: usize,
+}
+
 pub(crate) struct Shared {
     pub(crate) client: Arc<dyn Client>,
     pub(crate) thread_id: String,
     pub(crate) participant: ParticipantId,
-    model: String,
+    pub(crate) route: TurnRoute,
     pub(crate) runtime: Runtime,
     pub(crate) journal: Journal,
     pub(crate) operating: Mutex<Operating>,
@@ -129,7 +135,7 @@ impl Shared {
         client: Arc<dyn Client>,
         thread_id: String,
         participant: ParticipantId,
-        model: String,
+        route: TurnRoute,
         runtime: Runtime,
         capacity: usize,
         state: SessionState,
@@ -139,7 +145,7 @@ impl Shared {
             client,
             thread_id,
             participant,
-            model,
+            route,
             runtime,
             journal: Journal::new(capacity),
             operating: Mutex::default(),
@@ -191,10 +197,10 @@ impl Shared {
             &request,
             &[FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT],
         )?;
-        let model = match &request.model_id {
+        let mut model = match &request.model_id {
             Some(model) if model.is_empty() => return Err(Error::ModelNotFound(String::new())),
             Some(model) => model.clone(),
-            None => self.model.clone(),
+            None => self.route.model.clone(),
         };
         let schema = match &request.output_schema {
             Some(schema) => Some(OutputSchema::compile(schema.get()).map_err(|detail| {
@@ -218,23 +224,23 @@ impl Shared {
             return Err(Error::InvalidSubmission);
         }
         let mut input = Vec::with_capacity(request.messages.len());
-        let mut message_ids = Vec::with_capacity(request.messages.len());
+        let mut encoded = 0;
         for message in &request.messages {
-            let text = message
-                .content
-                .raw()
-                .and_then(|raw| serde_json::from_str::<Option<String>>(raw.get()).ok());
-            let (true, Some(text)) = (message.role == MessageRole::USER, text) else {
+            if message.role != MessageRole::USER {
                 return Err(Error::UnsupportedInput);
-            };
-            input.push(UserInput {
-                kind: "text".into(),
-                text: text.unwrap_or_default(),
-            });
-            message_ids.push(match &message.id {
-                Some(id) if !id.as_str().is_empty() => id.clone(),
-                _ => MessageId::from(self.runtime.new_id("message")),
-            });
+            }
+            append_content(&mut input, &message.content, &mut encoded)?;
+        }
+        if encoded > 0 {
+            if model.is_empty() {
+                model = self.lock().state.current_model_id.clone();
+                if model.is_empty() {
+                    model.clone_from(&self.route.images.default_model);
+                }
+            }
+            if !self.route.images.supports(&model) {
+                return Err(unsupported_image());
+            }
         }
         {
             let inner = self.lock();
@@ -252,6 +258,29 @@ impl Shared {
             effort: self.lock().effort.clone(),
             output_schema: request.output_schema.clone(),
         };
+        let prepared = if encoded > 0 {
+            let params = serde_json::value::to_raw_value(&params).map_err(Error::harness)?;
+            let id = self.client.reserve_request_id();
+            let frame = Message::request(id.clone(), METHOD_TURN_START, Some(params.clone()))
+                .encode(&DIALECT)
+                .map_err(Error::harness)?;
+            if frame.len() > self.route.frame_limit.min(MAX_IMAGE_TURN_FRAME) {
+                return Err(Error::InvalidSubmissionDetail(
+                    "the Codex turn exceeds the native frame limit",
+                ));
+            }
+            Some((id, params))
+        } else {
+            None
+        };
+        let message_ids = request
+            .messages
+            .iter()
+            .map(|message| match &message.id {
+                Some(id) if !id.as_str().is_empty() => id.clone(),
+                _ => MessageId::from(self.runtime.new_id("message")),
+            })
+            .collect();
         let base = self.lock().thread_usage;
         let run_id = RunId::from(self.runtime.new_id("run"));
         let message_id = MessageId::from(self.runtime.new_id("message"));
@@ -265,8 +294,12 @@ impl Shared {
         operating.starting = true;
         drop(operating);
         let starting = Starting(self);
-        let started = caller.call(&self.client, || {
-            call::<TurnStartResponse>(&*self.client, METHOD_TURN_START, &params)
+        let started = caller.call(&self.client, || match prepared {
+            Some((id, raw)) => {
+                let result = self.client.call_reserved(id, METHOD_TURN_START, raw)?;
+                decode_reply::<TurnStartResponse>(METHOD_TURN_START, &result)
+            }
+            None => call::<TurnStartResponse>(&*self.client, METHOD_TURN_START, &params),
         });
         let mut operating = hold(&self.operating);
         let outcome = (|| -> Result<(MessageSubmitResponse, EventStream), Error> {

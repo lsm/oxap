@@ -9,6 +9,7 @@ pub mod client;
 mod contract;
 mod events;
 pub mod filepath;
+mod images;
 mod inputs;
 pub mod native;
 pub mod permissions;
