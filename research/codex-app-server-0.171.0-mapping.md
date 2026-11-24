@@ -60,3 +60,13 @@ advertised modality, and check the thread or per-turn model before admission.
 They also need to preserve ordered message parts on `turn/start`, accept the
 same inline MIME and standard base64, enforce the same three limits, and run
 the synthetic hub journey on their binaries.
+
+## Live context usage in Zig
+
+`thread/tokenUsage/updated` reports the latest call's
+`tokenUsage.last.totalTokens` and optional `modelContextWindow`. The Zig
+adapter projects these into session state, including the usage replay on
+`thread/resume`. The start of a `contextCompaction` item invalidates the sample.
+Codex recomputes usage before completing the item, so completion keeps fresh
+usage. The notification has no effective compaction threshold. Codex can clamp the configured limit and can count a different
+portion of context against it, so this adapter leaves the marker absent.

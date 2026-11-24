@@ -420,8 +420,9 @@ independent endpoints host distinct sessions and do not share counters. The
 oapx adapter reports background command starts and ends and includes tasks in
 session state. A job completion wakes its session, and close publishes endings
 with `session_closed` before ending its subscriptions. Task output follows
-separately. The Zig hub does not yet publish `session.state.updated`; when it does, those events
-share this counter.
+separately. The Zig hub forwards the Codex adapter's
+`session.state.updated` on the same session counter when its context usage
+sample changes. The latest sample is also in the session state response.
 
 The stdio overflow regression drives one producer run, then drains its queued
 lines. It checks that the overflow names that run and that its cursor is not
@@ -1963,9 +1964,8 @@ are specified in [triggered runs](triggered-runs.md).
   adapter, which judges the update against its own descriptor. The hub adds
   nothing: it refuses an update for a session it does not hold or whose payload
   names another session, and an update to an adapter with no settings update at
-  all is `unsupported_feature` naming the first setting it carries. The
-  `session.state.updated` an endpoint publishes after the response has nowhere
-  to go, because the hub's streams are a run's; a host reads `state`.
+  all is `unsupported_feature` naming the first setting it carries. A host
+  can also read the resulting settings through `state`.
 - **errors:** `unknown_session` (404), `invalid_request`, `malformed_json`,
   `schema_invalid` (400, which is also the answer to an update naming no
   setting, since the schema requires one), `type_mismatch`, `invalid_payload`,

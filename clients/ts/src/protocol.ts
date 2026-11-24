@@ -609,6 +609,12 @@ export type SessionSettings =
   | { reasoning_level: ReasoningLevel; compaction_policy?: CompactionPolicy }
   | { reasoning_level?: ReasoningLevel; compaction_policy: CompactionPolicy };
 
+export interface ContextUsage {
+  used_tokens: number;
+  window_tokens?: number;
+  compaction_threshold_tokens?: number;
+}
+
 export interface SessionState {
   session_id: string;
   status: SessionStatus;
@@ -623,6 +629,7 @@ export interface SessionState {
   sources?: ToolSourceDescriptor[];
   recovery?: RecoveryMetadata;
   as_of?: SessionCapture;
+  context_usage?: ContextUsage;
   reasoning_level?: ReasoningLevel;
   compaction_policy?: CompactionPolicy;
 }

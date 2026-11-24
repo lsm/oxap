@@ -3,6 +3,7 @@ const jsonschema = @import("jsonschema");
 const harness_pins = @import("harness_pins");
 const rpc = @import("rpc");
 const native = @import("native");
+const ContextUsage = @import("oap_types").ContextUsage;
 
 pub const codex_commit = harness_pins.codex_app_server_endpoint_version;
 pub const capability_revision = harness_pins.codex_app_server_capability_revision;
@@ -309,6 +310,9 @@ pub const Reducer = struct {
     thread_id: []const u8 = "",
     session_id: []const u8 = "",
     thread_usage: TokenTotals = .{},
+    context_usage: ?ContextUsage = null,
+    context_model: []const u8 = "",
+    context_compaction_id: ?[]const u8 = null,
     opening: bool = false,
     opened: bool = false,
     closed: bool = false,
@@ -501,6 +505,9 @@ pub const Reducer = struct {
         kept.closed = self.closed;
         kept.transport_closed = self.transport_closed;
         kept.thread_usage = self.thread_usage;
+        kept.context_usage = self.context_usage;
+        kept.context_model = try keep.dupe(u8, self.context_model);
+        if (self.context_compaction_id) |id| kept.context_compaction_id = try keep.dupe(u8, id);
         kept.saved = self.saved;
         kept.spawned = self.spawned;
         try kept.commands.ensureTotalCapacity(keep, self.commands.count());
@@ -851,8 +858,17 @@ pub const Reducer = struct {
         }
         if (std.mem.eql(u8, method, native.method_item_started) or std.mem.eql(u8, method, native.method_item_completed)) {
             if (!native.decodesPresent(message.params, native.item_notification)) return self.failActive("invalid_native_event", "invalid item lifecycle payload");
-            try self.followItem(std.mem.eql(u8, method, native.method_item_started), message.params.?);
-            return self.onItem(std.mem.eql(u8, method, native.method_item_started), message.params.?);
+            const started = std.mem.eql(u8, method, native.method_item_started);
+            const params = message.params.?;
+            if (std.mem.eql(u8, native.text(params, &.{"threadId"}), self.thread_id) and
+                std.mem.eql(u8, native.text(params, &.{ "item", "type" }), "contextCompaction"))
+            {
+                const id = native.text(params, &.{ "item", "id" });
+                if (started or !std.mem.eql(u8, self.context_compaction_id orelse "", id)) self.context_usage = null;
+                self.context_compaction_id = if (started) id else null;
+            }
+            try self.followItem(started, params);
+            return self.onItem(started, params);
         }
         if (std.mem.eql(u8, method, native.method_token_usage)) {
             if (!native.decodesPresent(message.params, native.token_usage_notification)) return self.failActive("invalid_native_event", "invalid thread/tokenUsage/updated payload");
@@ -864,6 +880,26 @@ pub const Reducer = struct {
         }
     }
 
+    fn observeContextUsage(self: *Reducer, params: std.json.Value, index: ?usize) void {
+        const used = native.optionalCount(params, &.{ "tokenUsage", "last", "totalTokens" }) orelse return;
+        if (used > ContextUsage.max_tokens) return;
+        const window = native.optionalCount(params, &.{ "tokenUsage", "modelContextWindow" }) orelse 0;
+        self.context_usage = .{
+            .used_tokens = used,
+            .window_tokens = if (window > 0 and window <= ContextUsage.max_tokens) window else null,
+        };
+        if (index orelse self.active) |at| {
+            self.context_model = self.effectiveModel(at);
+        } else if (self.context_model.len == 0) {
+            self.context_model = self.state.current_model_id;
+        }
+    }
+
+    fn effectiveModel(self: *const Reducer, index: usize) []const u8 {
+        const model = self.runs.items[index].model;
+        return if (model.len > 0) model else self.state.current_model_id;
+    }
+
     fn onTokenUsage(self: *Reducer, params: std.json.Value) !void {
         if (!std.mem.eql(u8, native.text(params, &.{"threadId"}), self.thread_id)) return;
         self.thread_usage = .{
@@ -871,7 +907,9 @@ pub const Reducer = struct {
             .output = native.count(params, &.{ "tokenUsage", "total", "outputTokens" }),
             .total = native.count(params, &.{ "tokenUsage", "total", "totalTokens" }),
         };
-        const index = self.runFor(self.thread_id, native.text(params, &.{"turnId"})) orelse return;
+        const matched = self.runFor(self.thread_id, native.text(params, &.{"turnId"}));
+        self.observeContextUsage(params, matched);
+        const index = matched orelse return;
         const run = &self.runs.items[index];
         if (run.terminal) return;
         run.usage_seen = true;
@@ -896,6 +934,9 @@ pub const Reducer = struct {
         if (run.started or run.terminal) return;
         run.started = true;
         run.status = "running";
+        const model = self.effectiveModel(index);
+        if (!std.mem.eql(u8, model, self.context_model)) self.context_usage = null;
+        self.context_model = model;
         self.state.status = "running";
         self.state.updated_at_ms = self.now();
         var payload = try self.runPayload(index);
