@@ -182,6 +182,48 @@ if mode.startswith("run-"):
         Path("eof").touch()
         sys.exit(0)
 
+    if mode.startswith("run-children") or mode == "run-queued-continuation":
+        previous_child = None
+        run_index = 0
+        for entry in frames[2:]:
+            action, raw = entry["action"], entry["raw"]
+            if action == "submit":
+                assert select.select([sys.stdin], [], [], 5)[0], "missing user turn"
+                turn = json.loads(sys.stdin.readline())
+                corpus_uuid, native_uuid = raw["uuid"], turn["uuid"]
+                assert turn == dict(raw, uuid=native_uuid)
+            elif action == "observe":
+                if mode == "run-children-mixed" and raw["type"] == "result":
+                    raw = dict(raw, queued_turn_count=1)
+                if mode == "run-children-mixed" and raw.get("subtype") in {"task_notification", "task_updated"}:
+                    raw = {"type": "system", "subtype": "session_state_changed", "state": "idle"}
+                if raw.get("subtype") == "task_notification":
+                    previous_child = raw
+                send(raw, corpus_uuid, native_uuid)
+            elif action == "drain":
+                if previous_child is not None:
+                    send(previous_child, corpus_uuid, native_uuid)
+                if mode == "run-children-mixed":
+                    if run_index == 0:
+                        task_done = next(row["raw"] for row in frames if row["raw"].get("subtype") == "task_notification")
+                        send(task_done, corpus_uuid, native_uuid)
+                elif mode == "run-queued-continuation":
+                    interim = frames[6]["raw"]
+                    send(dict(interim, queued_turn_count=0, user_message_uuid="foreign",
+                              user_message_uuids=[]), corpus_uuid, native_uuid)
+                print(json.dumps({"type": "control_request", "request_id": "barrier",
+                                  "request": {"subtype": "barrier"}}), flush=True)
+                assert select.select([sys.stdin], [], [], 5)[0], "missing drain barrier reply"
+                assert json.loads(sys.stdin.readline())["response"]["request_id"] == "barrier"
+                Path(f"deferred-{run_index}").touch()
+                wait_for_host(run_index)
+            elif action == "wait-run":
+                run_index += 1
+        assert select.select([sys.stdin], [], [], 5)[0], "session did not close"
+        assert not sys.stdin.readline(), "extra native input"
+        Path("eof").touch()
+        sys.exit(0)
+
     disconnect_cases = {"run-process-exit", "run-malformed",
                         "run-native-wins", "run-native-buffered", "run-aborted"}
     run_index = 0
