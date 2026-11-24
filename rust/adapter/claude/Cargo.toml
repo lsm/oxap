@@ -20,6 +20,7 @@ url = "2"
 
 [dev-dependencies]
 futures = "0.3"
+oxap-adapter = { path = "..", version = "=0.1.0", features = ["testkit"] }
 tempfile = "3"
 
 [lints.rust]

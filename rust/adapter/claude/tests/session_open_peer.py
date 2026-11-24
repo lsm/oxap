@@ -152,6 +152,27 @@ if mode.startswith("run-"):
             assert turn == dict(raw, uuid=native_uuid)
             buffered = []
         elif action == "observe":
+            if mode.startswith("run-tools") and raw["type"] == "control_request":
+                continue
+            if mode == "run-tools-edges":
+                if raw["type"] == "assistant":
+                    blocks = raw["message"]["content"]
+                    if run_index == 0:
+                        blocks.append({"type": "tool_use", "id": "toolu_extra", "name": "Task"})
+                    if run_index == 2:
+                        blocks.append(blocks[0].copy())
+                if raw["type"] == "user" and isinstance(raw["message"]["content"], list):
+                    if run_index == 0:
+                        raw = dict(raw, parent_tool_use_id="child")
+                    if run_index == 1:
+                        blocks = raw["message"]["content"]
+                        late = dict(blocks[0], tool_use_id="toolu_01")
+                        foreign = dict(blocks[0], tool_use_id="foreign")
+                        send(dict(raw, origin={"kind": "task-notification"},
+                                  message=dict(raw["message"], content=[foreign])),
+                             corpus_uuid, native_uuid)
+                        blocks[0]["content"] = [{"type": "text", "text": "data"}]
+                        blocks.insert(0, late)
             if mode == "run-buffered" and raw.get("event", {}).get("type") == "message_start":
                 buffered.append(raw)
                 continue

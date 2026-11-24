@@ -97,6 +97,11 @@ publishes the source attribution for subsequent calls. Until a scoped
 response serves an observed catalog, only built-in attribution is available.
 An unscoped list exposes only the built-in source.
 
+Top-level native tool uses emit requested and started events with a shared
+OAP call ID. Tool results complete or fail that call, and unfinished calls
+are cancelled in request order before the run settles. Results from an
+earlier run are ignored. Tool progress stays on the native wire.
+
 Session submission accepts one user message with automatic delivery. Text
 parts are joined with newlines. `Config::expand_prompts` permits native prompt
 expansion. By default the user frame is marked client-composed. Before writing

@@ -27,6 +27,10 @@ pub(crate) struct Catalog {
 }
 
 impl Catalog {
+    pub(crate) fn attribution_for(&self, name: &str) -> &str {
+        self.attribution.get(name).map_or("", String::as_str)
+    }
+
     pub(crate) fn observe(&mut self, init: &InitFrame) {
         let mut seen = HashSet::new();
         let servers: Vec<_> = init
