@@ -193,7 +193,12 @@ if mode.startswith("run-"):
             if raw["type"] == "result":
                 send(raw, corpus_uuid, native_uuid)
                 run_index += 1
-        elif action == "expect-write" and mode == "run-permissions":
+        elif action == "expect-write" and mode == "run-permission-withdrawal" and raw["response"]["request_id"].startswith("ask-"):
+            wait_for_host(f"withdraw-{run_index}")
+            print(json.dumps({"type": "control_cancel_request",
+                              "request_id": raw["response"]["request_id"]}), flush=True)
+            wait_for_host(f"withdrawn-{run_index}")
+        elif action == "expect-write" and mode.startswith("run-permission"):
             assert select.select([sys.stdin], [], [], 5)[0], "missing native control reply"
             assert json.loads(sys.stdin.readline()) == raw, raw
         elif action == "decode-error":
@@ -256,6 +261,10 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
             observed = dict(frames[index]["raw"], session_id=binding, user_message_uuid=frame["uuid"],
                             user_message_uuids=[])
             print(json.dumps(observed), flush=True)
+            if index == 6:
+                ask("withdrawn-before-admission")
+                print(json.dumps({"type": "control_cancel_request",
+                                  "request_id": "withdrawn-before-admission"}), flush=True)
             ask(request_id)
         send_control("barrier", "barrier")
         read_reply("barrier", subtype="error", error="claude adapter: no owned run")

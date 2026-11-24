@@ -43,7 +43,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-settlement" => "settlement-statuses/native.jsonl",
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
-        "run-permissions" => "permission-gates/native.jsonl",
+        mode if mode.starts_with("run-permission") => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-tools") => "tool-lifecycle/native.jsonl",
         mode if mode.starts_with("run-interrupt-") => "interrupt-cancel/native.jsonl",
         "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
@@ -405,6 +405,84 @@ fn claude_run_replays_streaming_and_settlement() {
 #[test]
 fn claude_tools_replay_corpus() {
     replay_run_events("run-tools", "tool-lifecycle");
+}
+
+#[test]
+fn claude_permission_gates_retire_native_withdrawals() {
+    let (adapter, directory, frames) = fixture("run-permission-withdrawal");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    for (index, frame) in frames
+        .iter()
+        .filter(|frame| frame["action"] == "submit")
+        .enumerate()
+    {
+        let text = frame["raw"]["message"]["content"].as_str().unwrap();
+        let (admission, mut stream) = block_on(session.submit(text_submit(text))).unwrap();
+        fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+        let prefix = block_on(stream.by_ref().take(4).collect::<Vec<_>>());
+        let requested = prefix.last().unwrap().as_ref().unwrap();
+        assert_eq!(requested.envelope_type.as_str(), "user.input.requested");
+        let waiting = block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(waiting.envelope_type.as_str(), "run.status.updated");
+        fs::write(
+            directory.path().join(format!("continue-withdraw-{index}")),
+            [],
+        )
+        .unwrap();
+        let resolved = block_on(stream.next())
+            .expect("native withdrawal must settle the gate")
+            .unwrap();
+        assert_eq!(resolved.envelope_type.as_str(), "user.input.resolved");
+        assert_eq!(resolved.in_reply_to.as_ref(), Some(&requested.id));
+        let payload = serde_json::to_value(&resolved).unwrap();
+        assert_eq!(payload["payload"]["status"], "cancelled");
+        let running = block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(running.envelope_type.as_str(), "run.status.updated");
+        assert_eq!(
+            block_on(session.state()).unwrap().status.as_str(),
+            "running"
+        );
+        let answer = InteractionResolution {
+            run_id: admission.run_id.unwrap(),
+            responded_by: "user".into(),
+            input: Some(UserInputResolveRequest {
+                interaction_id: requested.turn_id.clone().unwrap(),
+                answers: vec![InputAnswer {
+                    question_id: "decision".into(),
+                    selected_option_ids: vec!["allow".into()],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            block_on(session.resolve(answer)),
+            Err(Error::InteractionNotFound)
+        );
+        fs::write(
+            directory.path().join(format!("continue-withdrawn-{index}")),
+            [],
+        )
+        .unwrap();
+        let tail = block_on(stream.collect::<Vec<_>>());
+        assert_eq!(
+            tail.last()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .envelope_type
+                .as_str(),
+            "run.completed"
+        );
+    }
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS native withdrawals: two gates retired, both runs resumed, no native replies");
 }
 
 #[test]
