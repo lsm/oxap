@@ -54,7 +54,8 @@ pub const Options = struct {
 pub const InputMessage = struct {
     id: []const u8 = "",
     role: []const u8 = "user",
-    text: ?[]const u8,
+    text: ?[]const u8 = null,
+    parts: []const native.TurnInput = &.{},
 };
 
 pub const Submission = struct {
@@ -62,6 +63,8 @@ pub const Submission = struct {
     model_id: ?[]const u8 = null,
     effort: []const u8 = "",
     output_schema: ?[]const u8 = null,
+    scratch: ?std.mem.Allocator = null,
+    frame_limit: usize = rpc.frame_limit_default,
 };
 
 pub const Admission = struct {
@@ -388,11 +391,16 @@ pub const Reducer = struct {
     }
 
     fn call(self: *Reducer, what: Call, method: []const u8, params: std.json.Value) !void {
-        const id = self.next_request;
+        const frame = try rpc.encode(self.allocator(), .{ .request = .{ .id = self.next_request, .method = method, .params = params } });
+        try self.queueCall(what, frame);
+    }
+
+    fn queueCall(self: *Reducer, what: Call, frame: []const u8) !void {
+        try self.writes.ensureUnusedCapacity(self.allocator(), 1);
+        try self.pending.ensureUnusedCapacity(self.allocator(), 1);
+        self.writes.appendAssumeCapacity(frame);
+        self.pending.appendAssumeCapacity(.{ .id = self.next_request, .call = what });
         self.next_request += 1;
-        const frame = try rpc.encode(self.allocator(), .{ .request = .{ .id = id, .method = method, .params = params } });
-        try self.writes.append(self.allocator(), frame);
-        try self.pending.append(self.allocator(), .{ .id = id, .call = what });
     }
 
     fn respond(self: *Reducer, id: rpc.Id, result: std.json.Value) !void {
@@ -441,28 +449,41 @@ pub const Reducer = struct {
             model = requested;
         }
         if (submission.messages.len == 0) return Error.InvalidSubmission;
-        const texts = try self.allocator().alloc([]const u8, submission.messages.len);
-        const message_ids = try self.allocator().alloc([]const u8, submission.messages.len);
-        for (submission.messages, 0..) |message, index| {
+        const scratch = submission.scratch orelse self.allocator();
+        var parts: std.ArrayList(native.TurnInput) = .empty;
+        for (submission.messages) |message| {
             if (!std.mem.eql(u8, message.role, "user")) return Error.UnsupportedInput;
-            texts[index] = message.text orelse return Error.UnsupportedInput;
-            message_ids[index] = if (message.id.len != 0) message.id else try self.nextID("message");
+            if (message.text) |entry| {
+                try parts.append(scratch, .{ .text = entry });
+            } else {
+                if (message.parts.len == 0) return Error.UnsupportedInput;
+                try parts.appendSlice(scratch, message.parts);
+            }
         }
         if (self.closed or self.transport_closed) return Error.SessionClosed;
         if (self.active != null) return Error.RunActive;
 
+        const schema_value: ?std.json.Value = if (submission.output_schema) |schema| std.json.parseFromSliceLeaky(std.json.Value, scratch, schema, .{}) catch return Error.InvalidSubmission else null;
+        const params = try native.turnStartParams(scratch, self.thread_id, parts.items, model, submission.effort, schema_value);
+        const frame = try rpc.encode(scratch, .{ .request = .{ .id = self.next_request, .method = native.method_turn_start, .params = params } });
+        if (frame.len > submission.frame_limit) return error.FrameTooLarge;
+
+        const message_ids = try self.allocator().alloc([]const u8, submission.messages.len);
+        for (submission.messages, message_ids) |message, *id| {
+            id.* = if (message.id.len != 0) try self.allocator().dupe(u8, message.id) else try self.nextID("message");
+        }
+        if (submission.model_id != null) model = try self.allocator().dupe(u8, model);
         const run_id = try self.nextID("run");
         const message_id = try self.nextID("message");
         const output_schema: ?[]const u8 = if (submission.output_schema) |schema| try self.allocator().dupe(u8, schema) else null;
-        const schema_value: ?std.json.Value = if (output_schema) |schema| std.json.parseFromSliceLeaky(std.json.Value, self.allocator(), schema, .{}) catch return Error.InvalidSubmission else null;
-        try self.runs.append(self.allocator(), .{ .id = run_id, .message_id = message_id, .model = model, .message_ids = message_ids, .output_schema = output_schema, .usage_base = self.thread_usage });
-        const index = self.runs.items.len - 1;
+        const index = self.runs.items.len;
+        try self.runs.ensureUnusedCapacity(self.allocator(), 1);
+        try self.queueCall(.{ .turn_start = index }, frame);
+        self.runs.appendAssumeCapacity(.{ .id = run_id, .message_id = message_id, .model = model, .message_ids = message_ids, .output_schema = output_schema, .usage_base = self.thread_usage });
         self.active = index;
         self.state.status = "queued";
         self.state.active_run_id = run_id;
         self.state.updated_at_ms = self.now();
-        const params = try native.turnStartParams(self.allocator(), self.thread_id, texts, model, submission.effort, schema_value);
-        try self.call(.{ .turn_start = index }, native.method_turn_start, params);
     }
 
     pub fn compactInto(self: *const Reducer, arena: *std.heap.ArenaAllocator) !Reducer {
@@ -648,6 +669,9 @@ pub const Reducer = struct {
                 const thread = native.text(result, &.{ "thread", "id" });
                 if (thread.len == 0) return self.callFailed(what, .{ .method = callMethod(what), .message = "thread/start returned no thread id" });
                 try self.opens(thread);
+                if (self.options.model.len == 0) {
+                    self.state.current_model_id = try self.allocator().dupe(u8, native.text(result, &.{"model"}));
+                }
             },
             .thread_resume => {
                 if (!native.decodes(result, native.thread_resume_response)) return self.callFailed(what, undecodable(what));

@@ -35,3 +35,28 @@ synthetic adaptation of those examples against the new schema, including a
 constructed moderated item; it is not a trace recorded from v0.171.0. A credential-free Linux process probe of the candidate
 merged with main initialized OAP and opened a session with the v0.171.0 binary;
 the endpoint exited 0. It did not submit a prompt or exercise moderation.
+
+## Inline images in released Zig builds
+
+Before binding a capability revision, Zig reads the native `model/list`
+catalog. The adapter uses the hub model setting, then the effective model from
+Codex `config/read`, then the catalog's default. It enables the feature when the
+selected model's `inputModalities` includes `image`. The adapter uses the
+effective thread or per-turn model when admitting a submission. Absent catalog
+evidence leaves image input unavailable. These descriptors describe the
+configured route, as with the DeepSeek adapter.
+
+Zig maps each text part to a native text item and each inline image part to
+`{type: "image", url: "data:<media_type>;base64,<data>"}` in order. It accepts
+PNG, JPEG, GIF and WebP with standard base64. Each image is capped at 4 MiB
+decoded, and a submission can carry at most 6 MiB of image base64. The complete
+image turn frame is capped at 7 MiB, below the 16 MiB hub envelope budget and
+with 1 MiB headroom under the 8 MiB native frame limit for echoed input.
+An unsupported model returns `unsupported_feature` before a native turn starts.
+
+To reach parity, the Go and Rust Codex adapters each need to read the paginated
+native model catalog and Codex's effective default, bind the route descriptor and its revision to the
+advertised modality, and check the thread or per-turn model before admission.
+They also need to preserve ordered message parts on `turn/start`, accept the
+same inline MIME and standard base64, enforce the same three limits, and run
+the synthetic hub journey on their binaries.

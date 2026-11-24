@@ -6,6 +6,8 @@ pub const method_initialized = "initialized";
 pub const method_thread_start = "thread/start";
 pub const method_thread_resume = "thread/resume";
 pub const method_turn_start = "turn/start";
+pub const method_model_list = "model/list";
+pub const method_config_read = "config/read";
 pub const method_turn_interrupt = "turn/interrupt";
 pub const method_turn_started = "turn/started";
 pub const method_turn_completed = "turn/completed";
@@ -390,12 +392,22 @@ pub fn unconfirmedHostPermission(host: ThreadStart, resumed: std.json.Value) ?[]
     return null;
 }
 
-pub fn turnStartParams(arena: std.mem.Allocator, thread_id: []const u8, texts: []const []const u8, model: []const u8, effort: []const u8, output_schema: ?std.json.Value) !std.json.Value {
+pub const TurnInput = union(enum) { text: []const u8, image_url: []const u8 };
+
+pub fn turnStartParams(arena: std.mem.Allocator, thread_id: []const u8, parts: []const TurnInput, model: []const u8, effort: []const u8, output_schema: ?std.json.Value) !std.json.Value {
     var input = std.json.Array.init(arena);
-    for (texts) |entry| {
+    for (parts) |part| {
         var element = object();
-        try putText(arena, &element, "type", "text");
-        try putNonEmpty(arena, &element, "text", entry);
+        switch (part) {
+            .text => |entry| {
+                try putText(arena, &element, "type", "text");
+                try putNonEmpty(arena, &element, "text", entry);
+            },
+            .image_url => |url| {
+                try putText(arena, &element, "type", "image");
+                try putText(arena, &element, "url", url);
+            },
+        }
         try input.append(.{ .object = element });
     }
     var params = object();
@@ -525,7 +537,7 @@ test "parameters are written in Go's struct order and omit what Go omits" {
     );
     try testing.expectEqualStrings(
         "{\"threadId\":\"t\",\"input\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"text\"}]}",
-        try encode(a, try turnStartParams(a, "t", &.{ "hi", "" }, "", "", null)),
+        try encode(a, try turnStartParams(a, "t", &.{ .{ .text = "hi" }, .{ .text = "" } }, "", "", null)),
     );
     var answers = [_]NativeAnswer{ .{ .question_id = "note", .answer = "n" }, .{ .question_id = "mode", .answer = "Safe" } };
     try testing.expectEqualStrings(

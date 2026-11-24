@@ -2,7 +2,20 @@
 exec 3>>"$(dirname "$0")/stdin.log"
 take() { IFS= read -r line || exit 0; printf '%s\n' "$line" >&3; }
 id() { printf '%s' "$line" | sed -n 's/^{"id":\([0-9]*\),.*/\1/p'; }
-take; printf '{"id":%s,"result":{"userAgent":"codex-fake","codexHome":"/codex","platformFamily":"unix","platformOs":"linux"}}\n' "$(id)"
+IFS= read -r line || exit 0
+case "$line" in
+    '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"clientInfo":{"name":"oapx","version":"0"}}}')
+        printf '%s\n' '{"id":0,"result":{"userAgent":"codex-fake","codexHome":"/codex","platformFamily":"unix","platformOs":"linux"}}'
+        IFS= read -r line || exit 0
+        IFS= read -r line || exit 0
+        case "$line" in
+            *'"method":"model/list"'*) printf '%s\n' '{"id":1,"result":{"data":[],"nextCursor":null}}' ;;
+            *) exit 1 ;;
+        esac
+        exit 0 ;;
+esac
+printf '%s\n' "$line" >&3
+printf '{"id":%s,"result":{"userAgent":"codex-fake","codexHome":"/codex","platformFamily":"unix","platformOs":"linux"}}\n' "$(id)"
 take
 take; printf '{"id":%s,"result":{"thread":{"id":"native-thread"}}}\n' "$(id)"
 

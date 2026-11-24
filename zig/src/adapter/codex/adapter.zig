@@ -38,6 +38,19 @@ pub const descriptor = contract.Descriptor{
     .features = &features,
 };
 
+const image_feature = "content.image";
+const max_decoded_image = 4 << 20;
+const max_encoded_images = 6 << 20;
+const max_image_turn_frame = 7 << 20;
+const image_features = features[0..4].* ++ [_]contract.Feature{
+    .{ .key = image_feature, .level = .native, .reason = "inline image input on the configured model; a per-turn model must also advertise image input" },
+} ++ features[4..].*;
+const image_descriptor: contract.Descriptor = .{
+    .endpoint = descriptor.endpoint,
+    .capability_revision = capability_revision ++ "-image",
+    .features = &image_features,
+};
+
 pub const default_compact_above: usize = 256 * 1024;
 
 pub const Config = struct {
@@ -90,6 +103,8 @@ pub const Adapter = struct {
     ids: usize = 0,
     reader: ?OneShot = null,
     reader_lock: std.atomic.Mutex = .unlocked,
+    image_models: []const []const u8 = &.{},
+    default_model: []const u8 = "",
 
     pub fn init(allocator: std.mem.Allocator, config: Config) Adapter {
         return .{ .allocator = allocator, .config = config };
@@ -98,6 +113,76 @@ pub const Adapter = struct {
     pub fn deinit(self: *Adapter) void {
         if (self.reader) |*kept| kept.deinit();
         self.* = undefined;
+    }
+
+    pub fn discoverModels(self: *Adapter, arena: std.mem.Allocator) error{OutOfMemory}!void {
+        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        defer scratch.deinit();
+        const temporary = scratch.allocator();
+        var refusal: contract.Refusal = .{};
+        var shot = OneShot.open(self, temporary, &refusal) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return,
+        };
+        defer shot.deinit();
+        shot.config.request_timeout_ns = @min(shot.config.request_timeout_ns, 5 * std.time.ns_per_s);
+        var images: std.ArrayList([]const u8) = .empty;
+        var default: []const u8 = "";
+        var params: std.json.ObjectMap = .empty;
+        try params.put(temporary, "includeHidden", .{ .bool = true });
+        for (0..4) |_| {
+            const page = (shot.call(temporary, native.method_model_list, params, &refusal) catch |err| {
+                if (err == error.OutOfMemory) return error.OutOfMemory;
+                break;
+            }) orelse break;
+            const data = native.pointer(page, &.{"data"}) orelse break;
+            if (data != .array) break;
+            for (data.array.items) |model| {
+                const modalities = native.pointer(model, &.{"inputModalities"}) orelse continue;
+                if (modalities != .array) continue;
+                for (modalities.array.items) |mode| {
+                    if (mode != .string or !std.mem.eql(u8, mode.string, "image")) continue;
+                    const slug = textOf(model, "model");
+                    const id = textOf(model, "id");
+                    if (id.len == 0 or slug.len == 0) break;
+                    const kept = try arena.dupe(u8, slug);
+                    try images.append(arena, kept);
+                    if (!std.mem.eql(u8, id, slug)) try images.append(arena, try arena.dupe(u8, id));
+                    const preferred = native.pointer(model, &.{"isDefault"}) orelse break;
+                    if (preferred == .bool and preferred.bool) default = kept;
+                    break;
+                }
+            }
+            const cursor = textOf(page, "nextCursor");
+            if (cursor.len == 0) break;
+            try params.put(temporary, "cursor", .{ .string = cursor });
+        }
+        if (self.config.model.len == 0 and images.items.len != 0) {
+            params = .empty;
+            if (self.config.working_directory) |cwd| try params.put(temporary, "cwd", .{ .string = cwd });
+            const read = shot.call(temporary, native.method_config_read, params, &refusal) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => null,
+            };
+            if (read) |result| {
+                const configured = native.text(result, &.{ "config", "model" });
+                if (configured.len > 0) default = try arena.dupe(u8, configured);
+            } else default = "";
+        }
+        self.image_models = images.items;
+        self.default_model = default;
+    }
+
+    fn supportsImages(self: *const Adapter, model: []const u8) bool {
+        for (self.image_models) |id| {
+            if (std.mem.eql(u8, id, model)) return true;
+        }
+        return false;
+    }
+
+    fn routeDescriptor(self: *const Adapter) contract.Descriptor {
+        const model = if (self.config.model.len > 0) self.config.model else self.default_model;
+        return if (self.supportsImages(model)) image_descriptor else descriptor;
     }
 
     fn ask(self: *Adapter, arena: std.mem.Allocator, method: []const u8, params: std.json.ObjectMap, refusal: *contract.Refusal) contract.Failure!?std.json.Value {
@@ -332,9 +417,9 @@ pub const Adapter = struct {
     }
 
     fn probe(ptr: *anyopaque, refusal: *contract.Refusal) contract.Failure!contract.Descriptor {
-        _ = ptr;
         _ = refusal;
-        return descriptor;
+        const self: *Adapter = @ptrCast(@alignCast(ptr));
+        return self.routeDescriptor();
     }
 
     fn open(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!contract.Session {
@@ -425,7 +510,7 @@ pub const Session = struct {
                 .reopen = request.reopen,
                 .settings = settings.native,
                 .compaction_auto = settings.auto,
-                .revision = capability_revision,
+                .revision = owner.routeDescriptor().capability_revision,
                 .counter = &owner.ids,
                 .now_ms = wallClock,
             }),
@@ -661,6 +746,26 @@ pub const Session = struct {
         };
     }
 
+    fn inlineImage(self: *Session, arena: std.mem.Allocator, image: oap_types.ImagePart, total: *usize, refusal: *contract.Refusal) contract.Failure!native.TurnInput {
+        const data = image.data orelse "";
+        const mime = image.media_type orelse "";
+        const types = [_][]const u8{ "image/png", "image/jpeg", "image/gif", "image/webp" };
+        for (types) |allowed| {
+            if (std.mem.eql(u8, mime, allowed)) break;
+        } else return refusal.fail(error.InvalidSubmission, "inline images require PNG, JPEG, GIF or WebP media_type");
+        if (image.url != null or data.len == 0) return refusal.fail(error.InvalidSubmission, "image input requires inline base64 data");
+        if (data.len > max_encoded_images - total.*) return refusal.fail(error.InvalidSubmission, "inline images exceed 6 MiB of base64 per submission");
+        const decoder = std.base64.standard.Decoder;
+        const invalid = "image input requires valid standard base64";
+        const size = decoder.calcSizeForSlice(data) catch return refusal.fail(error.InvalidSubmission, invalid);
+        if (size > max_decoded_image) return refusal.fail(error.InvalidSubmission, "an inline image exceeds 4 MiB decoded");
+        const decoded = try self.gpa.alloc(u8, size);
+        defer self.gpa.free(decoded);
+        decoder.decode(decoded, data) catch return refusal.fail(error.InvalidSubmission, invalid);
+        total.* += data.len;
+        return .{ .image_url = try std.fmt.allocPrint(arena, "data:{s};base64,{s}", .{ mime, data }) };
+    }
+
     fn submit(ptr: *anyopaque, arena: std.mem.Allocator, request: *const oap_types.MessageSubmitRequest, envelope_id: []const u8, refusal: *contract.Refusal) contract.Failure!oap_types.MessageSubmitResponse {
         _ = envelope_id;
         const self = cast(ptr);
@@ -676,17 +781,44 @@ pub const Session = struct {
         if (!std.mem.eql(u8, request.session_id, self.id) or request.messages.len == 0) return error.InvalidSubmission;
         if (request.delivery != .auto or request.allow_degraded_features.len != 0) return error.InvalidSubmission;
         const inputs = try arena.alloc(session.InputMessage, request.messages.len);
+        var encoded: usize = 0;
         for (request.messages, inputs) |message, *input| {
-            const id = try self.owned().dupe(u8, message.id orelse "");
-            const text: ?[]const u8 = switch (message.content) {
-                .text => |content| try self.owned().dupe(u8, content),
-                .parts => null,
-            };
-            input.* = .{ .id = id, .role = @tagName(message.role), .text = text };
+            if (message.role != .user) return error.InvalidSubmission;
+            input.* = .{ .id = message.id orelse "" };
+            switch (message.content) {
+                .text => |content| input.text = content,
+                .parts => |parts| {
+                    if (parts.len == 0) return error.InvalidSubmission;
+                    const items = try arena.alloc(native.TurnInput, parts.len);
+                    for (parts, items) |part, *item| item.* = switch (part) {
+                        .text => |content| .{ .text = content },
+                        .image => |image| try self.inlineImage(arena, image, &encoded, refusal),
+                        else => return error.InvalidSubmission,
+                    };
+                    input.parts = items;
+                },
+            }
         }
-        const model_id: ?[]const u8 = if (request.model_id) |model| try self.owned().dupe(u8, model) else null;
-        self.reducer.submit(.{ .messages = inputs, .model_id = model_id, .effort = self.pending_effort, .output_schema = request.output_schema_json }) catch |err| return switch (err) {
+        var model_id = request.model_id;
+        if (encoded > 0) {
+            const current = self.reducer.state.current_model_id;
+            const model = model_id orelse if (current.len > 0) current else self.owner.default_model;
+            if (!self.owner.supportsImages(model)) {
+                refusal.* = .{ .feature = image_feature, .reason = contract.reason_unsatisfiable, .model_id = model, .detail = "the effective Codex model does not support inline images" };
+                return error.UnsupportedFeature;
+            }
+            model_id = model;
+        }
+        self.reducer.submit(.{
+            .messages = inputs,
+            .model_id = model_id,
+            .effort = self.pending_effort,
+            .output_schema = request.output_schema_json,
+            .scratch = arena,
+            .frame_limit = if (encoded > 0) @min(self.owner.config.frame_limit, max_image_turn_frame) else self.owner.config.frame_limit,
+        }) catch |err| return switch (err) {
             error.ModelNotFound => refusal.missingModel(request.model_id orelse ""),
+            error.FrameTooLarge => refusal.fail(error.InvalidSubmission, "the Codex turn exceeds the native frame limit"),
             error.InvalidSubmission, error.UnsupportedInput => error.InvalidSubmission,
             error.SessionClosed, error.NotOpen => error.SessionClosed,
             error.RunActive => error.RunActive,
