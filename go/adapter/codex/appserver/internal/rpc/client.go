@@ -158,15 +158,27 @@ func (client *Client) Err() error {
 	return client.err
 }
 
-func (client *Client) Call(ctx context.Context, method string, params any, result any) error {
+func (client *Client) PrepareCall(method string, params any) (Message, error) {
 	if method == "" {
-		return ErrInvalidMessage
+		return Message{}, ErrInvalidMessage
 	}
-	id := IntegerID(client.nextID.Add(1))
-	paramsJSON, err := marshalOptional(params)
+	payload, err := marshalOptional(params)
+	if err != nil {
+		return Message{}, err
+	}
+	return Request(IntegerID(client.nextID.Add(1)), method, payload), nil
+}
+
+func (client *Client) Call(ctx context.Context, method string, params any, result any) error {
+	request, err := client.PrepareCall(method, params)
 	if err != nil {
 		return err
 	}
+	return client.CallPrepared(ctx, request, result)
+}
+
+func (client *Client) CallPrepared(ctx context.Context, request Message, result any) error {
+	id := request.ID
 	response := make(chan callResult, 1)
 	client.mu.Lock()
 	if client.closed {
@@ -188,11 +200,11 @@ func (client *Client) Call(ctx context.Context, method string, params any, resul
 			return nil
 		}
 		if err := json.Unmarshal(outcome.result, result); err != nil {
-			return fmt.Errorf("decode %s response: %w", method, err)
+			return fmt.Errorf("decode %s response: %w", request.Method, err)
 		}
 		return nil
 	}
-	if err := client.write(ctx, Request(id, method, paramsJSON)); err != nil {
+	if err := client.write(ctx, request); err != nil {
 		select {
 		case <-client.done:
 

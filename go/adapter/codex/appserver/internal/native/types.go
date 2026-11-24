@@ -106,6 +106,7 @@ type ThreadResumeResponse struct {
 type UserInput struct {
 	Type         string        `json:"type"`
 	Text         string        `json:"text,omitempty"`
+	URL          string        `json:"url,omitempty"`
 	TextElements []TextElement `json:"textElements,omitempty"`
 }
 

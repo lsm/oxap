@@ -30,6 +30,9 @@ type session struct {
 	participant  protocol.ParticipantID
 	threadID     string
 	model        string
+	images       imageModels
+	frameLimit   int
+	revision     string
 	effort       string
 	threadUsage  native.TokenUsageBreakdown
 	state        protocol.SessionState
@@ -138,9 +141,15 @@ func (session *session) Submit(ctx context.Context, submit adapter.SubmitRequest
 	if len(request.AllowDegradedFeatures) != 0 || len(request.Metadata) != 0 {
 		return protocol.MessageSubmitResponse{}, nil, fmt.Errorf("%w: degraded-feature consent and metadata are not supported", adapter.ErrInvalidSubmission)
 	}
-	input, messageIDs, err := session.nativeInput(request.Messages)
+	input, hasImages, err := nativeInput(request.Messages)
 	if err != nil {
 		return protocol.MessageSubmitResponse{}, nil, err
+	}
+	if hasImages {
+		model, err = session.imageModel(model)
+		if err != nil {
+			return protocol.MessageSubmitResponse{}, nil, err
+		}
 	}
 	session.mu.Lock()
 	if session.closed {
@@ -151,12 +160,29 @@ func (session *session) Submit(ctx context.Context, submit adapter.SubmitRequest
 		session.mu.Unlock()
 		return protocol.MessageSubmitResponse{}, nil, adapter.ErrRunActive
 	}
+	base := session.threadUsage
 	session.mu.Unlock()
 
 	params := native.TurnStartParams{ThreadID: session.threadID, Input: input, Model: model, Effort: session.effort, OutputSchema: request.OutputSchema}
-	session.mu.Lock()
-	base := session.threadUsage
-	session.mu.Unlock()
+	var nativeResponse native.TurnStartResponse
+	call := func() error {
+		return session.client.Call(ctx, native.MethodTurnStart, params, &nativeResponse)
+	}
+	if hasImages {
+		request, err := session.prepareImageTurn(params)
+		if err != nil {
+			return protocol.MessageSubmitResponse{}, nil, err
+		}
+		client := session.client.(*processClient)
+		call = func() error { return client.Process.Client.CallPrepared(ctx, request, &nativeResponse) }
+	}
+	messageIDs := make([]protocol.MessageID, len(request.Messages))
+	for index, message := range request.Messages {
+		messageIDs[index] = message.ID
+		if message.ID == "" {
+			messageIDs[index] = protocol.MessageID(session.ids.NewID("message"))
+		}
+	}
 	run := &runState{
 		id: protocol.RunID(session.ids.NewID("run")), status: protocol.RunQueued,
 		nextSequence: 1, messageID: protocol.MessageID(session.ids.NewID("message")),
@@ -172,8 +198,7 @@ func (session *session) Submit(ctx context.Context, submit adapter.SubmitRequest
 
 	session.state.UpdatedAtMS = session.clock.Now().UnixMilli()
 	session.mu.Unlock()
-	var nativeResponse native.TurnStartResponse
-	if err := session.client.Call(ctx, native.MethodTurnStart, params, &nativeResponse); err != nil {
+	if err := call(); err != nil {
 		session.mu.Lock()
 		session.active = nil
 		session.state.ActiveRunID = ""
@@ -247,24 +272,37 @@ func (session *session) UpdateSettings(ctx context.Context, request protocol.Ses
 	return response, session.state, nil
 }
 
-func (session *session) nativeInput(messages []protocol.Message) ([]native.UserInput, []protocol.MessageID, error) {
+func nativeInput(messages []protocol.Message) ([]native.UserInput, bool, error) {
 	input := make([]native.UserInput, 0, len(messages))
-	ids := make([]protocol.MessageID, len(messages))
-	for index, message := range messages {
+	total := 0
+	for _, message := range messages {
 		if message.Role != protocol.RoleUser {
-			return nil, nil, fmt.Errorf("%w: role %q; turn/start accepts new user input only", ErrUnsupportedInput, message.Role)
+			return nil, false, fmt.Errorf("%w: role %q; turn/start accepts new user input only", ErrUnsupportedInput, message.Role)
 		}
-		text, ok := message.Content.Text()
-		if !ok {
-			return nil, nil, fmt.Errorf("%w: only text messages are supported", ErrUnsupportedInput)
+		if text, ok := message.Content.Text(); ok {
+			input = append(input, native.UserInput{Type: "text", Text: text})
+			continue
 		}
-		input = append(input, native.UserInput{Type: "text", Text: text, TextElements: []native.TextElement{}})
-		ids[index] = message.ID
-		if ids[index] == "" {
-			ids[index] = protocol.MessageID(session.ids.NewID("message"))
+		parts, ok := message.Content.Parts()
+		if !ok || len(parts) == 0 {
+			return nil, false, ErrUnsupportedInput
+		}
+		for _, part := range parts {
+			switch part.Type {
+			case protocol.ContentText:
+				input = append(input, native.UserInput{Type: "text", Text: part.Text})
+			case protocol.ContentImage:
+				image, err := inlineImage(part.Image, &total)
+				if err != nil {
+					return nil, false, err
+				}
+				input = append(input, image)
+			default:
+				return nil, false, adapter.ErrInvalidSubmission
+			}
 		}
 	}
-	return input, ids, nil
+	return input, total > 0, nil
 }
 
 func (session *session) State(ctx context.Context) (protocol.SessionState, error) {
@@ -1205,7 +1243,7 @@ func (session *session) emitWithExtensions(run *runState, typ protocol.EnvelopeT
 	}
 	envelope.Sequence = &sequence
 	envelope.TimestampMS = &now
-	envelope.CapabilityRevision = CapabilityRevision
+	envelope.CapabilityRevision = session.revision
 	envelope.Extensions = extensions
 
 	session.mu.Lock()
