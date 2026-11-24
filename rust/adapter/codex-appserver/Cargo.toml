@@ -8,6 +8,7 @@ license = "CC0-1.0"
 publish = false
 
 [dependencies]
+base64 = "0.22"
 crossbeam-channel = "0.5"
 futures-channel = "0.3"
 oxap-adapter = { path = "..", version = "=0.1.0" }

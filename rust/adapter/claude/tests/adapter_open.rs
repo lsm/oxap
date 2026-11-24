@@ -266,7 +266,7 @@ fn the_descriptor_uses_go_feature_keys_and_reports_rust_support() {
     assert_eq!(policy.level.as_str(), "emulated");
     assert_eq!(policy.modes, ["session_open", "session_live"]);
     let selection = &described.capabilities.features["run.tool_selection"];
-    assert_eq!(selection.level.as_str(), "unavailable");
+    assert_eq!(selection.level.as_str(), "emulated");
     assert_eq!(selection.scope, "run");
 }
 

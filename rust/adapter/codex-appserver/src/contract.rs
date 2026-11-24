@@ -40,8 +40,8 @@ fn background<T: Send + 'static>(
 
 impl AdapterContract for Adapter {
     fn probe(&self) -> BoxFuture<'_, Descriptor> {
-        let descriptor = self.describe();
-        Box::pin(async move { Ok(descriptor) })
+        let adapter = self.clone();
+        background(move |_| Ok(adapter.describe()))
     }
 
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {

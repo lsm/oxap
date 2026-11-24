@@ -172,7 +172,14 @@ fn a_submit_go_refuses_starts_no_turn() {
                 }]),
                 ..user("", "")
             }]),
-            |error| matches!(error, Error::UnsupportedInput),
+            |error| {
+                matches!(
+                    error,
+                    Error::InvalidSubmissionDetail(
+                        "inline images require PNG, JPEG, GIF or WebP media_type"
+                    )
+                )
+            },
         ),
     ];
     for (submitted, refused) in cases {

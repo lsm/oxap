@@ -420,7 +420,7 @@ impl Shared {
         envelope.tool_call_id = tool_call;
         envelope.sequence = Some(sequence);
         envelope.timestamp_ms = Some(now);
-        envelope.capability_revision = Some(crate::adapter::pin().capability_revision.clone());
+        envelope.capability_revision = Some(self.route.revision.clone());
         if terminal {
             run.terminal = true;
             run.settled = Some(if envelope.envelope_type == EnvelopeType::RUN_COMPLETED {

@@ -19,12 +19,6 @@ The old SDK package's recorded digest was reproduced before comparing declaratio
 
 ## Rust port divergence
 
-Under the catalog's shared Claude revision, Go exposes `run.tool_selection`
-as `emulated` through the pre-tool-use hook and native permission gate. The
-Rust adapter reports `unavailable` and refuses `tool_choice` at submit until
-it can enforce choices through those controls. Served parity for this feature
-requires the Rust enforcement path.
-
 Rust requires an explicit responder matching the opening participant on a
 permission decision and rejects conflicting responder fields. Go permits
 an omitted responder at the adapter boundary.

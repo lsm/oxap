@@ -140,6 +140,48 @@ if mode.startswith("run-"):
         Path("eof").touch()
         sys.exit(0)
 
+    if mode.startswith("run-selection-"):
+        reason = "Bash is excluded by this run's tool_choice"
+        turns = [index for index, entry in enumerate(frames) if entry["action"] == "submit"]
+        for run_index, (start, stop) in enumerate(zip(turns, turns[1:] + [len(frames)])):
+            assert select.select([sys.stdin], [], [], 5)[0], "missing user turn"
+            turn = json.loads(sys.stdin.readline())
+            expected = frames[start]["raw"]
+            assert turn == dict(expected, uuid=turn["uuid"])
+            observations = [entry["raw"] for entry in frames[start:stop] if entry["action"] == "observe"]
+
+            def observe(raw):
+                send(raw, expected["uuid"], turn["uuid"])
+
+            def control(subtype, reply):
+                request = next(raw for raw in observations if raw.get("request", {}).get("subtype") == subtype)
+                observe(request)
+                assert select.select([sys.stdin], [], [], 5)[0], "missing native policy reply"
+                assert json.loads(sys.stdin.readline()) == {"type": "control_response", "response": {
+                    "request_id": request["request_id"], "subtype": "success", "response": reply}}
+
+            denied_by_hook = run_index == 0 and mode == "run-selection-hook"
+            if denied_by_hook:
+                control("hook_callback", {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                        "permissionDecision": "deny", "permissionDecisionReason": reason}})
+            for raw in observations[:3]:
+                observe(raw)
+            wait_for_host(run_index)
+            if denied_by_hook:
+                result = next(raw for raw in observations if raw["type"] == "user")
+                result["message"]["content"][0].update(content=reason, is_error=True)
+                observe(result)
+            elif run_index == 0:
+                control("can_use_tool", {"behavior": "deny", "message": reason})
+            else:
+                control("hook_callback", {})
+                observe(next(raw for raw in observations if raw["type"] == "user"))
+            observe(next(raw for raw in observations if raw["type"] == "result"))
+        assert select.select([sys.stdin], [], [], 5)[0], "session did not close"
+        assert not sys.stdin.readline()
+        Path("eof").touch()
+        sys.exit(0)
+
     disconnect_cases = {"run-process-exit", "run-malformed",
                         "run-native-wins", "run-native-buffered", "run-aborted"}
     run_index = 0

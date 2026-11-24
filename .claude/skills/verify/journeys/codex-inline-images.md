@@ -1,13 +1,15 @@
 # Codex inline image prompts
 
-Follow the shared Verify setup. Build the Zig and Go hubs on the build host
-and run the same synthetic journey against each one. CI runs the same journey without credentials.
+Follow the shared Verify setup. Build all three hubs on the build host and run
+the same synthetic journey against each one. CI runs it without credentials.
 
 ```sh
 zig build --build-file zig/build.zig install -Doptimize=ReleaseSafe --prefix "$EVIDENCE/oxap"
 go build -o "$EVIDENCE/goap" ./go/cmd/goap
+cargo build --locked --manifest-path rust/Cargo.toml -p oxap-serve --bin oap-rust-hub
 python3 .claude/skills/verify/scripts/codex-inline-images.py "$EVIDENCE/oxap/bin/oxap"
 python3 .claude/skills/verify/scripts/codex-inline-images.py "$EVIDENCE/goap" --hub go
+python3 .claude/skills/verify/scripts/codex-inline-images.py rust/target/debug/oap-rust-hub --hub rust
 ```
 
 The stdio hub must use the app-server model catalog, preserve the order of the

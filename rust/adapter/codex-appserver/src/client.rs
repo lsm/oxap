@@ -4,7 +4,7 @@ use std::time::Instant;
 use crossbeam_channel::Receiver;
 use serde_json::value::RawValue;
 
-use crate::rpc::{Error, Inbound};
+use crate::rpc::{Error, Inbound, RequestId};
 
 pub trait Client: Send + Sync {
     fn call(
@@ -13,6 +13,19 @@ pub trait Client: Send + Sync {
         params: Box<RawValue>,
         deadline: Option<Instant>,
     ) -> Result<Box<RawValue>, Error>;
+
+    fn reserve_request_id(&self) -> RequestId {
+        RequestId::Integer(i64::MAX)
+    }
+
+    fn call_reserved(
+        &self,
+        _id: RequestId,
+        method: &str,
+        params: Box<RawValue>,
+    ) -> Result<Box<RawValue>, Error> {
+        self.call(method, params, None)
+    }
 
     fn inbound(&self) -> Receiver<Inbound>;
 

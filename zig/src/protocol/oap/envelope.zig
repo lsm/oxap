@@ -193,6 +193,14 @@ fn serializeSessionState(w: *json_writer.JsonWriter, state: oap_types.SessionSta
         try writeJsonValueOrString(w, metadata);
     }
     if (state.sources.len > 0) try serializeSources(w, state.sources);
+    if (state.context_usage) |usage| {
+        try w.writeKey("context_usage");
+        try w.beginObject();
+        try w.writeIntField("used_tokens", usage.used_tokens);
+        if (usage.window_tokens) |tokens| try w.writeIntField("window_tokens", tokens);
+        if (usage.compaction_threshold_tokens) |tokens| try w.writeIntField("compaction_threshold_tokens", tokens);
+        try w.endObject();
+    }
     if (state.reasoning_level) |level| try w.writeStringField("reasoning_level", level);
     if (state.compaction_policy_json) |policy| {
         try w.writeKey("compaction_policy");
@@ -1460,6 +1468,16 @@ fn deserializeSessionState(obj: std.json.ObjectMap, allocator: std.mem.Allocator
         state.recovery_reason = try optionalOwnedString(value.object, "reason", allocator);
     }
     if (obj.get("as_of")) |value| state.as_of = try deserializeSessionCapture(value, allocator);
+    if (obj.get("context_usage")) |value| {
+        if (value != .object) return DecodeError.InvalidField;
+        const used = (try optionalUnsigned(value.object, "used_tokens")) orelse return DecodeError.MissingField;
+        const window = try optionalUnsigned(value.object, "window_tokens");
+        const threshold = try optionalUnsigned(value.object, "compaction_threshold_tokens");
+        const max = oap_types.ContextUsage.max_tokens;
+        if (used > max or (window orelse 1) == 0 or (window orelse 1) > max or
+            (threshold orelse 1) == 0 or (threshold orelse 1) > max) return DecodeError.InvalidField;
+        state.context_usage = .{ .used_tokens = used, .window_tokens = window, .compaction_threshold_tokens = threshold };
+    }
     return state;
 }
 
