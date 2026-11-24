@@ -216,8 +216,17 @@ if mode.startswith("run-"):
                 assert select.select([sys.stdin], [], [], 5)[0], "missing drain barrier reply"
                 assert json.loads(sys.stdin.readline())["response"]["request_id"] == "barrier"
                 Path(f"deferred-{run_index}").touch()
+                if mode == "run-children-pending-eof":
+                    sys.exit(1)
+                if mode == "run-children-live-eof":
+                    wait_for_host(run_index)
+                    sys.exit(1)
+                if mode == "run-children-settled-eof":
+                    continue
                 wait_for_host(run_index)
             elif action == "wait-run":
+                if mode == "run-children-settled-eof":
+                    sys.exit(1)
                 run_index += 1
         assert select.select([sys.stdin], [], [], 5)[0], "session did not close"
         assert not sys.stdin.readline(), "extra native input"

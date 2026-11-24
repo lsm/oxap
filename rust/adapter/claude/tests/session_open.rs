@@ -470,6 +470,59 @@ fn claude_child_settlement_replays_deferred_runs() {
 }
 
 #[test]
+fn claude_child_settlement_requires_final_evidence_at_disconnect() {
+    for mode in [
+        "run-children-live-eof",
+        "run-children-pending-eof",
+        "run-children-settled-eof",
+    ] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let text = frames[2]["raw"]["message"]["content"].as_str().unwrap();
+        let mut submit = session.submit(text_submit(text));
+        if mode == "run-children-live-eof" {
+            let (_, stream) = block_on(submit).unwrap();
+            wait_for_peer(directory.path(), "deferred-0");
+            fs::write(directory.path().join("continue-0"), []).unwrap();
+            let events = block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[1].envelope_type.as_str(), "run.failed");
+            let payload = serde_json::to_value(&events[1]).unwrap();
+            assert_eq!(payload["payload"]["error"]["code"], "claude_process_exit");
+            assert_eq!(payload["payload"]["settled_by"], "inferred");
+        } else {
+            let mut context = Context::from_waker(futures::task::noop_waker_ref());
+            assert!(submit.as_mut().poll(&mut context).is_pending());
+            wait_until_closed(session.as_ref());
+            if mode == "run-children-pending-eof" {
+                assert!(matches!(block_on(submit), Err(Error::SessionClosed)));
+            } else {
+                let (admission, stream) = block_on(submit).unwrap();
+                let events = block_on(stream.collect::<Vec<_>>())
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_run_events(
+                    &admission,
+                    &events,
+                    &expected_run_events("background-children")[..2],
+                    mode,
+                );
+            }
+        }
+        block_on(session.close()).unwrap();
+        println!("PASS {mode}: the drain settled from available child evidence");
+    }
+}
+
+#[test]
 fn claude_tool_selection_replays_policy_denials() {
     for mode in ["run-selection-hook", "run-selection-gate"] {
         let (adapter, directory, frames) = fixture(mode);
