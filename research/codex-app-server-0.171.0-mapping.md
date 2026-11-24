@@ -38,8 +38,8 @@ the endpoint exited 0. It did not submit a prompt or exercise moderation.
 
 ## Inline image input
 
-Before binding a capability revision, the Zig and Go adapters read the native
-`model/list` catalog. The adapter uses the hub model setting, then the effective model from
+Before binding a capability revision, the Zig, Go and Rust adapters read
+the native `model/list` catalog. The adapter uses the hub model setting, then the effective model from
 Codex `config/read`, then the catalog's default. It enables the feature when the
 selected model's `inputModalities` includes `image`. The adapter uses the
 effective thread or per-turn model when admitting a submission. Absent catalog
@@ -55,5 +55,4 @@ with 1 MiB headroom under the 8 MiB native frame limit for echoed input.
 An unsupported model returns `unsupported_feature` before a native turn starts.
 
 The same synthetic stdio hub fixture checks native input order, capability
-revisions and pre-admission refusals on both binaries. The Rust adapter still
-needs these behaviors.
+revisions and pre-admission refusals on all three binaries.
