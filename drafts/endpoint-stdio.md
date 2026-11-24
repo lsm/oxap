@@ -78,6 +78,29 @@ OAP envelopes already correlate. This binding adds no transport id.
   before sending the next request, so an endpoint must not assume its input is
   synchronous with its output.
 
+## Retired 0.1 requests in OXAP 0.2
+
+A JSON object declaring `protocol: "open-agent-protocol"` and `version: "0.1"`
+is refused before profile routing or profile-specific payload decoding. A
+non-empty string `id` makes it correlatable even when its `profile` is absent,
+unknown, wrongly typed, or names a profile the binding does not serve. Without
+such an id, the existing framing rules for an envelope that cannot be answered
+apply.
+
+The response carries `protocol: "oxap"`, `version: "0.2"`, a fresh response id,
+and `in_reply_to` equal to the retired request's id. Its
+`payload.error.code` is `unsupported_version`. Agent Control uses profile
+`oxap.agent-control-core` and type `error.response`. Model Provider uses
+`oxap.model-provider-core` and type `error`, and its payload also carries
+`protocol_versions: ["0.2"]`.
+
+A single-profile binding answers in its own current profile. On a composed
+connection, either the retired or current spelling of a served profile selects
+the corresponding current response profile. An absent or unrecognized profile
+uses [Decision 0027](../decisions/0027-composed-stdio-profiles.md)'s
+agent-control fallback, but the code remains `unsupported_version` because the
+retired-wire check comes first. This refusal keeps the connection open.
+
 ## Ordering
 
 One pipe carries answers and events interleaved, so the binding promises only

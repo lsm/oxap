@@ -53,7 +53,11 @@ correlated agent-control `error.response`, code `invalid_request`, and
 `details.feature: "profile"`; it keeps the connection open. This fallback is
 for malformed input only and never changes routing of a valid provider
 request. Invalid JSON, overlong lines, or an envelope without an addressable
-`id` retain the binding's fatal framing behavior.
+`id` retain the binding's fatal framing behavior. In 0.2,
+[Decision 0070](0070-one-server-with-agent-provider-and-hub-services.md)'s
+retired-wire check precedes this profile refusal: the exact retired pair gets
+`unsupported_version`, while an absent or unknown profile still selects the
+agent-control fallback.
 
 EOF, signals, and output failure close the **one process**, not an arbitrary
 profile. On shutdown each handler follows its existing settlement rule for

@@ -104,6 +104,25 @@ before Hub ships. The Agent and Provider cutover can ship independently in
   request cannot be correlated. Preserve capability revision pins, native
   harness identifiers, and release artifacts.
 
+### Retired-wire errors use the current envelope
+
+The retired wire is the pair `protocol: "open-agent-protocol"` and
+`version: "0.1"`. A 0.2 server checks that pair before profile routing or
+profile-specific payload decoding. Its refusal is a 0.2 message: wherever the
+binding returns an envelope, that envelope carries `protocol: "oxap"`,
+`version: "0.2"`, and a fresh response id. It does not echo the retired
+protocol identity or version.
+
+Profile validity does not decide whether a retired request is correlatable. On
+raw stdio and HTTP, a non-empty string request `id` is sufficient even when the
+`profile` is absent, unknown, or wrong; the response's `in_reply_to` repeats
+that id exactly. A request without such an id follows the binding's existing
+framing or decode-error rules. Multi-session stdio instead correlates on its
+valid outer transport id, so the nested envelope does not need an id. The
+response profile and exact wire shape are defined by the [raw stdio binding](../drafts/endpoint-stdio.md#retired-01-requests-in-oxap-02),
+the [Agent Service binding](../drafts/agent-service.md#retired-01-requests-in-oxap-02),
+and the [provider HTTP binding](../drafts/provider-http.md#retired-01-requests-in-oxap-02).
+
 ## Consequences
 
 - Decision 0038's multi-session daemon becomes the Agent Service, reachable
