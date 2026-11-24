@@ -417,12 +417,14 @@ fn claude_permission_gates_replay_corpus() {
     open.participant.id = "operator".into();
     let session = block_on(adapter.open(open.clone())).unwrap();
     let expected = expected_run_events("permission-gates");
+    assert_eq!(expected.len(), 18);
     for ((index, expected), frame) in expected
         .chunks(9)
         .enumerate()
         .zip(frames.iter().filter(|frame| frame["action"] == "submit"))
     {
-        let submit = text_submit(frame["raw"]["message"]["content"].as_str().unwrap());
+        let mut submit = text_submit(frame["raw"]["message"]["content"].as_str().unwrap());
+        submit.request.delivery = RequestedDeliveryMode::AUTO;
         let (admission, mut stream) = block_on(session.submit(submit.clone())).unwrap();
         fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
         let mut events = Vec::new();
@@ -445,6 +447,9 @@ fn claude_permission_gates_replay_corpus() {
         let waiting = block_on(stream.next()).unwrap().unwrap();
         assert_eq!(waiting.envelope_type.as_str(), "run.status.updated");
         events.push(waiting);
+        let state = block_on(session.state()).unwrap();
+        assert_eq!(state.status.as_str(), "waiting_for_input");
+        assert_eq!(state.active_runs[0].status.as_str(), "waiting_for_input");
         let mut answer = InteractionResolution {
             run_id: gate.run_id.clone(),
             responded_by: "bystander".into(),
@@ -473,6 +478,19 @@ fn claude_permission_gates_replay_corpus() {
         );
         answer.input.as_mut().unwrap().answers[0].selected_option_ids =
             vec![if index == 0 { "allow" } else { "deny" }.into()];
+        let mut unnamed = answer.clone();
+        unnamed.responded_by = Default::default();
+        unnamed.input.as_mut().unwrap().responded_by = Default::default();
+        assert_eq!(
+            block_on(session.resolve(unnamed)),
+            Err(Error::WrongResponder)
+        );
+        let mut foreign = answer.clone();
+        foreign.input.as_mut().unwrap().run_id = "another-run".into();
+        assert_eq!(
+            block_on(session.resolve(foreign)),
+            Err(Error::InvalidResolution)
+        );
         block_on(session.resolve(answer.clone())).unwrap();
         assert_eq!(
             block_on(session.resolve(answer)),

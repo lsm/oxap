@@ -25,6 +25,10 @@ Rust adapter reports `unavailable` and refuses `tool_choice` at submit until
 it can enforce choices through those controls. Served parity for this feature
 requires the Rust enforcement path.
 
+Rust requires an explicit responder matching the opening participant on a
+permission decision and rejects conflicting responder fields. Go permits
+an omitted responder at the adapter boundary.
+
 Go accepts a matching `user_message_uuid` or `user_message_uuids` marker as
 admission evidence on child and injected observations. Rust requires evidence
 from the main turn because a matching marker alone does not distinguish

@@ -82,7 +82,7 @@ if mode.startswith("run-"):
                 native_uuid if marker == corpus_uuid else marker
                 for marker in raw["user_message_uuids"]
             ]
-        print(json.dumps(raw), flush=True)
+        print(json.dumps(raw, separators=(",", ":")), flush=True)
 
     def wait_for_host(index):
         deadline = time.monotonic() + 5

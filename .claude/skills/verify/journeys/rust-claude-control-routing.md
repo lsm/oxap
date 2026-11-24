@@ -15,7 +15,6 @@ The first callback continues with an empty reply. The other two receive errors.
 The peer then sends a matching turn marker, a permission ask, the matching
 terminal, and another ask. A reverse-control reply confirms the reader
 processed the prefix while submit was paused. After submit resumes, require
-the two buffered asks to be refused in order, the first for unavailable
-permission handling in the owned run and the second for lack of an owned
-run. The public stream contains only `run.started` and `run.completed`, and
-the peer sees EOF after close.
+the owned ask to be published and cancelled before the buffered run terminal.
+The second ask receives an error for lack of an owned run. The peer sees
+exactly one reply per ask, in order, then EOF after close.
