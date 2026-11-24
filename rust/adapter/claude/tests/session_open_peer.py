@@ -90,6 +90,56 @@ if mode.startswith("run-"):
             assert time.monotonic() < deadline, "caller never received admission"
             time.sleep(0.01)
 
+    if mode.startswith("run-interrupt-"):
+        _, _, submit, *rest = frames
+        assert select.select([sys.stdin], [], [], 5)[0], "missing user turn"
+        turn = json.loads(sys.stdin.readline())
+        assert turn == dict(submit["raw"], uuid=turn["uuid"])
+
+        def observe(raw):
+            send(raw, submit["raw"]["uuid"], turn["uuid"])
+
+        for entry in rest[:3]:
+            observe(entry["raw"])
+        assert select.select([sys.stdin], [], [], 5)[0], "missing interrupt"
+        line = sys.stdin.readline()
+        request = json.loads(line)
+        expected = {"request": {"subtype": "interrupt"},
+                    "request_id": request["request_id"], "type": "control_request"}
+        assert line == json.dumps(expected, separators=(",", ":")) + "\n"
+        Path("interrupt-observed").touch()
+        wait_for_host(0)
+        receipt, note, result = (entry["raw"] for entry in rest[4:7])
+        receipt["response"]["request_id"] = request["request_id"]
+        if mode == "run-interrupt-completion":
+            result = dict(result, subtype="success", is_error=False, result="done",
+                          terminal_reason="completed", errors=[])
+        if mode == "run-interrupt-refused":
+            receipt["response"] = {"subtype": "error", "request_id": request["request_id"],
+                                   "error": "interrupt refused"}
+        if mode == "run-interrupt-malformed":
+            receipt["response"]["response"] = {"still_queued": 1}
+        terminal_first = mode in {"run-interrupt-completion", "run-interrupt-terminal-first",
+                                  "run-interrupt-no-receipt"}
+        if terminal_first:
+            observe(note)
+            observe(result)
+            if mode == "run-interrupt-no-receipt":
+                sys.exit(1)
+            Path("terminal-sent").touch()
+            wait_for_host(1)
+        print(json.dumps(receipt), flush=True)
+        if not terminal_first:
+            if mode == "run-interrupt-held":
+                wait_for_host(1)
+            observe(note)
+            observe(result)
+        observe(result)
+        assert select.select([sys.stdin], [], [], 5)[0], "session did not close"
+        assert not sys.stdin.readline(), "unexpected second interrupt or next turn"
+        Path("eof").touch()
+        sys.exit(0)
+
     disconnect_cases = {"run-process-exit", "run-malformed",
                         "run-native-wins", "run-native-buffered", "run-aborted"}
     run_index = 0
