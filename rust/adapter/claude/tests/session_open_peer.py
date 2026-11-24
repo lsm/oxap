@@ -152,6 +152,8 @@ if mode.startswith("run-"):
             assert turn == dict(raw, uuid=native_uuid)
             buffered = []
         elif action == "observe":
+            if mode.startswith("run-tools") and raw["type"] == "control_request":
+                continue
             if mode == "run-buffered" and raw.get("event", {}).get("type") == "message_start":
                 buffered.append(raw)
                 continue

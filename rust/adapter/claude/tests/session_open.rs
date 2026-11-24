@@ -39,6 +39,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-settlement" => "settlement-statuses/native.jsonl",
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
+        mode if mode.starts_with("run-tools") => "tool-lifecycle/native.jsonl",
         mode if mode.starts_with("run-interrupt-") => "interrupt-cancel/native.jsonl",
         "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
             "hygiene-recovery/native.jsonl"
@@ -338,54 +339,70 @@ fn claude_run_replays_streaming_and_settlement() {
         ("run-settlement", "settlement-statuses"),
         ("run-hygiene", "hygiene-recovery"),
     ] {
-        let (adapter, directory, frames) = fixture(mode);
-        let session = block_on(adapter.open(OpenRequest {
-            session_id: "session".into(),
-            ..Default::default()
-        }))
-        .unwrap();
-        let expected = expected_run_events(case);
-        let runs: Vec<_> = expected
-            .split_inclusive(|event| {
-                matches!(event["type"].as_str(), Some("run.completed" | "run.failed"))
-            })
-            .collect();
-        for (index, (expected, frame)) in runs
-            .iter()
-            .zip(frames.iter().filter(|frame| frame["action"] == "submit"))
-            .enumerate()
-        {
-            let text = frame["raw"]["message"]["content"].as_str().unwrap();
-            let (admission, stream) = block_on(session.submit(text_submit(text))).unwrap();
-            if mode == "run-streaming" {
-                let running = block_on(session.state()).unwrap();
-                assert_eq!(running.transcript_cursor, "1");
-            }
-            fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
-            let actual: Vec<_> = block_on(stream.collect::<Vec<_>>())
-                .into_iter()
-                .collect::<Result<Vec<Envelope>, _>>()
-                .unwrap();
-            assert_run_events(
-                &admission,
-                &actual,
-                expected,
-                &format!("{mode} run {index}"),
-            );
-            let idle = block_on(session.state()).unwrap();
-            assert_eq!(idle.status.as_str(), "idle");
-            assert!(idle.active_run_id.is_none());
-            assert!(idle.active_runs.is_empty());
-            assert_eq!(idle.transcript_cursor, expected.len().to_string());
-        }
-        block_on(session.close()).unwrap();
-        assert!(directory.path().join("eof").is_file());
-        println!(
-            "PASS {mode}: {} runs and {} corpus envelopes",
-            runs.len(),
-            expected.len()
-        );
+        replay_run_events(mode, case);
     }
+}
+
+#[test]
+fn claude_tools_replay_corpus() {
+    replay_run_events("run-tools", "tool-lifecycle");
+}
+
+fn replay_run_events(mode: &str, case: &str) {
+    let (adapter, directory, frames) = fixture(mode);
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let expected = expected_run_events(case);
+    let runs: Vec<_> = expected
+        .split_inclusive(|event| {
+            matches!(event["type"].as_str(), Some("run.completed" | "run.failed"))
+        })
+        .collect();
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|frame| frame["action"] == "submit")
+            .count(),
+        runs.len()
+    );
+    for (index, (expected, frame)) in runs
+        .iter()
+        .zip(frames.iter().filter(|frame| frame["action"] == "submit"))
+        .enumerate()
+    {
+        let text = frame["raw"]["message"]["content"].as_str().unwrap();
+        let (admission, stream) = block_on(session.submit(text_submit(text))).unwrap();
+        if mode == "run-streaming" {
+            let running = block_on(session.state()).unwrap();
+            assert_eq!(running.transcript_cursor, "1");
+        }
+        fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+        let actual: Vec<_> = block_on(stream.collect::<Vec<_>>())
+            .into_iter()
+            .collect::<Result<Vec<Envelope>, _>>()
+            .unwrap();
+        assert_run_events(
+            &admission,
+            &actual,
+            expected,
+            &format!("{mode} run {index}"),
+        );
+        let idle = block_on(session.state()).unwrap();
+        assert_eq!(idle.status.as_str(), "idle");
+        assert!(idle.active_run_id.is_none());
+        assert!(idle.active_runs.is_empty());
+        assert_eq!(idle.transcript_cursor, expected.len().to_string());
+    }
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    println!(
+        "PASS {mode}: {} runs and {} corpus envelopes",
+        runs.len(),
+        expected.len()
+    );
 }
 
 #[test]
@@ -664,8 +681,30 @@ fn assert_run_events(
             .collect::<Vec<_>>(),
         "{label}"
     );
+    let mut event_ids = std::collections::HashMap::<String, Value>::new();
+    let mut tool_ids = std::collections::HashMap::new();
     for (event, expected) in actual.iter().zip(expected) {
         let mut event = serde_json::to_value(event).unwrap();
+        if !event["in_reply_to"].is_null() {
+            event["in_reply_to"] = event_ids[event["in_reply_to"].as_str().unwrap()].clone();
+        }
+        assert!(event_ids
+            .insert(
+                event["id"].as_str().unwrap().to_owned(),
+                expected["id"].clone()
+            )
+            .is_none());
+        if let Some(id) = event["tool_call_id"].as_str() {
+            assert_eq!(event["payload"]["tool_call_id"], id);
+            if event["type"] == "action.call.requested" {
+                assert!(tool_ids
+                    .insert(id.to_owned(), expected["tool_call_id"].clone())
+                    .is_none());
+            }
+            let normalized = tool_ids[id].clone();
+            event["tool_call_id"] = normalized.clone();
+            event["payload"]["tool_call_id"] = normalized;
+        }
         assert_eq!(event["run_id"], admission.run_id.as_ref().unwrap().as_str());
         assert_eq!(event["payload"]["run_id"], event["run_id"]);
         let message = &event["payload"]["message_id"];
