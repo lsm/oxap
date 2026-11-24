@@ -37,6 +37,7 @@ vocabulary!(ReasoningLevel {
     HIGH = "high",
     XHIGH = "xhigh",
     MAX = "max",
+    ULTRA = "ultra",
 });
 
 vocabulary!(CompactionKind {

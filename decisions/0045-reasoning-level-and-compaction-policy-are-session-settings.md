@@ -97,7 +97,8 @@ with `unsupported_feature`, `details.feature` naming the key and
 
 `reasoning_level` is a `reasoningLevel` from `provider.schema.json`. That
 enum gains `max`, after `xhigh`. Codex, Claude Code, Pi, Hermes and `oapx` all
-define a level above `xhigh`, and the shared enum has no value for it.
+define a level above `xhigh`. The enum also includes `ultra`, which maps
+to a native `ultra` where the harness supports it, as Codex does.
 
 `compaction_policy` is an object with one required member, `kind`:
 
@@ -248,8 +249,8 @@ additionally requires `session_live` for both.
 Decision 0003's gate applies in full. The validator gains, at least:
 
 - the new envelope pair in the envelope `oneOf`, the two open members, the two
-  state members, and the `max` value, with matching edits to `protocol/`, the
-  validator, fixtures and `clients/ts/src/protocol.ts`;
+  state members, and the `max` and `ultra` values, with matching edits to
+  `protocol/`, the validator, fixtures and `clients/ts/src/protocol.ts`;
 - that an update response repeats the effective value of each member the
   request named, and that `session.state.updated` follows a successful update
   before any run admitted after the response starts;
@@ -295,9 +296,10 @@ What the table settles:
     `compaction-basic` plugin.
 - **The level vocabularies are wider than OAP's.** Codex adds `ultra` and
   `persistent`, Hermes adds `ultra`, and the DeepSeek harness and OpenCode use
-  model-defined names. OAP carries the seven shared values. A harness with
-  more maps the extra ones to no OAP value. A harness with model-defined names
-  maps through the model's catalog entry, and refuses a level it cannot map.
+  model-defined names. OAP carries eight shared values, including `ultra`.
+  Other extra native levels, such as `persistent`, have no OAP mapping. A
+  harness with model-defined names maps through the model's catalog entry,
+  and refuses a level it cannot map.
 
 The graduating implementations are **Claude Code**, the one harness that
 changes both settings live, and **`oapx`'s endpoint**, which needs this
@@ -340,6 +342,6 @@ entries can carry both settings on the wire rather than through each harness's
 launch flags. `oapx tui` stops refusing a thinking-level change, and its
 `/autocompact` starts reaching the endpoint instead of silently doing nothing.
 
-The cost is one request pair, two open members, two state members and one enum
-value. The ordering, the degraded gate, the catalog check and the reporting
+The cost is one request pair, two open members, two state members and two enum
+values. The ordering, the degraded gate, the catalog check and the reporting
 rule are all borrowed from Decisions 0028, 0035 and 0040.

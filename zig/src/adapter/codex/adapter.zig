@@ -1029,6 +1029,7 @@ const efforts = [_]struct { level: []const u8, effort: []const u8 }{
     .{ .level = "high", .effort = "high" },
     .{ .level = "xhigh", .effort = "xhigh" },
     .{ .level = "max", .effort = "max" },
+    .{ .level = "ultra", .effort = "ultra" },
 };
 
 fn effortFor(level: []const u8) ?[]const u8 {
