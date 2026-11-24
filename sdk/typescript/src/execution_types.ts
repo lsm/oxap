@@ -1,4 +1,4 @@
-import type { ApiId, ProviderId } from "./models_types";
+import type { ApiId, ProviderId, ReasoningLevel } from "./models_types";
 import type { AuthFlowHandlers } from "./auth_protocol";
 import type { TimeoutDiagnostics } from "./timeout_diagnostics";
 import type { MakaiLogger } from "./logger";
@@ -72,7 +72,7 @@ export interface ToolDefinition {
 export interface RunOptions {
   temperature?: number;
   max_tokens?: number;
-  reasoning_effort?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+  reasoning_effort?: ReasoningLevel;
   auth_retry_policy?: AuthRetryPolicy;
   session_id?: string;
   metadata?: Record<string, string>;

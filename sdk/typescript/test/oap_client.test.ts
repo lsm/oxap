@@ -68,8 +68,8 @@ test("agent tools and settings travel over OAP, and temperature and provider cal
     await client.agent.run({ ...tuned, tools: [], options: { session_id: "tuned", reasoning_effort: "high" } });
     await assert.rejects(() => client.agent.run({ ...tuned, options: { session_id: "tuned", max_tokens: 64 } }),
       (error: unknown) => error instanceof OapUnsupportedFeatureError);
-    const settings = await client.agent.run({ model_ref: "fixture/openai-responses@settings", messages: [{ role: "user", content: "hello" }], options: { max_tokens: 32, reasoning_effort: "high" } });
-    assert.equal(settings.message.content, "reasoning=high output=32 user_input=false participant=sdk");
+    const settings = await client.agent.run({ model_ref: "fixture/openai-responses@settings", messages: [{ role: "user", content: "hello" }], options: { max_tokens: 32, reasoning_effort: "ultra" } });
+    assert.equal(settings.message.content, "reasoning=ultra output=32 user_input=false participant=sdk");
     await assert.rejects(() => client.agent.run({ model_ref: "fixture/openai-responses@settings", messages: [{ role: "user", content: "hello" }], options: { max_tokens: 0 } }),
       (error: unknown) => error instanceof Error && (error as { code?: string }).code === "invalid_request");
     await assert.rejects(() => client.agent.run({ model_ref: "fixture/openai-responses@settings", messages: [{ role: "user", content: "hello" }], options: { reasoning_effort: "minimal" } }),

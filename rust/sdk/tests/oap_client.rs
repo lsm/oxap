@@ -6,7 +6,7 @@ use oxap_sdk::{
     AuthEvent, AuthHandlers, AuthRetryPolicy, AuthStatus, ChatMessage, ClientBuilder, Content,
     ContentPart, Error, ExecutionRequest, ListModelsRequest, Role, Tool,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[tokio::test]
 async fn combined_oap_connection_runs_both_profiles() {
@@ -22,6 +22,10 @@ async fn combined_oap_connection_runs_both_profiles() {
         .await
         .expect("models");
     assert_eq!(listed.models[0].model_ref, "fixture/openai-responses@mock");
+    assert_eq!(
+        listed.models[0].reasoning_default,
+        Some(oxap_sdk::ReasoningLevel::Ultra)
+    );
     let request = ExecutionRequest::prompt("fixture/openai-responses@mock", "hello");
     let provider = client
         .provider()
@@ -283,11 +287,11 @@ async fn agent_tools_and_settings_travel_over_oap_and_temperature_is_refused() {
     assert_eq!(*calls.lock().expect("lock"), 1);
     let mut configured =
         ExecutionRequest::prompt("fixture/openai-responses@settings", "hello").with_max_tokens(32);
-    configured.options.reasoning_effort = Some(oxap_sdk::ReasoningEffort::High);
+    configured.options.reasoning_effort = Some(oxap_sdk::ReasoningEffort::Ultra);
     let settings = client.agent().run(configured).await.expect("settings run");
     assert_eq!(
         settings.text(),
-        "reasoning=\"high\" output=32 user_input=false participant=\"rust-sdk\""
+        "reasoning=\"ultra\" output=32 user_input=false participant=\"rust-sdk\""
     );
     let zero =
         ExecutionRequest::prompt("fixture/openai-responses@settings", "hello").with_max_tokens(0);

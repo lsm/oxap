@@ -20,3 +20,18 @@ exit. Zig CI runs the same journey without authentication or provider calls.
 
 Both valid traces must exit 0. The unknown-level trace must exit nonzero
 with `schema_invalid`.
+
+The SDK wire fixtures in CI must carry `ultra` from public run options into
+`session.open.request` and preserve `ultra` received in model metadata. Run
+the focused SDK consumers on the build host:
+
+```sh
+go test ./go/sdk -run '^TestOAPCombinedFakeHost$'
+npm run build:sdk
+node --test dist/test/oap_client.test.js dist/test/model_facts.test.js
+PYTHONPATH=sdk/python/src python3 sdk/python/tests/test_oap_wire.py OAPWireTests.test_combined_profile_models_provider_and_agent
+cargo test --locked --manifest-path rust/Cargo.toml -p oxap-sdk --test oap_client
+```
+
+Use an isolated test environment with no provider credentials. The SDK
+fixtures echo the chosen level or publish it in catalog metadata.

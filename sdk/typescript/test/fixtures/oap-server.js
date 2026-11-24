@@ -35,7 +35,7 @@ const SUPPORTED_AUTH = new Set([
 ]);
 
 function fixtureModel() {
-  const model = { model_ref: "fixture/openai-responses@mock", model_id: "mock", provider_id: "fixture", wire: "openai-responses", capabilities: ["chat", "streaming"], lifecycle: "stable", source: "discovered", auth_status: "authenticated", cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 }, input_modalities: ["text", "image"], reasoning_levels: ["off", "medium", "high"], release_date: "2025-09-29", family: "mock-family" };
+  const model = { model_ref: "fixture/openai-responses@mock", model_id: "mock", provider_id: "fixture", wire: "openai-responses", capabilities: ["chat", "streaming"], lifecycle: "stable", source: "discovered", auth_status: "authenticated", cost: { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 }, input_modalities: ["text", "image"], reasoning_levels: ["off", "medium", "high", "ultra"], release_date: "2025-09-29", family: "mock-family" };
   switch (process.env.OAP_FIXTURE_SOURCE) {
     case "absent": delete model.source; break;
     case "null": model.source = null; break;

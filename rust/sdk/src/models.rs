@@ -135,6 +135,7 @@ pub enum ReasoningLevel {
     Medium,
     High,
     Xhigh,
+    Ultra,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
