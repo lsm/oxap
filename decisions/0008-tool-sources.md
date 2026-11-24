@@ -5,13 +5,16 @@ executable with Claude and ACP evidence. T3c control-layer tools stays staged as
 a named deferral, now carried by
 [Decision 0011](0011-control-layer-provided-tools.md), which discharged it and
 was accepted 2026-09-17 once the reference and Makai adapters both executed the
-unit)
+unit). Staged amendment in #2014 for one-time credential references and
+adapter-private headers.
 Date: 2026-09-16
 Protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
 Unit: `tool-sources` (claim term `+tool-sources`; plan sub-units T3a and T3b)
 Extends: [Decision 0001](0001-agent-control-v0.1-executable-core.md) and
 [Decision 0002](0002-admission-before-start.md) without amending either
+Amends: [the agent-service trust model](../drafts/agent-service.md#the-trust-model)
+for stdio attachment admission when the staged amendment is implemented
 Gated by: [Decision 0003](0003-staged-unit-graduation.md)
 Design: [Staged Units Graduation Plan](../drafts/staged-units-graduation.md),
 section "T3. Tool sources and control-layer tools"

@@ -14,12 +14,16 @@ reopen unavailable because its pinned wire reaches no store (#892), and `oapx
 serve agent` refuses it (#862). The binding is a host record with a file store
 that refuses a torn line (#479), `goap hub` and `oapx hub` write and read the
 same file (#893), and a record carries the reasoning level and compaction
-policy the open asked for. The session list stays with T8)
+policy the open asked for. The session list stays with T8). Staged amendment
+in #2014 for capability-backed reopen and idle wake.
 Date: 2026-09-28
 Protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
 Unit: `session-reattach` (plan sub-unit T7)
-Amends: nothing. Executes the `session-reattach` unit
+Amends: [agent-service parking](../drafts/agent-service.md#parking)
+and [event-driven loop parking](../drafts/event-driven-loop.md#two-levels-of-parking)
+for capability-backed attachments when the staged amendment is implemented
+Executes: the `session-reattach` unit
 [Decision 0039](0039-a-session-is-oaps-and-a-harness-is-where-it-runs.md)
 staged as T7, and its T7 section, and adds the reopen half to
 [Decision 0001](0001-agent-control-v0.1-executable-core.md)'s
@@ -197,11 +201,13 @@ keeps it.
 This staged amendment governs hubs that implement the capability-backed
 attachments in [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
 
-An external explicit reopen must supply exactly the source IDs recorded on
-create, with a fresh `credential_ref` for each ID. An omitted source list for
-a binding with sources, a removed, added, or replaced ID, or a duplicate ID
-refuses the reopen. An empty source list matches a binding with no sources.
-The hub resolves a new capability file for each requested source under
+An external explicit reopen using the capability-backed path must supply
+exactly the source IDs recorded on create, with a fresh `credential_ref` for
+each ID using that path. A binding created without capability-backed
+attachments continues to reopen under the existing rules, including registry
+lookup by ID for operator-configured sources. For a capability-backed reopen,
+an omitted source list or a removed, added, replaced, or duplicate ID refuses
+the reopen. Each capability-backed source needs a new file resolved under
 [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
 A missing, invalid, cross-session, or replayed reference or an unavailable
 source refuses the reopen. Source-set mismatches use the same
