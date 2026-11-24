@@ -590,6 +590,12 @@ type SessionProviderAttachResponse struct {
 	ProviderID string    `json:"provider_id"`
 }
 
+type ContextUsage struct {
+	UsedTokens                uint64  `json:"used_tokens"`
+	WindowTokens              *uint64 `json:"window_tokens,omitempty"`
+	CompactionThresholdTokens *uint64 `json:"compaction_threshold_tokens,omitempty"`
+}
+
 type SessionState struct {
 	SessionID        SessionID                  `json:"session_id"`
 	Status           SessionStatus              `json:"status"`
@@ -604,6 +610,7 @@ type SessionState struct {
 	Sources          []ToolSourceDescriptor     `json:"sources,omitempty"`
 	Recovery         *RecoveryMetadata          `json:"recovery,omitempty"`
 	AsOf             *SessionCapture            `json:"as_of,omitempty"`
+	ContextUsage     *ContextUsage              `json:"context_usage,omitempty"`
 	ReasoningLevel   ReasoningLevel             `json:"reasoning_level,omitempty"`
 	CompactionPolicy *CompactionPolicy          `json:"compaction_policy,omitempty"`
 }

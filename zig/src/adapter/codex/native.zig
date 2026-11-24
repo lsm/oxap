@@ -130,11 +130,15 @@ const token_usage_notification_fields = [_]Field{
 pub const token_usage_notification: Shape = .{ .object = &token_usage_notification_fields };
 
 pub fn count(value: std.json.Value, path: []const []const u8) u64 {
-    const found = pointer(value, path) orelse return 0;
+    return optionalCount(value, path) orelse 0;
+}
+
+pub fn optionalCount(value: std.json.Value, path: []const []const u8) ?u64 {
+    const found = pointer(value, path) orelse return null;
     return switch (found) {
-        .integer => |number| if (number < 0) 0 else @intCast(number),
-        .number_string => |literal| std.fmt.parseInt(u64, literal, 10) catch 0,
-        else => 0,
+        .integer => |number| std.math.cast(u64, number),
+        .number_string => |literal| std.fmt.parseInt(u64, literal, 10) catch null,
+        else => null,
     };
 }
 

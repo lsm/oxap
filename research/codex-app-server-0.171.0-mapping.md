@@ -75,3 +75,14 @@ are available as Codex sends them. A V2 `wait` can report completion with no
 receivers or agent states. OAP tool call IDs are generated separately.
 The credential-free stdio hub replay covers these projections on all three
 adapters.
+
+## Live context usage in Zig
+
+`thread/tokenUsage/updated` reports the latest call's
+`tokenUsage.last.totalTokens` and optional `modelContextWindow`. The Zig
+adapter projects these into session state, including the usage replay on
+`thread/resume`. The start of a `contextCompaction` item invalidates the sample.
+Codex recomputes usage before completing the item, so completion keeps fresh
+usage. The notification has no effective compaction threshold. Codex can clamp
+the configured limit and can count a different portion of context against it,
+so this adapter leaves the marker absent.
