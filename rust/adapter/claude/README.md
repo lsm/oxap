@@ -127,6 +127,10 @@ interrupt. Completion and failure return the corresponding terminal error.
 Hosts can set a deadline by dropping the submit future and closing the
 retired session.
 Per-run tool selection is unavailable until permission handling can enforce it.
+A registered PreToolUse hook receives the native continuation response.
+After a pending turn is corroborated, permission asks and observations are
+replayed in arrival order. Permission asks still receive an error while
+interactive resolution is unavailable.
 
 Each session keeps a bounded in-memory journal of its sequenced run events.
 Resume replays the retained suffix after a run's cursor and follows a live run

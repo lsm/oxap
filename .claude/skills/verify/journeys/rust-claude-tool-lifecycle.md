@@ -11,7 +11,7 @@ Require exit 0 and both public Session scenarios. The credential-free CLI
 peer sends the catalog-selected `tool-lifecycle` observations. Compare all
 15 corpus envelopes across three turns, including call identity, reply links,
 arguments, built-in attribution, successful results and tool failure.
-The peer omits policy hooks, which belong to the permission slices.
+Check the registered PreToolUse callbacks receive empty continuation replies.
 
 The second scenario checks ordered cancellation of unfinished calls before
 the run terminal, ignores child, injected and prior-turn results, retains a

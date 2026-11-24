@@ -24,8 +24,10 @@ use serde_json::value::to_raw_value;
 use crate::{
     adapter::{native_uuid, pin, ENDPOINT_ID},
     catalog::Catalog,
-    native::{self, Observation},
-    rpc::{ClientError, Inbound, ObservationMessage, Process, DEFAULT_QUEUE_CAPACITY},
+    native::{self, ControlRequest, Observation},
+    rpc::{
+        ClientError, Inbound, IncomingControl, ObservationMessage, Process, DEFAULT_QUEUE_CAPACITY,
+    },
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
@@ -60,14 +62,18 @@ struct PendingTurn {
     uuid: String,
     model: String,
     corroborated: Option<oneshot::Sender<()>>,
-    buffered: Vec<(Observation, bool)>,
+    buffered: Vec<TurnFrame>,
+}
+
+enum TurnFrame {
+    Observation(Observation, bool),
+    Permission(Arc<IncomingControl>),
 }
 
 impl PendingTurn {
     fn has_terminal(&self) -> bool {
-        self.buffered.iter().any(|(observation, corroborates)| {
-            *corroborates
-                && matches!(observation, Observation::Result(frame) if settles_turn(frame))
+        self.buffered.iter().any(|entry| {
+            matches!(entry, TurnFrame::Observation(Observation::Result(frame), true) if settles_turn(frame))
         })
     }
 }
@@ -165,6 +171,48 @@ impl SessionData {
         }
     }
 
+    fn route_control(&mut self, control: Arc<IncomingControl>) {
+        let deadline = Some(Instant::now() + RPC_TIMEOUT);
+        let rejection = match &control.value {
+            ControlRequest::HookCallback(hook)
+                if hook.callback_id == native::TOOL_SELECTION_HOOK
+                    && hook.input.hook_event_name == native::HOOK_PRE_TOOL_USE =>
+            {
+                let _ = control.respond(None, deadline);
+                return;
+            }
+            ControlRequest::HookCallback(_) => "claude adapter: unregistered hook callback",
+            ControlRequest::CanUseTool(_) => {
+                if let Some(turn) = self
+                    .pending
+                    .as_mut()
+                    .filter(|turn| turn.corroborated.is_none())
+                {
+                    if turn.buffered.len() == DEFAULT_QUEUE_CAPACITY {
+                        "claude adapter: permission control queue full"
+                    } else {
+                        turn.buffered.push(TurnFrame::Permission(control));
+                        return;
+                    }
+                } else {
+                    self.apply_permission(&control);
+                    return;
+                }
+            }
+            _ => "claude adapter: no owned run",
+        };
+        let _ = control.respond_error(rejection, deadline);
+    }
+
+    fn apply_permission(&self, control: &IncomingControl) {
+        let rejection = if self.active.is_some() && !self.interrupt_has_terminal() {
+            "claude adapter: permission gate unavailable"
+        } else {
+            "claude adapter: permission ask outside an owned run"
+        };
+        let _ = control.respond_error(rejection, Some(Instant::now() + RPC_TIMEOUT));
+    }
+
     fn observe(&mut self, observation: ObservationMessage, runtime: &Runtime) {
         if let Some(turn) = &mut self.pending {
             let Some(corroborates) = Echo::corroborates(&observation, &turn.uuid) else {
@@ -180,7 +228,8 @@ impl SessionData {
                 }
                 return;
             }
-            turn.buffered.push((observation.value, corroborates));
+            turn.buffered
+                .push(TurnFrame::Observation(observation.value, corroborates));
             if corroborates {
                 if let Some(signal) = turn.corroborated.take() {
                     let _ = signal.send(());
@@ -501,8 +550,13 @@ impl SessionData {
             cancel_accepted: false,
             tools: Vec::new(),
         });
-        for (observation, corroborates) in turn.buffered {
-            self.apply(observation, corroborates, runtime);
+        for entry in turn.buffered {
+            match entry {
+                TurnFrame::Observation(frame, corroborates) => {
+                    self.apply(frame, corroborates, runtime)
+                }
+                TurnFrame::Permission(control) => self.apply_permission(&control),
+            }
         }
         Ok((
             MessageSubmitResponse {
@@ -701,8 +755,7 @@ impl OpenedSession {
                             state.lock().unwrap().observe(observation, &runtime);
                         }
                         Inbound::Control(control) => {
-                            let deadline = Some(Instant::now() + RPC_TIMEOUT);
-                            let _ = control.respond_error("claude adapter: no owned run", deadline);
+                            state.lock().unwrap().route_control(control);
                         }
                         _ => {}
                     }

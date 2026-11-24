@@ -152,8 +152,6 @@ if mode.startswith("run-"):
             assert turn == dict(raw, uuid=native_uuid)
             buffered = []
         elif action == "observe":
-            if mode.startswith("run-tools") and raw["type"] == "control_request":
-                continue
             if mode == "run-tools-edges":
                 if raw["type"] == "assistant":
                     blocks = raw["message"]["content"]
@@ -198,6 +196,9 @@ if mode.startswith("run-"):
         elif action == "decode-error":
             print(raw, flush=True)
             break
+        elif action == "expect-write" and mode.startswith("run-tools"):
+            assert select.select([sys.stdin], [], [], 5)[0], "missing hook response"
+            assert json.loads(sys.stdin.readline()) == raw, raw
         elif action == "process-exit":
             break
     if mode in disconnect_cases:
