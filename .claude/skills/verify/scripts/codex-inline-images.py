@@ -102,8 +102,11 @@ def verify(binary, root, model, codex=None, native_model=None, verb="serve", zig
             request["capability_revision"] = revision
         return hub.call("submit", wait=90, session_id="s1", request=request)
 
-    def refused(reply, code):
+    def refused(reply, code, message=""):
         assert not reply["ok"] and reply["error"]["code"] == code, reply
+        assert message in reply["error"]["message"], reply
+        if code == "unsupported_feature":
+            assert reply["error"]["details"] == {"feature": "content.image", "reason": "unsatisfiable"}, reply
 
     text_only = (model or native_model) == "text-only"
     try:
@@ -116,8 +119,7 @@ def verify(binary, root, model, codex=None, native_model=None, verb="serve", zig
         assert hub.call("events", session_id="s1")["ok"]
         if not live and text_only:
             reply = submit(parts, revision=revision)
-            refused(reply, "unsupported_feature")
-            assert "does not support inline images" in reply["error"]["message"], reply
+            refused(reply, "unsupported_feature", "does not support inline images")
             assert "content.image" not in features, features
             assert submit([TEXT_BEFORE, TEXT_AFTER], revision=revision)["ok"]
             expected = [TEXT_BEFORE, TEXT_AFTER]
@@ -127,17 +129,20 @@ def verify(binary, root, model, codex=None, native_model=None, verb="serve", zig
                 assert reply["ok"], f"mixed text and PNG refused: {reply}"
                 expected = [TEXT_BEFORE, {"type": "image", "url": "data:image/png;base64," + data}, TEXT_AFTER]
                 hub.completed("s1")
-                refused(submit(parts, "text-only"), "unsupported_feature")
-                for bad in (
-                    {"type": "image", "image": {"url": "https://example.invalid/a.png"}},
-                    image("bad!"), image("ab=="), image(data, "text/plain"),
-                    image(base64.b64encode(bytes((4 << 20) + 1)).decode()),
+                refused(submit(parts, "text-only"), "unsupported_feature", "does not support inline images")
+                for bad, message in (
+                    ({"type": "image", "image": {"url": "https://example.invalid/a.png"}}, "PNG, JPEG, GIF or WebP"),
+                    (image("bad!"), "valid standard base64"),
+                    (image("ab=="), "valid standard base64"),
+                    (image(data, "text/plain"), "PNG, JPEG, GIF or WebP"),
+                    (image(base64.b64encode(bytes((4 << 20) + 1)).decode()), "exceeds 4 MiB decoded"),
                 ):
-                    refused(submit([bad]), "invalid_submission")
+                    refused(submit([bad]), "invalid_submission", message)
                 refused(submit([image("")]), "schema_invalid")
                 large = image(base64.b64encode(bytes(3 << 20)).decode())
-                refused(submit([large, large]), "invalid_submission")
-                refused(submit([large, {"type": "text", "text": "x" * (4 << 20)}]), "invalid_submission")
+                refused(submit([large, large]), "invalid_submission", "exceed 6 MiB of base64")
+                refused(submit([large, {"type": "text", "text": "x" * (4 << 20)}]),
+                        "invalid_submission", "exceeds the native frame limit")
                 assert submit("still usable")["ok"]
             else:
                 assert submit(parts, revision=revision)["ok"]
