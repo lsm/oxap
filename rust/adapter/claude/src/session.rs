@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -9,7 +9,7 @@ use oxap_adapter::validate_input_answer;
 use oxap_adapter::{
     journal::Journal, refuse_unadvertised_controls, runtime::Runtime, BoxFuture, Error,
     EventStream, InteractionResolution, Recovery, ResumeRequest, Session, SubmitRequest,
-    ToolCatalog, ToolLister,
+    ToolCatalog, ToolLister, UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
     ActionCallPayload, ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart,
@@ -20,11 +20,11 @@ use oxap_protocol::{
     SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
 };
 use oxap_protocol::{
-    InputAnswer, InputOption, InputQuestion, RunStatusUpdatedPayload, UserInputRequestedPayload,
-    UserInputResolvedPayload,
+    InputAnswer, InputOption, InputQuestion, RunStatusUpdatedPayload, ToolChoice,
+    UserInputRequestedPayload, UserInputResolvedPayload, FEATURE_TOOL_SELECTION,
 };
 use serde::Deserialize;
-use serde_json::value::to_raw_value;
+use serde_json::value::{to_raw_value, RawValue};
 
 use crate::{
     adapter::{native_uuid, pin, ENDPOINT_ID},
@@ -36,6 +36,7 @@ use crate::{
 };
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
+const REFUSED_BY_POLICY: &str = "refused_by_policy";
 fn deadline() -> Option<Instant> {
     Some(Instant::now() + RPC_TIMEOUT)
 }
@@ -72,6 +73,7 @@ struct PendingTurn {
     model: String,
     corroborated: Option<oneshot::Sender<()>>,
     buffered: Vec<TurnFrame>,
+    policy: RunToolPolicy,
 }
 
 enum TurnFrame {
@@ -98,9 +100,43 @@ struct ActiveTurn {
     cancel_accepted: bool,
     tools: Vec<ObservedTool>,
     gates: Vec<PermissionGate>,
+    policy: RunToolPolicy,
+}
+
+#[derive(Default)]
+struct RunToolPolicy {
+    choice: Option<ToolChoice>,
+    denied: HashSet<String>,
+}
+
+impl RunToolPolicy {
+    fn deny(
+        &mut self,
+        control: &IncomingControl,
+        name: &str,
+        native_id: &str,
+        encode: impl FnOnce(&str) -> Result<String, serde_json::Error>,
+    ) -> bool {
+        if self
+            .choice
+            .as_ref()
+            .is_none_or(|choice| choice.permits(name, &[], false))
+        {
+            return false;
+        }
+        let reason = format!("{name} is excluded by this run's tool_choice");
+        let reply = encode(&reason)
+            .and_then(RawValue::from_string)
+            .expect("policy denial serializes");
+        if control.respond(Some(&reply), deadline()).is_ok() && !native_id.is_empty() {
+            self.denied.insert(native_id.into());
+        }
+        true
+    }
 }
 
 struct ObservedTool {
+    native_id: String,
     payload: ActionCallPayload,
     started: Option<EnvelopeId>,
 }
@@ -219,7 +255,27 @@ impl SessionData {
                 if hook.callback_id == native::TOOL_SELECTION_HOOK
                     && hook.input.hook_event_name == native::HOOK_PRE_TOOL_USE =>
             {
-                let _ = control.respond(None, deadline);
+                let settled = self.interrupt_has_terminal();
+                let policy = if let Some(turn) = &mut self.pending {
+                    (!turn.has_terminal()).then_some(&mut turn.policy)
+                } else {
+                    self.active
+                        .as_mut()
+                        .filter(|_| !settled)
+                        .map(|turn| &mut turn.policy)
+                };
+                let input = &hook.input;
+                let denied = policy.is_some_and(|policy| {
+                    policy.deny(
+                        &control,
+                        &input.tool_name,
+                        &input.tool_use_id,
+                        native::deny_tool,
+                    )
+                });
+                if !denied {
+                    let _ = control.respond(None, deadline);
+                }
                 return;
             }
             ControlRequest::HookCallback(_) => "claude adapter: unregistered hook callback",
@@ -255,6 +311,14 @@ impl SessionData {
         let ControlRequest::CanUseTool(ask) = &control.value else {
             unreachable!()
         };
+        if turn
+            .policy
+            .deny(&control, &ask.tool_name, &ask.tool_use_id, |reason| {
+                native::permission_deny(reason, false)
+            })
+        {
+            return;
+        }
         let tool_call_id = self
             .tool_calls
             .get(&ask.tool_use_id)
@@ -534,7 +598,7 @@ impl SessionData {
         }
         let turn = self.active.as_mut().unwrap();
         self.tool_calls
-            .insert(block.id, (turn.run_id.clone(), turn.tools.len()));
+            .insert(block.id.clone(), (turn.run_id.clone(), turn.tools.len()));
         let mut payload = ActionCallPayload {
             session_id: self.session.session_id.clone(),
             run_id: turn.run_id.clone(),
@@ -555,6 +619,7 @@ impl SessionData {
             runtime,
         );
         turn.tools.push(ObservedTool {
+            native_id: block.id,
             payload,
             started: Some(started.id.clone()),
         });
@@ -577,6 +642,7 @@ impl SessionData {
         }
         let tool = &mut turn.tools[*index];
         let started = tool.started.take().ok_or("unmatched tool completion")?;
+        let denied = turn.policy.denied.remove(&block.tool_use_id);
         let mut payload = tool.payload.clone();
         let kind = if block.is_error == Some(true) {
             let message = block
@@ -586,7 +652,12 @@ impl SessionData {
                 .filter(|message| !message.is_empty())
                 .unwrap_or_else(|| "tool call failed".into());
             payload.error = Some(ProtocolError {
-                code: "claude_tool_error".into(),
+                code: if denied {
+                    REFUSED_BY_POLICY
+                } else {
+                    "claude_tool_error"
+                }
+                .into(),
                 message,
                 ..Default::default()
             });
@@ -638,15 +709,22 @@ impl SessionData {
         if let Some(status) = settled {
             let turn = self.active.as_mut().unwrap();
             let run_id = turn.run_id.clone();
+            let denied = std::mem::take(&mut turn.policy.denied);
             for tool in std::mem::take(&mut turn.tools) {
                 if let Some(started) = tool.started {
-                    let cancelled = tool_event(
-                        EnvelopeType::ACTION_CALL_CANCELLED,
-                        &tool.payload,
-                        Some(started),
-                        runtime,
-                    );
-                    self.append_event(cancelled, false, runtime);
+                    let mut payload = tool.payload;
+                    let kind = if denied.contains(&tool.native_id) {
+                        payload.error = Some(ProtocolError {
+                            code: REFUSED_BY_POLICY.into(),
+                            message: "refused by the run's tool_choice".into(),
+                            ..Default::default()
+                        });
+                        EnvelopeType::ACTION_CALL_FAILED
+                    } else {
+                        EnvelopeType::ACTION_CALL_CANCELLED
+                    };
+                    let settled = tool_event(kind, &payload, Some(started), runtime);
+                    self.append_event(settled, false, runtime);
                 }
             }
             for gate in std::mem::take(&mut self.active.as_mut().unwrap().gates) {
@@ -745,6 +823,7 @@ impl SessionData {
             cancel_accepted: false,
             tools: Vec::new(),
             gates: Vec::new(),
+            policy: turn.policy,
         });
         for entry in turn.buffered {
             match entry {
@@ -992,6 +1071,14 @@ impl OpenedSession {
 
     async fn submit_turn(&self, request: MessageSubmitRequest) -> Admission {
         let text = submit_text(&request)?;
+        let choice = request.tool_choice_policy().map_err(|error| {
+            Error::UnsupportedControl(Box::new(UnsupportedControl {
+                feature: FEATURE_TOOL_SELECTION.into(),
+                reason: CONTROL_UNSATISFIABLE,
+                detail: error.to_string(),
+                ..Default::default()
+            }))
+        })?;
         let uuid = format!("turn-{}", native_uuid()?);
         native::validate_turn_uuid(&uuid).map_err(Error::harness)?;
         let frame =
@@ -1016,6 +1103,10 @@ impl OpenedSession {
                 model: state.session.current_model_id.clone(),
                 corroborated: Some(signal),
                 buffered: Vec::new(),
+                policy: RunToolPolicy {
+                    choice,
+                    ..Default::default()
+                },
             });
         }
 
@@ -1115,7 +1206,7 @@ impl OpenedSession {
 }
 
 fn submit_text(request: &MessageSubmitRequest) -> Result<String, Error> {
-    refuse_unadvertised_controls(request, &[])?;
+    refuse_unadvertised_controls(request, &[FEATURE_TOOL_SELECTION])?;
     let [message] = request.messages.as_slice() else {
         return Err(Error::InvalidSubmission);
     };

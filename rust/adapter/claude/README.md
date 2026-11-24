@@ -126,8 +126,10 @@ A retry for a cancelled run reports its terminal status without another
 interrupt. Completion and failure return the corresponding terminal error.
 Hosts can set a deadline by dropping the submit future and closing the
 retired session.
-Per-run tool selection is unavailable until permission handling can enforce it.
-A registered PreToolUse hook receives the native continuation response.
+Per-run tool selection enforces the submitted allowlist or denylist through
+the registered PreToolUse hook and the permission gate. Allowed hooks
+continue. An excluded tool is denied without asking the operator, and a
+confirmed denial is reflected in that call's settlement.
 After a pending turn is corroborated, permission asks and observations are
 replayed in arrival order. An owned ask publishes an allow or deny choice
 for the opening participant. The decision names that participant, and the

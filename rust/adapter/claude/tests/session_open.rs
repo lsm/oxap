@@ -44,6 +44,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
         mode if mode.starts_with("run-permission") => "permission-gates/native.jsonl",
+        mode if mode.starts_with("run-selection-") => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-tools") => "tool-lifecycle/native.jsonl",
         mode if mode.starts_with("run-interrupt-") => "interrupt-cancel/native.jsonl",
         "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
@@ -408,6 +409,80 @@ fn claude_tools_replay_corpus() {
 }
 
 #[test]
+fn claude_tool_selection_replays_policy_denials() {
+    for mode in ["run-selection-hook", "run-selection-gate"] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut runs = 0;
+        for (turn, frame) in frames
+            .iter()
+            .filter(|frame| frame["action"] == "submit")
+            .enumerate()
+        {
+            let text = frame["raw"]["message"]["content"].as_str().unwrap();
+            let mut submit = text_submit(text);
+            submit.request.delivery = RequestedDeliveryMode::AUTO;
+            if turn == 0 {
+                let policy = if mode == "run-selection-hook" {
+                    json!({"disallowed": ["Bash"]})
+                } else {
+                    json!({"allowed": ["Read"]})
+                };
+                submit.request.tool_choice =
+                    Some(serde_json::value::to_raw_value(&policy).unwrap());
+            }
+            let (admission, stream) = block_on(session.submit(submit.clone())).expect(mode);
+            fs::write(directory.path().join(format!("continue-{turn}")), []).unwrap();
+            let events = block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|event| event.envelope_type.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "run.started",
+                    "action.call.requested",
+                    "action.call.started",
+                    "action.call.failed",
+                    "run.completed"
+                ]
+            );
+            let failure = serde_json::to_value(&events[3]).unwrap();
+            let code = if turn == 0 {
+                "refused_by_policy"
+            } else {
+                "claude_tool_error"
+            };
+            assert_eq!(failure["payload"]["error"]["code"], code, "{mode}");
+            if turn == 0 {
+                let message = if mode == "run-selection-hook" {
+                    "Bash is excluded by this run's tool_choice"
+                } else {
+                    "refused by the run's tool_choice"
+                };
+                assert_eq!(failure["payload"]["error"]["message"], message);
+            }
+            assert_eq!(events[3].in_reply_to.as_ref(), Some(&events[2].id));
+            let mut trace = RunTrace::new(admission, adapter.describe(), events);
+            trace.submitted = Some(submit.request);
+            trace.assert_valid();
+            runs += 1;
+        }
+        block_on(session.close()).unwrap();
+        assert!(directory.path().join("eof").is_file());
+        assert_eq!(runs, 2);
+        println!("PASS {mode}: native refusal, linked tool failure, no permission ask, and no policy on the next run");
+    }
+}
+
+#[test]
 fn claude_permission_gates_retire_native_withdrawals() {
     let (adapter, directory, frames) = fixture("run-permission-withdrawal");
     let session = block_on(adapter.open(OpenRequest {
@@ -638,10 +713,9 @@ fn claude_tools_settle_open_calls_and_ignore_foreign_results() {
         .filter(|frame| frame["action"] == "submit")
         .enumerate()
     {
-        let (admission, stream) = block_on(session.submit(text_submit(
-            frame["raw"]["message"]["content"].as_str().unwrap(),
-        )))
-        .unwrap();
+        let mut submit = text_submit(frame["raw"]["message"]["content"].as_str().unwrap());
+        submit.request.delivery = RequestedDeliveryMode::AUTO;
+        let (admission, stream) = block_on(session.submit(submit.clone())).unwrap();
         fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
         let events = block_on(stream.collect::<Vec<_>>())
             .into_iter()
@@ -695,7 +769,9 @@ fn claude_tools_settle_open_calls_and_ignore_foreign_results() {
             }
             _ => unreachable!(),
         }
-        RunTrace::new(admission, adapter.describe(), events).assert_valid();
+        let mut trace = RunTrace::new(admission, adapter.describe(), events);
+        trace.submitted = Some(submit.request);
+        trace.assert_valid();
     }
     block_on(session.close()).unwrap();
     assert!(directory.path().join("eof").is_file());
@@ -728,7 +804,9 @@ fn replay_run_events(mode: &str, case: &str) {
         .enumerate()
     {
         let text = frame["raw"]["message"]["content"].as_str().unwrap();
-        let (admission, stream) = block_on(session.submit(text_submit(text))).unwrap();
+        let mut submit = text_submit(text);
+        submit.request.delivery = RequestedDeliveryMode::AUTO;
+        let (admission, stream) = block_on(session.submit(submit.clone())).unwrap();
         if mode == "run-streaming" {
             let running = block_on(session.state()).unwrap();
             assert_eq!(running.transcript_cursor, "1");
@@ -750,7 +828,9 @@ fn replay_run_events(mode: &str, case: &str) {
         assert!(idle.active_runs.is_empty());
         assert_eq!(idle.transcript_cursor, expected.len().to_string());
         if case == "tool-lifecycle" {
-            RunTrace::new(admission, adapter.describe(), actual).assert_valid();
+            let mut trace = RunTrace::new(admission, adapter.describe(), actual);
+            trace.submitted = Some(submit.request);
+            trace.assert_valid();
         }
     }
     block_on(session.close()).unwrap();
@@ -1256,15 +1336,21 @@ fn check_invalid_submits(session: &dyn oxap_adapter::Session) {
         ("instructions", json!("invalid"), FEATURE_INSTRUCTIONS),
         ("model_id", json!("other"), FEATURE_MODEL_SELECTION),
         ("output_schema", json!({}), FEATURE_STRUCTURED_OUTPUT),
-        (
-            "tool_choice",
-            json!({"allowed": ["Read"]}),
-            FEATURE_TOOL_SELECTION,
-        ),
     ] {
         assert!(
             matches!(submit_changed(field, value), Error::UnsupportedControl(control) if control.feature == feature && control.reason == "unadvertised")
         );
+    }
+    for invalid in [
+        json!({}),
+        json!({"allowed": [], "disallowed": []}),
+        json!({"allowed": null}),
+    ] {
+        assert!(matches!(
+            submit_changed("tool_choice", invalid),
+            Error::UnsupportedControl(control)
+                if control.feature == FEATURE_TOOL_SELECTION && control.reason == "unsatisfiable"
+        ));
     }
 }
 

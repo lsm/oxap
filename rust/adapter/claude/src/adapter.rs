@@ -244,7 +244,7 @@ impl Adapter {
             ("user_input", feature(SupportLevel::NATIVE, "permission gates over the control plane")),
             (FEATURE_TOOL_SELECTION, FeatureSupport {
                 scope: SCOPE_RUN.into(),
-                ..feature(SupportLevel::UNAVAILABLE, "per-run tool selection requires native permission handling")
+                ..feature(SupportLevel::EMULATED, "tool_choice is enforced by the pre-tool-use hook and permission gate")
             }),
         ]
         .into_iter()
