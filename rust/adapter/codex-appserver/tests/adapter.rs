@@ -161,6 +161,8 @@ fn a_resumed_effort_maps_to_the_oap_level() {
         ("high", ReasoningLevel::HIGH),
         ("xhigh", ReasoningLevel::XHIGH),
         ("max", ReasoningLevel::MAX),
+        ("ultra", ReasoningLevel::from("ultra")),
+        ("persistent", ReasoningLevel::default()),
         ("off", ReasoningLevel::default()),
         ("turbo", ReasoningLevel::default()),
         ("", ReasoningLevel::default()),
