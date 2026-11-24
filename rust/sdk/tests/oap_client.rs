@@ -6,7 +6,7 @@ use oxap_sdk::{
     AuthEvent, AuthHandlers, AuthRetryPolicy, AuthStatus, ChatMessage, ClientBuilder, Content,
     ContentPart, Error, ExecutionRequest, ListModelsRequest, Role, Tool,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[tokio::test]
 async fn combined_oap_connection_runs_both_profiles() {
