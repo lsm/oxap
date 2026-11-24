@@ -23,4 +23,5 @@ case combines an abort with max-turn evidence and expects an observed failure
 because the session has no accepted cancel exchange. Admission regressions
 check that a disconnect before the caller resumes still refuses a submission
 that has no conclusive result. The [journal journey](rust-claude-journal.md)
-checks replay after disconnect. Accepted cancellation is a later slice.
+checks replay after disconnect. The [interrupt journey](rust-claude-interrupt.md)
+checks accepted cancellation and receipt races.

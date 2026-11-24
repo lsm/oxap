@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -13,9 +14,9 @@ use oxap_protocol::{
     ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart, ContentPartType,
     EffectiveDeliveryMode, Envelope, EnvelopeType, Message, MessageContent, MessageId, MessageRole,
     MessageSubmitRequest, MessageSubmitResponse, ProtocolError, RequestedDeliveryMode,
-    RunCancelResponse, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus,
-    SessionId, SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST,
-    SETTLED_BY_INFERRED,
+    RunCancelResponse, RunCancelledPayload, RunCompletedPayload, RunFailedPayload, RunId,
+    RunStartedPayload, RunStatus, SessionId, SessionState, SessionStatus, ToolsListRequest, Usage,
+    FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
 };
 use serde::Deserialize;
 use serde_json::value::to_raw_value;
@@ -29,6 +30,7 @@ use crate::{
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
 type Admission = Result<(MessageSubmitResponse, EventStream), Error>;
+type CancelResult = Result<RunCancelResponse, Error>;
 
 pub(crate) struct OpenedSession {
     process: Process,
@@ -43,7 +45,14 @@ struct SessionData {
     journal: Journal,
     pending: Option<PendingTurn>,
     active: Option<ActiveTurn>,
+    interrupt: Option<Interrupt>,
+    settled_runs: HashMap<RunId, RunStatus>,
     unusable: bool,
+}
+
+struct Interrupt {
+    waiters: Vec<oneshot::Sender<CancelResult>>,
+    terminal: Option<Box<native::ResultFrame>>,
 }
 
 struct PendingTurn {
@@ -70,6 +79,7 @@ struct ActiveTurn {
     uuid: String,
     run_id: RunId,
     message_id: MessageId,
+    cancel_accepted: bool,
 }
 
 #[derive(Deserialize)]
@@ -116,6 +126,25 @@ impl SessionData {
         self.unusable || self.session.status == SessionStatus::CLOSED
     }
 
+    fn interrupt_has_terminal(&self) -> bool {
+        self.interrupt
+            .as_ref()
+            .is_some_and(|interrupt| interrupt.terminal.is_some())
+    }
+
+    fn finish_interrupt(&mut self, outcome: CancelResult, runtime: &Runtime) {
+        let interrupt = self.interrupt.take().expect("interrupt is reserved");
+        if let Some(turn) = &mut self.active {
+            turn.cancel_accepted = outcome.is_ok();
+        }
+        for waiter in interrupt.waiters {
+            let _ = waiter.send(outcome.clone());
+        }
+        if let Some(frame) = interrupt.terminal {
+            self.apply(Observation::Result(frame), true, runtime);
+        }
+    }
+
     fn observe(&mut self, observation: ObservationMessage, runtime: &Runtime) {
         if let Some(turn) = &mut self.pending {
             let Some(corroborates) = Echo::corroborates(&observation, &turn.uuid) else {
@@ -153,6 +182,9 @@ impl SessionData {
             }
             return;
         }
+        if self.interrupt_has_terminal() {
+            return;
+        }
         let Some(turn) = &mut self.active else { return };
         let session_id = &self.session.session_id;
         let event = match observation {
@@ -178,6 +210,12 @@ impl SessionData {
                     .expect("delta payload serializes")
             }
             Observation::Result(frame) if corroborates && settles_turn(&frame) => {
+                if frame.cancelled() && !turn.cancel_accepted {
+                    if let Some(interrupt) = &mut self.interrupt {
+                        interrupt.terminal = Some(frame);
+                        return;
+                    }
+                }
                 turn.terminal(session_id, &frame, runtime.new_id("event"))
             }
             _ => return,
@@ -199,10 +237,15 @@ impl SessionData {
         event.session_id = Some(self.session.session_id.clone());
         event.run_id = Some(turn.run_id.clone());
         event.capability_revision = Some(pin().capability_revision.clone());
-        let terminal = event.envelope_type == EnvelopeType::RUN_COMPLETED
-            || event.envelope_type == EnvelopeType::RUN_FAILED;
-        self.journal.append(event, terminal);
-        if terminal {
+        let settled = match event.envelope_type.as_str() {
+            "run.completed" => Some(RunStatus::COMPLETED),
+            "run.failed" => Some(RunStatus::FAILED),
+            "run.cancelled" => Some(RunStatus::CANCELLED),
+            _ => None,
+        };
+        self.journal.append(event, settled.is_some());
+        if let Some(status) = settled {
+            self.settled_runs.insert(turn.run_id.clone(), status);
             self.active = None;
             self.session.status = SessionStatus::IDLE;
             self.session.active_run_id = None;
@@ -211,7 +254,11 @@ impl SessionData {
     }
 
     fn disconnect(&mut self, error: Option<ClientError>, runtime: &Runtime) {
-        if let Some(turn) = &self.active {
+        if let Some(turn) = self
+            .active
+            .as_ref()
+            .filter(|_| !self.interrupt_has_terminal())
+        {
             let message = match error {
                 Some(ClientError::Transport(detail)) if detail == "EOF" => {
                     "io: read/write on closed pipe".into()
@@ -282,6 +329,7 @@ impl SessionData {
             uuid: turn.uuid,
             run_id: run_id.clone(),
             message_id: message_id.clone(),
+            cancel_accepted: false,
         });
         for (observation, corroborates) in turn.buffered {
             self.apply(observation, corroborates, runtime);
@@ -338,7 +386,20 @@ impl ActiveTurn {
         let max_turns = frame.max_turns();
         let success = frame.subtype == native::RESULT_SUCCESS;
         let aborted = frame.cancelled();
-        let mut event = if !aborted && (max_turns || (success && !frame.is_error)) {
+        let mut event = if aborted && self.cancel_accepted {
+            let cancelled = RunCancelledPayload {
+                session_id: session.clone(),
+                run_id: self.run_id.clone(),
+                reason: format!(
+                    "interrupt confirmed by terminal_reason {}",
+                    frame.terminal_reason
+                ),
+                usage,
+                duration_ms,
+                ..Default::default()
+            };
+            Envelope::new(EnvelopeType::RUN_CANCELLED, id, &cancelled)
+        } else if !aborted && (max_turns || (success && !frame.is_error)) {
             let stop_reason = if max_turns {
                 "max_turns"
             } else {
@@ -447,6 +508,8 @@ impl OpenedSession {
             journal: Journal::new(journal_capacity),
             pending: None,
             active: None,
+            interrupt: None,
+            settled_runs: HashMap::new(),
             unusable: false,
         }));
         let session = Self {
@@ -514,7 +577,10 @@ impl OpenedSession {
             if state.session.session_id != request.session_id {
                 return Err(Error::RunNotFound);
             }
-            if state.pending.is_some() || state.session.status != SessionStatus::IDLE {
+            if state.pending.is_some()
+                || state.interrupt.is_some()
+                || state.session.status != SessionStatus::IDLE
+            {
                 return Err(Error::RunActive);
             }
             state.pending = Some(PendingTurn {
@@ -551,6 +617,72 @@ impl OpenedSession {
         corroborated.await.map_err(|_| Error::SessionClosed)?;
         let mut state = self.state.lock().unwrap();
         state.start(&self.runtime)
+    }
+
+    async fn cancel_turn(&self, run_id: RunId) -> CancelResult {
+        let (waiter, receipt) = oneshot::channel();
+        {
+            let mut state = self.state.lock().unwrap();
+            if state.session.status == SessionStatus::CLOSED {
+                return Err(Error::SessionClosed);
+            }
+            let mut response = RunCancelResponse {
+                session_id: state.session.session_id.clone(),
+                run_id,
+                accepted: true,
+                status: RunStatus::CANCELLING,
+            };
+            if let Some(status) = state.settled_runs.get(&response.run_id) {
+                if *status != RunStatus::CANCELLED {
+                    return Err(Error::RunAlreadyTerminal {
+                        run_id: Some(response.run_id),
+                        status: Some(status.clone()),
+                    });
+                }
+                response.status = status.clone();
+                return Ok(response);
+            }
+            let turn = state
+                .active
+                .as_ref()
+                .filter(|turn| turn.run_id == response.run_id)
+                .ok_or(Error::RunNotFound)?;
+            if turn.cancel_accepted {
+                return Ok(response);
+            }
+            if let Some(interrupt) = &mut state.interrupt {
+                interrupt.waiters.push(waiter);
+            } else {
+                let request = native::interrupt_request().map_err(Error::harness)?;
+                state.interrupt = Some(Interrupt {
+                    waiters: vec![waiter],
+                    terminal: None,
+                });
+                let client = self.process.client.clone();
+                let session_state = self.state.clone();
+                let runtime = self.runtime.clone();
+                if let Err(error) = std::thread::Builder::new().spawn(move || {
+                    let outcome = (|| {
+                        let deadline = Some(Instant::now() + RPC_TIMEOUT);
+                        let body = client
+                            .call(request.as_bytes(), deadline)
+                            .map_err(Error::harness)?;
+                        if let Some(body) = body {
+                            native::decode_interrupt_result(&body).map_err(Error::harness)?;
+                        }
+                        Ok(response)
+                    })();
+                    session_state
+                        .lock()
+                        .unwrap()
+                        .finish_interrupt(outcome, &runtime);
+                }) {
+                    state.interrupt = None;
+                    return Err(Error::harness(error));
+                }
+            }
+        }
+        receipt.await.map_err(|_| Error::SessionClosed)?
     }
 }
 
@@ -631,8 +763,8 @@ impl Session for OpenedSession {
         Box::pin(async { Err(Error::InteractionNotFound) })
     }
 
-    fn cancel(&self, _: RunId) -> BoxFuture<'_, RunCancelResponse> {
-        Box::pin(async { Err(Error::RunNotFound) })
+    fn cancel(&self, run_id: RunId) -> BoxFuture<'_, RunCancelResponse> {
+        Box::pin(self.cancel_turn(run_id))
     }
 
     fn resume(&self, request: ResumeRequest) -> BoxFuture<'_, (Recovery, EventStream)> {

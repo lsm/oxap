@@ -32,8 +32,11 @@ main-turn activity from child or injected activity. The Rust process replay
 exercises both combinations with synthetic frames. The pinned corpus leaves
 both combinations unverified.
 
-The Go adapter projects an aborted native result as `run.cancelled`. At
-this Rust port stage, caller cancellation is unavailable. The Rust adapter
-projects such a result as an observed `run.failed` with the native abort
-reason, preserving the protocol requirement for an accepted cancel exchange
-before `run.cancelled`.
+Go projects an aborted native result as `run.cancelled`. Rust requires a
+successful interrupt receipt for the same run before publishing cancellation.
+If an aborted result arrives while the interrupt is outstanding, Rust holds
+it until the receipt resolves. Without an accepted exchange, the abort
+settles as an observed `run.failed` with the native abort reason.
+Rust returns the terminal status for a repeated cancellation of a cancelled
+run and a typed terminal error for a completed or failed run. Go returns run
+not found for these terminal runs.
