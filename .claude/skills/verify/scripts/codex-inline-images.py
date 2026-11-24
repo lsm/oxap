@@ -71,7 +71,7 @@ def native(default_model):
                     "threadId": "thread", "turn": {"id": f"turn-{turn}", "status": status}}})
 
 
-def verify(binary, root, model, codex=None, native_model=None):
+def verify(binary, root, model, codex=None, native_model=None, verb="serve", zig=True):
     (root / "home").mkdir(parents=True)
     config = root / "hub.json"
     live = codex is not None
@@ -83,8 +83,10 @@ def verify(binary, root, model, codex=None, native_model=None):
     if not live:
         entry["args"] = [str(Path(__file__).resolve()), "--native", native_model or ""]
     config.write_text(json.dumps({"adapters": {"codex": entry}}))
-    command = [str(binary), "serve", "--stdio", "--config", str(config),
-               "--no-save-oapx-sessions", "--session-history", str(root / "sessions.jsonl")]
+    command = [str(binary), verb, "--stdio", "--config", str(config),
+               "--session-history", str(root / "sessions.jsonl")]
+    if zig:
+        command.append("--no-save-oapx-sessions")
     hub = HUB["Hub"](command, root, "hub", home=Path.home() if live else None)
     colors = random.SystemRandom().sample(list(COLORS), 3) if live else ["red", "green", "blue"]
     data = png(colors)
@@ -156,7 +158,8 @@ def verify(binary, root, model, codex=None, native_model=None):
                       if frame.get("envelope", {}).get("type") == "run.started"]
             assert [event["capability_revision"] for event in starts] == [revision] * len(want)
         hub.stop()
-        print(f"{model or native_model or 'default'}: hub exit={hub.process.returncode}")
+        print(f"{model or native_model or 'default'}: hub exit={hub.process.returncode}, "
+              f"completed turns={1 if live else len(observed)}")
         return revision
     finally:
         hub.cleanup()
@@ -170,15 +173,17 @@ if __name__ == "__main__":
         parser.add_argument("binary", type=Path)
         parser.add_argument("--codex", type=Path)
         parser.add_argument("--model")
+        parser.add_argument("--hub", choices=("zig", "go", "rust"), default="zig")
         args = parser.parse_args()
         with tempfile.TemporaryDirectory(prefix="oap-codex-images-") as temp:
             root = Path(temp).resolve()
             binary = args.binary.resolve()
+            options = {"verb": "hub" if args.hub == "go" else "serve", "zig": args.hub == "zig"}
             if args.codex:
-                verify(binary, root, args.model, args.codex.resolve())
+                verify(binary, root, args.model, args.codex.resolve(), **options)
             else:
-                vision = verify(binary, root / "vision", "vision")
-                assert verify(binary, root / "default", None) == vision
-                assert verify(binary, root / "text-only", "text-only") != vision
-                assert verify(binary, root / "native-text", None, native_model="text-only") != vision
+                vision = verify(binary, root / "vision", "vision", **options)
+                assert verify(binary, root / "default", None, **options) == vision
+                assert verify(binary, root / "text-only", "text-only", **options) != vision
+                assert verify(binary, root / "native-text", None, native_model="text-only", **options) != vision
                 print("PASS: 4 Codex model routes")
