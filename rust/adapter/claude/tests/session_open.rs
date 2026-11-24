@@ -713,10 +713,9 @@ fn claude_tools_settle_open_calls_and_ignore_foreign_results() {
         .filter(|frame| frame["action"] == "submit")
         .enumerate()
     {
-        let (admission, stream) = block_on(session.submit(text_submit(
-            frame["raw"]["message"]["content"].as_str().unwrap(),
-        )))
-        .unwrap();
+        let mut submit = text_submit(frame["raw"]["message"]["content"].as_str().unwrap());
+        submit.request.delivery = RequestedDeliveryMode::AUTO;
+        let (admission, stream) = block_on(session.submit(submit.clone())).unwrap();
         fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
         let events = block_on(stream.collect::<Vec<_>>())
             .into_iter()
@@ -770,7 +769,9 @@ fn claude_tools_settle_open_calls_and_ignore_foreign_results() {
             }
             _ => unreachable!(),
         }
-        RunTrace::new(admission, adapter.describe(), events).assert_valid();
+        let mut trace = RunTrace::new(admission, adapter.describe(), events);
+        trace.submitted = Some(submit.request);
+        trace.assert_valid();
     }
     block_on(session.close()).unwrap();
     assert!(directory.path().join("eof").is_file());
@@ -803,7 +804,9 @@ fn replay_run_events(mode: &str, case: &str) {
         .enumerate()
     {
         let text = frame["raw"]["message"]["content"].as_str().unwrap();
-        let (admission, stream) = block_on(session.submit(text_submit(text))).unwrap();
+        let mut submit = text_submit(text);
+        submit.request.delivery = RequestedDeliveryMode::AUTO;
+        let (admission, stream) = block_on(session.submit(submit.clone())).unwrap();
         if mode == "run-streaming" {
             let running = block_on(session.state()).unwrap();
             assert_eq!(running.transcript_cursor, "1");
@@ -825,7 +828,9 @@ fn replay_run_events(mode: &str, case: &str) {
         assert!(idle.active_runs.is_empty());
         assert_eq!(idle.transcript_cursor, expected.len().to_string());
         if case == "tool-lifecycle" {
-            RunTrace::new(admission, adapter.describe(), actual).assert_valid();
+            let mut trace = RunTrace::new(admission, adapter.describe(), actual);
+            trace.submitted = Some(submit.request);
+            trace.assert_valid();
         }
     }
     block_on(session.close()).unwrap();
@@ -1331,15 +1336,21 @@ fn check_invalid_submits(session: &dyn oxap_adapter::Session) {
         ("instructions", json!("invalid"), FEATURE_INSTRUCTIONS),
         ("model_id", json!("other"), FEATURE_MODEL_SELECTION),
         ("output_schema", json!({}), FEATURE_STRUCTURED_OUTPUT),
-        (
-            "tool_choice",
-            json!({"allowed": ["Read"]}),
-            FEATURE_TOOL_SELECTION,
-        ),
     ] {
         assert!(
             matches!(submit_changed(field, value), Error::UnsupportedControl(control) if control.feature == feature && control.reason == "unadvertised")
         );
+    }
+    for invalid in [
+        json!({}),
+        json!({"allowed": [], "disallowed": []}),
+        json!({"allowed": null}),
+    ] {
+        assert!(matches!(
+            submit_changed("tool_choice", invalid),
+            Error::UnsupportedControl(control)
+                if control.feature == FEATURE_TOOL_SELECTION && control.reason == "unsatisfiable"
+        ));
     }
 }
 
