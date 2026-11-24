@@ -15,6 +15,7 @@ use oxap_protocol::{
     MessageSubmitRequest, MessageSubmitResponse, ProtocolError, RequestedDeliveryMode,
     RunCancelResponse, RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus,
     SessionId, SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST,
+    SETTLED_BY_INFERRED,
 };
 use serde::Deserialize;
 use serde_json::value::to_raw_value;
@@ -48,6 +49,19 @@ struct PendingTurn {
     model: String,
     corroborated: Option<oneshot::Sender<()>>,
     buffered: Vec<(Observation, bool)>,
+}
+
+impl PendingTurn {
+    fn has_terminal(&self) -> bool {
+        self.buffered.iter().any(|(observation, corroborates)| {
+            *corroborates
+                && matches!(observation, Observation::Result(frame) if settles_turn(frame))
+        })
+    }
+}
+
+fn settles_turn(frame: &native::ResultFrame) -> bool {
+    frame.queued_turn_count.unwrap_or_default() <= 0
 }
 
 struct ActiveTurn {
@@ -106,8 +120,10 @@ impl SessionData {
                 return;
             }
             if turn.buffered.len() == DEFAULT_QUEUE_CAPACITY {
-                self.pending.take();
-                self.session.status = SessionStatus::CLOSED;
+                if !turn.has_terminal() {
+                    self.pending.take();
+                    self.session.status = SessionStatus::CLOSED;
+                }
                 return;
             }
             turn.buffered.push((observation.value, corroborates));
@@ -134,7 +150,7 @@ impl SessionData {
         }
         let Some(turn) = &mut self.active else { return };
         let session_id = &self.session.session_id;
-        let mut event = match observation {
+        let event = match observation {
             Observation::StreamEvent(frame) => {
                 let Some((kind, text)) = frame.stream_delta() else {
                     return;
@@ -156,22 +172,26 @@ impl SessionData {
                 Envelope::new(EnvelopeType::CONTENT_DELTA, runtime.new_id("event"), &delta)
                     .expect("delta payload serializes")
             }
-            Observation::Result(frame)
-                if corroborates
-                    && !frame.cancelled()
-                    && frame.queued_turn_count.unwrap_or(0) <= 0 =>
-            {
+            Observation::Result(frame) if corroborates && settles_turn(&frame) => {
                 turn.terminal(session_id, &frame, runtime.new_id("event"))
             }
             _ => return,
         };
+        self.publish(event, runtime);
+    }
+
+    fn publish(&mut self, mut event: Envelope, runtime: &Runtime) {
+        let turn = self
+            .active
+            .as_ref()
+            .expect("publishing requires an active run");
         let sequence = self.session.active_runs[0].as_of_sequence.get_or_insert(1);
         *sequence += 1;
         self.session.transcript_cursor = sequence.to_string();
         self.session.updated_at_ms = runtime.now_ms();
         event.sequence = Some(*sequence);
         event.timestamp_ms = Some(self.session.updated_at_ms);
-        event.session_id = Some(session_id.clone());
+        event.session_id = Some(self.session.session_id.clone());
         event.run_id = Some(turn.run_id.clone());
         event.capability_revision = Some(pin().capability_revision.clone());
         let terminal = event.envelope_type == EnvelopeType::RUN_COMPLETED
@@ -185,8 +205,40 @@ impl SessionData {
         }
     }
 
+    fn disconnect(&mut self, error: Option<ClientError>, runtime: &Runtime) {
+        if let Some(turn) = &self.active {
+            let message = match error {
+                Some(ClientError::Transport(detail)) if detail == "EOF" => {
+                    "io: read/write on closed pipe".into()
+                }
+                Some(error) => error.to_string(),
+                None => "io: read/write on closed pipe".into(),
+            };
+            let payload = RunFailedPayload {
+                session_id: self.session.session_id.clone(),
+                run_id: turn.run_id.clone(),
+                error: ProtocolError {
+                    code: "claude_process_exit".into(),
+                    message,
+                    ..Default::default()
+                },
+                settled_by: SETTLED_BY_INFERRED.into(),
+                ..Default::default()
+            };
+            let failure =
+                Envelope::new(EnvelopeType::RUN_FAILED, runtime.new_id("event"), &payload)
+                    .expect("disconnect payload serializes");
+            self.publish(failure, runtime);
+        }
+        if !self.pending.as_ref().is_some_and(PendingTurn::has_terminal) {
+            self.pending = None;
+        }
+        self.session.status = SessionStatus::CLOSED;
+    }
+
     fn start(&mut self, runtime: &Runtime) -> Admission {
         let turn = self.pending.take().ok_or(Error::SessionClosed)?;
+        let disconnected = self.session.status == SessionStatus::CLOSED;
         let session_id = self.session.session_id.clone();
         let message_id: MessageId = runtime.new_id("message").into();
         let run_id: RunId = runtime.new_id("run").into();
@@ -230,6 +282,9 @@ impl SessionData {
         });
         for (observation, corroborates) in turn.buffered {
             self.apply(observation, corroborates, runtime);
+        }
+        if disconnected {
+            self.session.status = SessionStatus::CLOSED;
         }
         Ok((
             MessageSubmitResponse {
@@ -282,7 +337,8 @@ impl ActiveTurn {
         let duration_ms = frame.duration_ms.max(0);
         let max_turns = frame.max_turns();
         let success = frame.subtype == native::RESULT_SUCCESS;
-        let mut event = if max_turns || (success && !frame.is_error) {
+        let aborted = frame.cancelled();
+        let mut event = if !aborted && (max_turns || (success && !frame.is_error)) {
             let stop_reason = if max_turns {
                 "max_turns"
             } else {
@@ -310,15 +366,15 @@ impl ActiveTurn {
             };
             Envelope::new(EnvelopeType::RUN_COMPLETED, id, &completed)
         } else {
-            let reason = if success && !frame.terminal_reason.is_empty() {
+            let reason = if aborted || (success && !frame.terminal_reason.is_empty()) {
                 &frame.terminal_reason
             } else {
                 &frame.subtype
             };
-            let code = frame.api_error_status.map_or_else(
-                || format!("claude_{reason}"),
-                |status| format!("claude_api_{status}"),
-            );
+            let code = match frame.api_error_status {
+                Some(status) if !aborted => format!("claude_api_{status}"),
+                _ => format!("claude_{reason}"),
+            };
             let message = if !frame.errors.is_empty() {
                 frame.errors.join("; ")
             } else if !frame.result.trim().is_empty() {
@@ -363,6 +419,16 @@ impl ActiveTurn {
                 to_raw_value(cost).expect("cost serializes"),
             );
         }
+        if let Some(output) = frame
+            .structured_output
+            .as_ref()
+            .filter(|raw| raw.get() != "null")
+        {
+            event.extensions.insert(
+                "com.anthropic.claude-code.structured_output".into(),
+                output.clone(),
+            );
+        }
         event
     }
 }
@@ -386,7 +452,8 @@ impl OpenedSession {
             expand_prompts,
             runtime,
         };
-        let inbound = session.process.client.inbound();
+        let client = session.process.client.clone();
+        let inbound = client.inbound();
         let state = session.state.clone();
         let runtime = session.runtime.clone();
         std::thread::Builder::new()
@@ -403,12 +470,7 @@ impl OpenedSession {
                         _ => {}
                     }
                 }
-                let mut state = state.lock().unwrap();
-                state.session.status = SessionStatus::CLOSED;
-                if let Some(turn) = state.active.take() {
-                    turn.events.close();
-                }
-                state.pending.take();
+                state.lock().unwrap().disconnect(client.err(), &runtime);
             })
             .map_err(Error::harness)?;
         Ok(session)

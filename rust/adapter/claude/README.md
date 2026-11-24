@@ -105,11 +105,13 @@ or close. A matching native turn marker or compacting status admits the run.
 The stream begins with `run.started`, then the reducer applies buffered
 observations in arrival order. Explicitly foreign markers, child echoes, and
 injected output do not join the turn. The adapter streams text and reasoning
-deltas. A matching result settles a basic run, reports native usage and cost,
-and returns the session to idle for the next submit. Interrupt settlement,
-queued continuations, and failure inferred from a disconnect follow in
-later slices. Transport loss before the run is installed fails the pending
-submit, even if the reader
-has already seen a matching marker. Hosts can set a deadline by dropping
-that future and closing the retired session. Per-run tool
-selection is unavailable until permission handling can enforce it.
+deltas. A matching result settles a basic run, reports native usage, cost and
+structured output, and returns a connected session to idle. A native terminal
+takes precedence over a subsequent disconnect. Without one, the adapter
+drains valid observations before publishing an inferred failure for an
+admitted run. Transport loss before the run is installed refuses the pending
+submit unless the drain already captured a matching terminal. An abort
+without an accepted cancel exchange settles as an observed failure. Interrupt
+handling and queued continuations follow in later slices. Hosts can set a
+deadline by dropping the submit future and closing the retired session.
+Per-run tool selection is unavailable until permission handling can enforce it.
