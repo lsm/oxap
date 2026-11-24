@@ -221,6 +221,48 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
     wire = json.dumps(expected, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
     wire = wire.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
     assert raw == wire + "\n", raw
+    if mode == "admission-control-routing":
+        def send_control(request_id, subtype, **fields):
+            print(json.dumps({"type": "control_request", "request_id": request_id,
+                              "request": dict(fields, subtype=subtype)}), flush=True)
+
+        def read_reply(request_id, **fields):
+            assert select.select([sys.stdin], [], [], 5)[0], request_id
+            reply = json.loads(sys.stdin.readline())
+            Path("last-control-reply").write_text(json.dumps(reply))
+            assert reply == {"type": "control_response",
+                             "response": dict(fields, request_id=request_id)}, reply
+
+        def ask(request_id):
+            send_control(request_id, "can_use_tool", tool_name="Read", tool_use_id="tool",
+                         input={"file_path": "fixture.txt"})
+
+        send_control("hook", "hook_callback", callback_id="oap_tool_selection",
+                     input={"hook_event_name": "PreToolUse"})
+        read_reply("hook", subtype="success", response={})
+        send_control("invalid-hook", "hook_callback", callback_id="oap_tool_selection",
+                     input={"hook_event_name": "PostToolUse"})
+        read_reply("invalid-hook", subtype="error", error="claude adapter: unregistered hook callback")
+        ask("before-echo")
+        read_reply("before-echo", subtype="error",
+                   error="claude adapter: permission ask outside an owned run")
+        Path("before-echo-replied").touch()
+
+        for index, request_id in ((6, "before-terminal"), (8, "after-terminal")):
+            observed = dict(frames[index]["raw"], session_id=binding, user_message_uuid=frame["uuid"],
+                            user_message_uuids=[])
+            print(json.dumps(observed), flush=True)
+            ask(request_id)
+        send_control("barrier", "barrier")
+        read_reply("barrier", subtype="error", error="claude adapter: no owned run")
+        Path("controls-buffered").touch()
+        read_reply("before-terminal", subtype="error", error="claude adapter: permission gate unavailable")
+        read_reply("after-terminal", subtype="error",
+                   error="claude adapter: permission ask outside an owned run")
+        assert select.select([sys.stdin], [], [], 5)[0], "session did not close"
+        assert not sys.stdin.readline(), "unexpected duplicate reply"
+        Path("eof").touch()
+        sys.exit(0)
     if mode.startswith("admission-"):
         def observe(raw):
             raw["session_id"] = binding
