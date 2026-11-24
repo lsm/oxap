@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/lsm/oxap/harnesses"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/lsm/oxap/go/adapter/codex/appserver/internal/native"
 	"github.com/lsm/oxap/go/adapter/codex/appserver/internal/rpc"
 	"github.com/lsm/oxap/go/protocol"
+	"github.com/lsm/oxap/harnesses"
 )
 
 var (
@@ -67,10 +68,12 @@ type Config struct {
 }
 
 type Adapter struct {
-	config Config
-	clock  adapter.Clock
-	ids    adapter.IDGenerator
-	native nativeServer
+	config   Config
+	clock    adapter.Clock
+	ids      adapter.IDGenerator
+	native   nativeServer
+	discover func()
+	images   imageModels
 }
 
 func New(config Config) (*Adapter, error) {
@@ -88,7 +91,9 @@ func New(config Config) (*Adapter, error) {
 	if config.JournalCapacity <= 0 {
 		config.JournalCapacity = defaultJournalCapacity
 	}
+	implementation := &Adapter{clock: clock, ids: ids}
 	if config.Factory == nil {
+		implementation.discover = sync.OnceFunc(implementation.discoverImages)
 		processConfig := rpc.ProcessConfig{
 			Path: config.Executable, Args: config.Args, Env: config.Environment,
 			Dir: config.WorkingDirectory, FrameLimit: config.FrameLimit,
@@ -103,7 +108,8 @@ func New(config Config) (*Adapter, error) {
 			return &processClient{Process: process}, nil
 		})
 	}
-	return &Adapter{config: config, clock: clock, ids: ids}, nil
+	implementation.config = config
+	return implementation, nil
 }
 
 type processClient struct{ *rpc.Process }
@@ -130,10 +136,23 @@ func (client *processClient) Close() error {
 }
 
 func (implementation *Adapter) Probe(context.Context) (adapter.Descriptor, error) {
+	features := advertisedFeatures()
+	revision := CapabilityRevision
+	if implementation.discover != nil {
+		implementation.discover()
+	}
+	model := implementation.config.Model
+	if model == "" {
+		model = implementation.images.defaultModel
+	}
+	if implementation.images.ids[model] {
+		features[protocol.FeatureContentImage] = protocol.FeatureSupport{Level: protocol.SupportNative, Reason: "inline image input on the configured model; a per-turn model must also advertise image input"}
+		revision += "-image"
+	}
 	endpoint := protocol.EndpointDescriptor{ID: endpointID, Name: "Codex app-server Adapter", Version: CodexCommit, Adapter: "codex-appserver-stdio"}
 	return adapter.Descriptor{
-		Capabilities:               protocol.CapabilityDescriptor{Endpoint: endpoint, ProtocolVersions: []string{protocol.Version}, Profiles: []string{protocol.Profile}, Features: advertisedFeatures()},
-		CapabilityRevision:         CapabilityRevision,
+		Capabilities:               protocol.CapabilityDescriptor{Endpoint: endpoint, ProtocolVersions: []string{protocol.Version}, Profiles: []string{protocol.Profile}, Features: features},
+		CapabilityRevision:         revision,
 		Journal:                    adapter.JournalDescriptor{Scope: "session", Persistence: "process_memory", Replay: protocol.SupportDegraded, Capacity: implementation.config.JournalCapacity},
 		MaxActiveRunsPerSession:    1,
 		InteractiveGates:           true,
@@ -211,6 +230,7 @@ func (implementation *Adapter) Open(ctx context.Context, request adapter.OpenReq
 		}
 	}
 	model := implementation.config.Model
+	var nativeModel string
 	level := request.ReasoningLevel
 	var recovery *protocol.RecoveryMetadata
 	if threadID == "" {
@@ -221,6 +241,7 @@ func (implementation *Adapter) Open(ctx context.Context, request adapter.OpenReq
 			return nil, fmt.Errorf("start Codex thread: %w", err)
 		}
 		threadID = response.Thread.ID
+		nativeModel = response.Model
 		if threadID == "" {
 			_ = client.Close()
 			return nil, fmt.Errorf("%w: thread/start returned no thread id", ErrNativeProtocol)
@@ -262,11 +283,20 @@ func (implementation *Adapter) Open(ctx context.Context, request adapter.OpenReq
 		sessionID = protocol.SessionID(implementation.ids.NewID("session"))
 	}
 	now := implementation.clock.Now().UnixMilli()
+	frameLimit := implementation.config.FrameLimit
+	if frameLimit <= 0 {
+		frameLimit = rpc.DefaultFrameLimit
+	}
+	currentModel := model
+	if currentModel == "" {
+		currentModel = nativeModel
+	}
 	session := &session{
 		client: client, clock: implementation.clock, ids: implementation.ids,
 		capacity: implementation.config.JournalCapacity, participant: request.Participant.ID,
-		threadID: threadID, model: model,
-		state: protocol.SessionState{SessionID: sessionID, Status: protocol.SessionIdle, CurrentModelID: model, UpdatedAtMS: now, Recovery: recovery, ReasoningLevel: level, CompactionPolicy: request.CompactionPolicy},
+		threadID: threadID, model: model, images: implementation.images,
+		frameLimit: frameLimit, revision: descriptor.CapabilityRevision,
+		state: protocol.SessionState{SessionID: sessionID, Status: protocol.SessionIdle, CurrentModelID: currentModel, UpdatedAtMS: now, Recovery: recovery, ReasoningLevel: level, CompactionPolicy: request.CompactionPolicy},
 		runs:  make(map[protocol.RunID]*runState), turns: make(map[string]protocol.RunID),
 		items: make(map[string]itemBinding), interactions: make(map[protocol.InteractionID]*interactionBinding), stop: make(chan struct{}),
 	}

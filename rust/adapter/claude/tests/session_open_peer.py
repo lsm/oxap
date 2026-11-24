@@ -82,7 +82,7 @@ if mode.startswith("run-"):
                 native_uuid if marker == corpus_uuid else marker
                 for marker in raw["user_message_uuids"]
             ]
-        print(json.dumps(raw), flush=True)
+        print(json.dumps(raw, separators=(",", ":")), flush=True)
 
     def wait_for_host(index):
         deadline = time.monotonic() + 5
@@ -152,6 +152,8 @@ if mode.startswith("run-"):
             assert turn == dict(raw, uuid=native_uuid)
             buffered = []
         elif action == "observe":
+            if raw.get("request", {}).get("subtype") == "can_use_tool":
+                permission_ask = raw
             if mode == "run-tools-edges":
                 if raw["type"] == "assistant":
                     blocks = raw["message"]["content"]
@@ -193,6 +195,20 @@ if mode.startswith("run-"):
             if raw["type"] == "result":
                 send(raw, corpus_uuid, native_uuid)
                 run_index += 1
+        elif action == "expect-write" and mode == "run-permission-withdrawal" and raw["response"]["request_id"].startswith("ask-"):
+            if run_index == 1:
+                send(dict(permission_ask, request_id="overlapping-ask"), corpus_uuid, native_uuid)
+            wait_for_host(f"withdraw-{run_index}")
+            print(json.dumps({"type": "control_cancel_request",
+                              "request_id": raw["response"]["request_id"]}), flush=True)
+            if run_index == 1:
+                wait_for_host("withdraw-overlapping")
+                print(json.dumps({"type": "control_cancel_request",
+                                  "request_id": "overlapping-ask"}), flush=True)
+            wait_for_host(f"withdrawn-{run_index}")
+        elif action == "expect-write" and mode.startswith("run-permission"):
+            assert select.select([sys.stdin], [], [], 5)[0], "missing native control reply"
+            assert json.loads(sys.stdin.readline()) == raw, raw
         elif action == "decode-error":
             print(raw, flush=True)
             break
@@ -253,11 +269,15 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
             observed = dict(frames[index]["raw"], session_id=binding, user_message_uuid=frame["uuid"],
                             user_message_uuids=[])
             print(json.dumps(observed), flush=True)
+            if index == 6:
+                ask("withdrawn-before-admission")
+                print(json.dumps({"type": "control_cancel_request",
+                                  "request_id": "withdrawn-before-admission"}), flush=True)
             ask(request_id)
         send_control("barrier", "barrier")
         read_reply("barrier", subtype="error", error="claude adapter: no owned run")
         Path("controls-buffered").touch()
-        read_reply("before-terminal", subtype="error", error="claude adapter: permission gate unavailable")
+        read_reply("before-terminal", subtype="error", error="claude adapter: run settled")
         read_reply("after-terminal", subtype="error",
                    error="claude adapter: permission ask outside an owned run")
         assert select.select([sys.stdin], [], [], 5)[0], "session did not close"

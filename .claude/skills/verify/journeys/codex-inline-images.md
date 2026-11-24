@@ -1,18 +1,20 @@
 # Codex inline image prompts
 
-Follow the shared Verify setup. Build the release CLI on the build host and run
-the synthetic journey there. CI runs the same journey without credentials.
+Follow the shared Verify setup. Build the Zig and Go hubs on the build host
+and run the same synthetic journey against each one. CI runs the same journey without credentials.
 
 ```sh
 zig build --build-file zig/build.zig install -Doptimize=ReleaseSafe --prefix "$EVIDENCE/oxap"
+go build -o "$EVIDENCE/goap" ./go/cmd/goap
 python3 .claude/skills/verify/scripts/codex-inline-images.py "$EVIDENCE/oxap/bin/oxap"
+python3 .claude/skills/verify/scripts/codex-inline-images.py "$EVIDENCE/goap" --hub go
 ```
 
 The stdio hub must use the app-server model catalog, preserve the order of the
 text and inline PNG parts on the native wire, and reject an unsupported model
 or invalid image before attempting a native turn. Check the configured and
 default vision models, text-only configured in either the hub or Codex, and a per-turn override to
-the text-only model. Expect four clean hub exits and a final `PASS`.
+the text-only model. Expect four clean hub exits, six completed turns and a final `PASS` per binary.
 
 For the live check, copy the built CLI to the machine running the already
 signed-in Codex CLI. Use the real home for this check only. The script sends

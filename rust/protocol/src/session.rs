@@ -394,6 +394,15 @@ pub struct SessionCapture {
     pub model_run_sequence: Option<RunPosition>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextUsage {
+    pub used_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction_threshold_tokens: Option<u64>,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SessionState {
@@ -417,6 +426,8 @@ pub struct SessionState {
     pub recovery: Option<RecoveryMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of: Option<SessionCapture>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_usage: Option<ContextUsage>,
     #[serde(skip_serializing_if = "ReasoningLevel::is_empty")]
     pub reasoning_level: ReasoningLevel,
     #[serde(skip_serializing_if = "Option::is_none")]

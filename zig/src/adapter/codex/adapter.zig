@@ -4,6 +4,7 @@ const harness_pins = @import("harness_pins");
 const builtin = @import("builtin");
 const contract = @import("contract");
 const oap_types = @import("oap_types");
+const oap_envelope = @import("oap_envelope");
 const process = @import("process");
 const session = @import("session");
 const native = @import("native");
@@ -442,6 +443,12 @@ pub const Session = struct {
     pending_effort: []const u8 = "",
     compact_above: usize = default_compact_above,
     retained: usize = 0,
+    context_updates: std.ArrayList(ContextUpdate) = .empty,
+
+    const ContextUpdate = struct {
+        after_run_events: usize,
+        line: []const u8,
+    };
 
     fn open(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!*Session {
         if (request.reopen and request.native_session_id.len == 0) return refusal.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
@@ -558,6 +565,7 @@ pub const Session = struct {
         .cancel = cancel,
         .pump = pump,
         .drain = drain,
+        .drain_mixed = drain,
         .readable = readable,
         .activity = activity,
         .live_work = liveWork,
@@ -669,9 +677,25 @@ pub const Session = struct {
     fn step(self: *Session, wait_ns: u64) contract.Failure!bool {
         const was_ended = self.ended;
         const message = try self.receive(wait_ns) orelse return self.ended != was_ended;
+        const previous = self.reducer.context_usage;
         self.reducer.observe(message) catch |err| return lift(err);
+        if (!std.meta.eql(previous, self.reducer.context_usage)) try self.queueContextUpdate();
         try self.flush();
         return true;
+    }
+
+    fn queueContextUpdate(self: *Session) contract.Failure!void {
+        const arena = self.owned();
+        var refusal = contract.Refusal{};
+        const snapshot = try state(self, arena, &refusal);
+        const id = try mint(self.owner, arena, "context");
+        const line = oap_envelope.serializeEnvelope(.{
+            .id = id,
+            .session_id = self.id,
+            .capability_revision = self.reducer.options.revision,
+            .payload = .{ .session_state_updated = snapshot },
+        }, arena) catch |err| return lift(err);
+        try self.context_updates.append(arena, .{ .after_run_events = self.reducer.envelopes.items.len, .line = line });
     }
 
     fn handshake(self: *Session, arena: std.mem.Allocator, refusal: *contract.Refusal) contract.Failure!void {
@@ -741,6 +765,7 @@ pub const Session = struct {
             .transcript_cursor = transcript_cursor,
             .updated_at_ms = if (current.updated_at_ms > 0) current.updated_at_ms else null,
             .recovered = current.recovered,
+            .context_usage = self.reducer.context_usage,
             .reasoning_level = reportedLevel(self.reducer.options.settings.reasoning_effort),
             .compaction_policy_json = try reportedPolicy(arena, self.reducer.options),
         };
@@ -894,7 +919,7 @@ pub const Session = struct {
     fn compact(self: *Session) contract.Failure!bool {
         if (self.ended or self.reducer.closed or self.reducer.transport_closed) return false;
         if (self.reducer.active != null) return false;
-        if (self.reducer.envelopes.items.len != 0 or self.reducer.writes.items.len != 0) return false;
+        if (self.reducer.envelopes.items.len != 0 or self.reducer.writes.items.len != 0 or self.context_updates.items.len != 0) return false;
         if (self.reducer_arena.queryCapacity() <= self.retained +| self.compact_above) return false;
         var fresh = std.heap.ArenaAllocator.init(self.gpa);
         errdefer fresh.deinit();
@@ -903,6 +928,7 @@ pub const Session = struct {
         self.reducer_arena.* = fresh;
         kept.arena = self.reducer_arena;
         self.reducer = kept;
+        self.context_updates = .empty;
         self.retained = self.reducer_arena.queryCapacity();
         return true;
     }
@@ -928,8 +954,26 @@ pub const Session = struct {
 
     fn drain(ptr: *anyopaque, allocator: std.mem.Allocator, out: *std.ArrayList(contract.Event)) contract.Failure!void {
         const self = cast(ptr);
-        try appendEvents(allocator, self.reducer.envelopes.items, out);
+        const start = out.items.len;
+        errdefer {
+            for (out.items[start..]) |event| {
+                allocator.free(event.line);
+                allocator.free(event.run_id);
+            }
+            out.shrinkRetainingCapacity(start);
+        }
+        const runs = self.reducer.envelopes.items;
+        const updates = self.context_updates.items;
+        try out.ensureUnusedCapacity(allocator, runs.len + updates.len);
+        var position: usize = 0;
+        for (updates) |update| {
+            try appendRunEvents(allocator, runs[position..update.after_run_events], out);
+            out.appendAssumeCapacity(.{ .line = try allocator.dupe(u8, update.line), .run_id = "", .sequence = 0 });
+            position = update.after_run_events;
+        }
+        try appendRunEvents(allocator, runs[position..], out);
         self.reducer.envelopes.clearRetainingCapacity();
+        self.context_updates.clearRetainingCapacity();
     }
 
     fn liveWork(ptr: *anyopaque) bool {
@@ -997,16 +1041,7 @@ fn describe(arena: std.mem.Allocator, refused: session.Refusal) ![]const u8 {
     return std.fmt.allocPrint(arena, "codex {s}: {s}", .{ refused.method, refused.message });
 }
 
-fn appendEvents(allocator: std.mem.Allocator, emitted: []const std.json.Value, out: *std.ArrayList(contract.Event)) contract.Failure!void {
-    try out.ensureUnusedCapacity(allocator, emitted.len);
-    const first = out.items.len;
-    errdefer {
-        for (out.items[first..]) |event| {
-            allocator.free(event.line);
-            allocator.free(event.run_id);
-        }
-        out.shrinkRetainingCapacity(first);
-    }
+fn appendRunEvents(allocator: std.mem.Allocator, emitted: []const std.json.Value, out: *std.ArrayList(contract.Event)) contract.Failure!void {
     for (emitted) |value| {
         const line = try json_encode.valueAlloc(allocator, value);
         errdefer allocator.free(line);

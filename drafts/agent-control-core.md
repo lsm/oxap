@@ -484,6 +484,18 @@ The core separates live stream events from canonical state.
 - `transcript_cursor`
 - `updated_at_ms`
 - `metadata`
+- `context_usage`
+
+An optional `context_usage` reports the latest sample for the active model
+context. `used_tokens` is required and can be zero. `window_tokens` is the
+model context window, and `compaction_threshold_tokens` is the effective
+automatic compaction limit measured in the same token basis as `used_tokens`.
+Both are positive when present. Token counts are integers at most
+9,007,199,254,740,991. Omit unknown values. This is a snapshot of occupancy
+and can decrease across updates. Keep it across runs and clear it when model
+changes or compaction invalidate it, until a fresh sample is available. Each
+session state document replaces the previous sample, including when the
+object or one of its fields is omitted.
 
 `session.state.updated` broadcasts the same shape when canonical state changes. Core
 session statuses are `idle`, `queued`, `running`, `waiting_for_input`, `closed`,

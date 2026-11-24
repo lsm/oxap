@@ -1392,6 +1392,8 @@ pub fn build(b: *std.Build) void {
     pi_adapter_mod.addImport("repeat", repeat_mod);
     const pi_adapter_test = b.addTest(.{ .root_module = pi_adapter_mod });
 
+    codex_session_mod.addImport("oap_types", protocol_oap_types_mod);
+
     const codex_adapter_mod = b.createModule(.{
         .root_source_file = b.path("src/adapter/codex/adapter.zig"),
         .target = target,
@@ -1399,6 +1401,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "contract", .module = adapter_contract_mod },
             .{ .name = "oap_types", .module = protocol_oap_types_mod },
+            .{ .name = "oap_envelope", .module = protocol_oap_envelope_mod },
             .{ .name = "process", .module = adapter_process_mod },
             .{ .name = "session", .module = codex_session_mod },
             .{ .name = "native", .module = codex_native_mod },

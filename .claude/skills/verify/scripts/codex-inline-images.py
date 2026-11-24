@@ -71,7 +71,7 @@ def native(default_model):
                     "threadId": "thread", "turn": {"id": f"turn-{turn}", "status": status}}})
 
 
-def verify(binary, root, model, codex=None, native_model=None):
+def verify(binary, root, model, codex=None, native_model=None, verb="serve", zig=True):
     (root / "home").mkdir(parents=True)
     config = root / "hub.json"
     live = codex is not None
@@ -83,8 +83,10 @@ def verify(binary, root, model, codex=None, native_model=None):
     if not live:
         entry["args"] = [str(Path(__file__).resolve()), "--native", native_model or ""]
     config.write_text(json.dumps({"adapters": {"codex": entry}}))
-    command = [str(binary), "serve", "--stdio", "--config", str(config),
-               "--no-save-oapx-sessions", "--session-history", str(root / "sessions.jsonl")]
+    command = [str(binary), verb, "--stdio", "--config", str(config),
+               "--session-history", str(root / "sessions.jsonl")]
+    if zig:
+        command.append("--no-save-oapx-sessions")
     hub = HUB["Hub"](command, root, "hub", home=Path.home() if live else None)
     colors = random.SystemRandom().sample(list(COLORS), 3) if live else ["red", "green", "blue"]
     data = png(colors)
@@ -100,8 +102,11 @@ def verify(binary, root, model, codex=None, native_model=None):
             request["capability_revision"] = revision
         return hub.call("submit", wait=90, session_id="s1", request=request)
 
-    def refused(reply, code):
+    def refused(reply, code, message=""):
         assert not reply["ok"] and reply["error"]["code"] == code, reply
+        assert message in reply["error"]["message"], reply
+        if code == "unsupported_feature":
+            assert reply["error"]["details"] == {"feature": "content.image", "reason": "unsatisfiable"}, reply
 
     text_only = (model or native_model) == "text-only"
     try:
@@ -114,8 +119,7 @@ def verify(binary, root, model, codex=None, native_model=None):
         assert hub.call("events", session_id="s1")["ok"]
         if not live and text_only:
             reply = submit(parts, revision=revision)
-            refused(reply, "unsupported_feature")
-            assert "does not support inline images" in reply["error"]["message"], reply
+            refused(reply, "unsupported_feature", "does not support inline images")
             assert "content.image" not in features, features
             assert submit([TEXT_BEFORE, TEXT_AFTER], revision=revision)["ok"]
             expected = [TEXT_BEFORE, TEXT_AFTER]
@@ -125,17 +129,20 @@ def verify(binary, root, model, codex=None, native_model=None):
                 assert reply["ok"], f"mixed text and PNG refused: {reply}"
                 expected = [TEXT_BEFORE, {"type": "image", "url": "data:image/png;base64," + data}, TEXT_AFTER]
                 hub.completed("s1")
-                refused(submit(parts, "text-only"), "unsupported_feature")
-                for bad in (
-                    {"type": "image", "image": {"url": "https://example.invalid/a.png"}},
-                    image("bad!"), image("ab=="), image(data, "text/plain"),
-                    image(base64.b64encode(bytes((4 << 20) + 1)).decode()),
+                refused(submit(parts, "text-only"), "unsupported_feature", "does not support inline images")
+                for bad, message in (
+                    ({"type": "image", "image": {"url": "https://example.invalid/a.png"}}, "PNG, JPEG, GIF or WebP"),
+                    (image("bad!"), "valid standard base64"),
+                    (image("ab=="), "valid standard base64"),
+                    (image(data, "text/plain"), "PNG, JPEG, GIF or WebP"),
+                    (image(base64.b64encode(bytes((4 << 20) + 1)).decode()), "exceeds 4 MiB decoded"),
                 ):
-                    refused(submit([bad]), "invalid_submission")
+                    refused(submit([bad]), "invalid_submission", message)
                 refused(submit([image("")]), "schema_invalid")
                 large = image(base64.b64encode(bytes(3 << 20)).decode())
-                refused(submit([large, large]), "invalid_submission")
-                refused(submit([large, {"type": "text", "text": "x" * (4 << 20)}]), "invalid_submission")
+                refused(submit([large, large]), "invalid_submission", "exceed 6 MiB of base64")
+                refused(submit([large, {"type": "text", "text": "x" * (4 << 20)}]),
+                        "invalid_submission", "exceeds the native frame limit")
                 assert submit("still usable")["ok"]
             else:
                 assert submit(parts, revision=revision)["ok"]
@@ -156,7 +163,8 @@ def verify(binary, root, model, codex=None, native_model=None):
                       if frame.get("envelope", {}).get("type") == "run.started"]
             assert [event["capability_revision"] for event in starts] == [revision] * len(want)
         hub.stop()
-        print(f"{model or native_model or 'default'}: hub exit={hub.process.returncode}")
+        print(f"{model or native_model or 'default'}: hub exit={hub.process.returncode}, "
+              f"completed turns={1 if live else len(observed)}")
         return revision
     finally:
         hub.cleanup()
@@ -170,15 +178,17 @@ if __name__ == "__main__":
         parser.add_argument("binary", type=Path)
         parser.add_argument("--codex", type=Path)
         parser.add_argument("--model")
+        parser.add_argument("--hub", choices=("zig", "go", "rust"), default="zig")
         args = parser.parse_args()
         with tempfile.TemporaryDirectory(prefix="oap-codex-images-") as temp:
             root = Path(temp).resolve()
             binary = args.binary.resolve()
+            options = {"verb": "hub" if args.hub == "go" else "serve", "zig": args.hub == "zig"}
             if args.codex:
-                verify(binary, root, args.model, args.codex.resolve())
+                verify(binary, root, args.model, args.codex.resolve(), **options)
             else:
-                vision = verify(binary, root / "vision", "vision")
-                assert verify(binary, root / "default", None) == vision
-                assert verify(binary, root / "text-only", "text-only") != vision
-                assert verify(binary, root / "native-text", None, native_model="text-only") != vision
+                vision = verify(binary, root / "vision", "vision", **options)
+                assert verify(binary, root / "default", None, **options) == vision
+                assert verify(binary, root / "text-only", "text-only", **options) != vision
+                assert verify(binary, root / "native-text", None, native_model="text-only", **options) != vision
                 print("PASS: 4 Codex model routes")
