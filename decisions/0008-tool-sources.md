@@ -228,7 +228,8 @@ catalog the descriptor did not publish.
 its own carrying the descriptor's members and, for a `process` source, the
 attachment-only `command`, `args`, and `environment` (the registry's allowlist
 form: a bare `NAME` forwards the endpoint's own value, `NAME=value` passes
-literally).
+literally). An attachment can also carry `credential_ref`, the one-time
+capability defined below.
 
 The separation is the point. `environment` can hold a literal credential, and
 `ToolSourceDescriptor` is what `action.tools.list.response` and `session.state`
@@ -239,6 +240,10 @@ keeps `additionalProperties: false` without them, which makes the leak a schema
 rejection rather than a convention, and the validator adds
 `attachment_field_in_catalog` for a published source carrying one anyway — the
 tolerant bundle and a hand-rolled serializer are caught too.
+
+`credential_ref` is attachment-only and subject to the same publication rule.
+`headers` belongs exclusively to the adapter-private attachment. A public
+request carrying literal headers is refused at the wire boundary.
 
 That rule reads the payload's raw JSON, because decoding is what hides the
 defect: an attachment-only member unmarshals into no field of
@@ -566,6 +571,50 @@ all.
 That hardening is defence in depth; the allowlist is what the unit graduates
 on, because an executable the operator never configured is not something the
 daemon should run under any boundary check.
+
+### A credential reference authorizes one session open
+
+The stdio hub can accept a capability-backed attachment as
+`{ id, kind, credential_ref }`. The operator configures a fixed, operator-owned
+directory of mode `0700` with `--session-tool-sources <directory>`. For each
+external create or explicit reopen using this path, the trusted issuer
+atomically writes a fresh mode `0600` capability file. The file contains the
+OAP session ID, the source descriptor, and the literal
+`Authorization: Bearer <credential>` header. Its filename is the canonical
+base64url encoding of a fresh 256-bit random value. The reference is that
+filename. It is distinct from both the session ID and the bearer credential.
+
+After public request validation and the attachment capability gates, the hub
+accepts only a canonical reference and resolves it inside that directory. The
+file's session ID and source ID must match the open exactly. Its descriptor
+is authoritative and must satisfy the requested kind and the adapter's
+attachment constraints. The hub claims the file atomically before calling
+the adapter and deletes it after use. A claim can serve only one open, even
+when opens race or the adapter refuses the open.
+
+A missing reference for a capability-backed source, an invalid reference or
+file, a cross-session or wrong-source reference, a duplicate source ID or
+reference, and a replayed reference all refuse the open. An unavailable source,
+including one whose file cannot be resolved or claimed, also refuses the open.
+These refusals use `unsupported_feature` with `details.feature:
+"action.tool_sources.attach"`, `details.reason: "unsatisfiable"`, and
+`details.source` naming the affected source. The hub must refuse unresolved
+attachments before opening the session.
+
+Resolution passes trusted headers only in the adapter-private attachment and
+consumes the reference at the hub. The reference never reaches the harness.
+Headers and references never enter published descriptors, catalogs, session
+state or metadata, or persisted bindings. Logs, including verification logs,
+redact both values and captured native configuration. Credentials and
+references stay out of command lines, process environments, and URLs. The
+endpoint remains a descriptor field. Native configuration travels over the
+private adapter pipe. Release verification checks the harness's home, including
+its rollout and configuration files, for persisted header values or references.
+Any hit blocks release.
+
+Create and explicit reopen resolve fresh files. Idle wake reuses the resolved
+adapter-private attachment under
+[Decision 0040](0040-a-session-reopens-through-its-own-binding.md#a-reopen-restores-the-bound-tool-sources).
 
 ## Evidence
 

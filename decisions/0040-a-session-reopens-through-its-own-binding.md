@@ -174,10 +174,10 @@ needs it.
 A binding is a record the **host** supplies and the library reads and writes
 through an interface, not a file format the protocol imposes. It carries: the
 OAP session id, the harness id and the pin it was opened under, the harness'
-own session id, the working directory and home directory the open ran in, and
-the model and settings the open asked for. Two things it never carries: a
-credential, and a resolved environment value — both would turn a record of what
-was asked into a copy of what was secret.
+own session id, the working directory and home directory the open ran in,
+the model and settings the open asked for, and the source IDs from create in
+`tool_source_ids`. Credentials, credential references, trusted headers, and
+resolved environment values are excluded from the binding.
 
 It is written **atomically** and a torn write is **detected, never read**: a
 record that cannot be parsed whole is an absence, not a partial truth, because
@@ -191,6 +191,27 @@ a binding at open and reads it at reopen. Where it lives, who writes it, and
 whether it is per-user or per-workspace is the host's choice, which is the point:
 the protocol decides what a binding must *say*, and the host decides where it
 keeps it.
+
+### A reopen restores the bound tool sources
+
+An external explicit reopen must supply exactly the source IDs recorded on
+create, with a fresh `credential_ref` for each ID. An omitted source list for
+a binding with sources, a removed, added, or replaced ID, or a duplicate ID
+refuses the reopen. An empty source list matches a binding with no sources.
+The hub resolves a new capability file for each requested source under
+[Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
+A missing, invalid, cross-session, or replayed reference or an unavailable
+source refuses the reopen. Source-set mismatches use the same
+`unsupported_feature` response with `details.feature:
+"action.tool_sources.attach"` and `details.reason: "unsatisfiable"`, naming the
+affected source in `details.source`. The session must keep its full attachment
+set across a successful reopen.
+
+Idle park is a detach of the same logical session. When the hub wakes a parked
+session, it reuses the resolved adapter-private attachment kept only in memory
+in its `OpenedWith` record. The wake uses the bound IDs and requires no new
+external request or capability file. If the bound sources cannot be restored,
+the wake fails. The durable binding still contains only their IDs.
 
 ## Consequences
 
