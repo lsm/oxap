@@ -348,11 +348,36 @@ impl SessionData {
         .map_err(Error::harness)?;
         gate.control
             .respond(Some(&body), deadline())
-            .map_err(Error::harness)?;
-        let event = turn.gates.remove(index).resolved(answer.answers, runtime);
+            .map_err(|error| match error {
+                ClientError::ReverseResolved => Error::InteractionNotFound,
+                _ => Error::harness(error),
+            })?;
+        self.finish_gate(index, answer.answers, runtime);
+        Ok(())
+    }
+
+    fn withdraw_gate(&mut self, request_id: &str, runtime: &Runtime) {
+        if let Some(turn) = &mut self.pending {
+            turn.buffered.retain(|frame| {
+                !matches!(frame, TurnFrame::Permission(control) if control.id == request_id)
+            });
+        }
+        if let Some(turn) = &self.active {
+            if let Some(index) = turn
+                .gates
+                .iter()
+                .position(|gate| gate.control.id == request_id)
+            {
+                self.finish_gate(index, Vec::new(), runtime);
+            }
+        }
+    }
+
+    fn finish_gate(&mut self, index: usize, answers: Vec<InputAnswer>, runtime: &Runtime) {
+        let gate = self.active.as_mut().unwrap().gates.remove(index);
+        let event = gate.resolved(answers, runtime);
         self.append_event(event, false, runtime);
         self.permission_status(runtime);
-        Ok(())
     }
 
     fn permission_status(&mut self, runtime: &Runtime) {
@@ -929,6 +954,12 @@ impl OpenedSession {
                         }
                         Inbound::Control(control) => {
                             state.lock().unwrap().route_control(control, &runtime);
+                        }
+                        Inbound::Cancel(notice) => {
+                            state
+                                .lock()
+                                .unwrap()
+                                .withdraw_gate(&notice.request_id, &runtime);
                         }
                         _ => {}
                     }

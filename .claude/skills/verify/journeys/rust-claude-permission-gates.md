@@ -16,3 +16,8 @@ Wrong or missing responders, wrong run scope, invalid choices and duplicate
 answers receive errors. Validate both emitted traces. The routing journey
 checks that an unresolved ask closes before the terminal event and that
 an ask after the terminal never becomes a gate.
+
+The peer also withdraws two open native asks. Require a linked cancelled
+resolution, a running state, and refusal of a late answer. The CLI receives
+no reply to a withdrawn ask. The routing journey also checks that a
+withdrawal buffered during admission never produces a public gate.
