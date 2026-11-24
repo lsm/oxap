@@ -20,6 +20,12 @@ use crate::native::{
 use crate::rpc::{Inbound, NotificationMessage};
 use crate::session::{hold, Inner, Shared};
 
+#[derive(Default)]
+struct EventFields<'a> {
+    tool_call: Option<ToolCallId>,
+    native_item: Option<&'a RawValue>,
+}
+
 fn compact(text: &str) -> Option<String> {
     serde_json::from_str::<&RawValue>(text).ok()?;
     let mut compacted = String::with_capacity(text.len());
@@ -371,8 +377,13 @@ impl Shared {
         id: &RunId,
         kind: EnvelopeType,
         payload: &ActionCallPayload,
+        native_item: Option<&RawValue>,
     ) {
-        self.emit_call(inner, id, kind, payload, &payload.tool_call_id);
+        let fields = EventFields {
+            tool_call: Some(payload.tool_call_id.clone()),
+            native_item,
+        };
+        self.stamp(inner, id, kind, payload, false, fields);
     }
 
     pub(crate) fn emit_call(
@@ -383,7 +394,11 @@ impl Shared {
         payload: &impl Serialize,
         tool_call: &ToolCallId,
     ) {
-        self.stamp(inner, id, kind, payload, false, Some(tool_call.clone()));
+        let fields = EventFields {
+            tool_call: Some(tool_call.clone()),
+            ..EventFields::default()
+        };
+        self.stamp(inner, id, kind, payload, false, fields);
     }
 
     pub(crate) fn emit(
@@ -394,7 +409,7 @@ impl Shared {
         payload: &impl Serialize,
         terminal: bool,
     ) {
-        self.stamp(inner, id, kind, payload, terminal, None);
+        self.stamp(inner, id, kind, payload, terminal, EventFields::default());
     }
 
     fn stamp(
@@ -404,7 +419,7 @@ impl Shared {
         kind: EnvelopeType,
         payload: &impl Serialize,
         terminal: bool,
-        tool_call: Option<ToolCallId>,
+        fields: EventFields<'_>,
     ) {
         let Some(run) = inner.runs.get_mut(id).filter(|run| !run.terminal) else {
             return;
@@ -417,7 +432,12 @@ impl Shared {
         let now = self.runtime.now_ms();
         envelope.session_id = Some(inner.state.session_id.clone());
         envelope.run_id = Some(id.clone());
-        envelope.tool_call_id = tool_call;
+        envelope.tool_call_id = fields.tool_call;
+        if let Some(item) = fields.native_item {
+            envelope
+                .extensions
+                .insert("com.openai.codex.item".into(), item.to_owned());
+        }
         envelope.sequence = Some(sequence);
         envelope.timestamp_ms = Some(now);
         envelope.capability_revision = Some(crate::adapter::pin().capability_revision.clone());

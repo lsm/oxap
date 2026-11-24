@@ -50,6 +50,7 @@ pub(crate) struct Binding {
     pub(crate) tool_call: ToolCallId,
     pub(crate) name: String,
     pub(crate) arguments: Box<RawValue>,
+    pub(crate) native_item: Option<Box<RawValue>>,
     pub(crate) terminal: bool,
     pub(crate) order: u64,
 }

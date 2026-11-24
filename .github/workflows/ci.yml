@@ -109,6 +109,14 @@ jobs:
         with:
           name: harness-delivery
           path: ${{ runner.temp }}/harness-delivery/
+      - name: Verify Codex subagent action events
+        run: |
+          replay=.claude/skills/verify/scripts/codex-subagent-events.py
+          evidence="$RUNNER_TEMP/codex-subagent-events"
+          python3 "$replay" /tmp/oapx-go-sdk/bin/oxap --output-dir "$evidence/zig"
+          python3 "$replay" "$RUNNER_TEMP/goap" --runtime go --output-dir "$evidence/go"
+          python3 "$replay" "$RUNNER_TEMP/harness-rust/debug/oap-rust-hub" --runtime rust --output-dir "$evidence/rust"
+          "$RUNNER_TEMP/goap" validate "$evidence/"*/trace.json
       - name: Prepare configured SDK launch verification
         run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/go-sdk-launch" /tmp/oapx-go-sdk/bin/oxap
       - name: Run the SDK tests

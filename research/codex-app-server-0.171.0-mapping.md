@@ -60,3 +60,21 @@ advertised modality, and check the thread or per-turn model before admission.
 They also need to preserve ordered message parts on `turn/start`, accept the
 same inline MIME and standard base64, enforce the same three limits, and run
 the synthetic hub journey on their binaries.
+
+## Subagent and collaboration items
+
+The Zig, Go, and Rust adapters map parent-turn `subAgentActivity` to
+`codex.subagent.activity` and `collabAgentToolCall` to
+`codex.collab.<native tool>` using the run's existing `action.call.*`
+lifecycle. A subagent activity completes when Codex reports that observation.
+Its `kind` distinguishes child start, interaction, interruption and completion.
+A collaboration call's native `failed` and `interrupted` statuses map to
+`action.call.failed` and `action.call.cancelled`, respectively.
+
+Each action event carries its native item under the envelope extension
+`com.openai.codex.item`. The item ID stays stable across phases. The child
+thread ID, receiver thread IDs and any `agentsStates` statuses and messages
+are available as Codex sends them. A V2 `wait` can report completion with no
+receivers or agent states. OAP tool call IDs are generated separately.
+The credential-free stdio hub replay covers these projections on all three
+adapters.

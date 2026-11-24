@@ -181,6 +181,27 @@ type Item struct {
 	DurationMS *int64          `json:"durationMs,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	Error      *ToolError      `json:"error,omitempty"`
+	Subagent   SubagentItem    `json:"-"`
+}
+
+type SubagentItem struct {
+	Kind   string          `json:"kind"`
+	Prompt string          `json:"prompt"`
+	Raw    json.RawMessage `json:"-"`
+}
+
+func (item *Item) UnmarshalJSON(data []byte) error {
+	type fields Item
+	if err := json.Unmarshal(data, (*fields)(item)); err != nil {
+		return err
+	}
+	if item.Type == "subAgentActivity" || item.Type == "collabAgentToolCall" {
+		if err := json.Unmarshal(data, &item.Subagent); err != nil {
+			return err
+		}
+		item.Subagent.Raw = append(item.Subagent.Raw[:0], data...)
+	}
+	return nil
 }
 
 type FileChange struct {

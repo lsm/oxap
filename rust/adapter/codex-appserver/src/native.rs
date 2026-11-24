@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use oxap_adapter::gojson::{raw, slice, structure, structures, zero};
+use oxap_adapter::gojson::{decode, raw, slice, structure, structures, zero};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::Value;
@@ -215,8 +215,24 @@ pub struct ItemNotification {
     pub thread_id: String,
     #[serde(default, rename = "turnId", deserialize_with = "zero")]
     pub turn_id: String,
-    #[serde(default, deserialize_with = "structure")]
+    #[serde(default, deserialize_with = "item_with_native")]
     pub item: Item,
+}
+
+fn item_with_native<'de, D>(deserializer: D) -> Result<Item, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Box::<RawValue>::deserialize(deserializer)?;
+    let mut item: Item = decode(raw.get().as_bytes()).map_err(serde::de::Error::custom)?;
+    if matches!(
+        item.kind.as_str(),
+        "subAgentActivity" | "collabAgentToolCall"
+    ) {
+        item.subagent = decode(raw.get().as_bytes()).map_err(serde::de::Error::custom)?;
+        item.subagent.raw = Some(raw);
+    }
+    Ok(item)
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -255,7 +271,22 @@ pub struct Item {
     pub result: Raw,
     #[serde(default)]
     pub error: Option<ToolError>,
+    #[serde(skip)]
+    pub(crate) subagent: SubagentItem,
 }
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct SubagentItem {
+    #[serde(default, deserialize_with = "zero")]
+    pub(crate) kind: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub(crate) prompt: String,
+    #[serde(skip)]
+    pub(crate) raw: Raw,
+}
+
+impl oxap_adapter::gojson::Decode for Item {}
+impl oxap_adapter::gojson::Decode for SubagentItem {}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileChange {

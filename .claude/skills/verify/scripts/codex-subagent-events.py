@@ -85,7 +85,7 @@ def native():
         turn("completed", "completed")
 
 
-def replay(binary, root, output):
+def replay(binary, runtime, root, output):
     (root / "home").mkdir()
     config = root / "hub.json"
     config.write_text(json.dumps({"adapters": {"codex": {
@@ -93,22 +93,28 @@ def replay(binary, root, output):
         "args": [str(Path(__file__).resolve()), "--native"], "working_directory": str(root),
         "model": "fixture", "approval_policy": "never", "sandbox": "read-only",
         "environment": []}}}))
-    command = [str(binary), "serve", "--stdio", "--config", str(config),
-               "--no-save-oapx-sessions", "--session-history", str(root / "sessions.jsonl")]
+    command = [str(binary), "serve", "--stdio", f"--config={config}"]
+    if runtime == "zig":
+        command.append("--no-save-oapx-sessions")
     hub = HUB["Hub"](command, root, "hub")
     try:
+        capabilities = hub.call("capabilities", adapter="codex")["result"]
+        capability_request = {key: capabilities[key] for key in ("protocol", "version", "profile")}
+        capability_request.update(type="capabilities.request", id=capabilities["in_reply_to"], payload={})
         opened = hub.call("open", adapter="codex", request=HUB["envelope"](
             "session.open.request", {"session_id": SESSION}))
         assert opened["ok"], opened
         assert hub.call("events", session_id=SESSION)["ok"]
-        submitted = hub.call("submit", session_id=SESSION, request=HUB["envelope"](
+        request = HUB["envelope"](
             "session.message.submit.request", {"session_id": SESSION, "delivery": "auto",
-            "messages": [{"role": "user", "content": "Delegate a check and wait for the result."}]}))
+            "messages": [{"role": "user", "content": "Delegate a check and wait for the result."}]})
+        submitted = hub.call("submit", session_id=SESSION, request=request)
         assert submitted["ok"], submitted
         terminal = hub.completed(SESSION)
         hub.stop()
         print(f"hub exit={hub.process.returncode}", flush=True)
-        return [frame["envelope"] for frame in hub.seen if "envelope" in frame], terminal
+        events = [frame["envelope"] for frame in hub.seen if "envelope" in frame]
+        return [capability_request, capabilities, request, submitted["result"], *events, terminal]
     finally:
         hub.cleanup()
         if output:
@@ -150,6 +156,9 @@ def verify(events, terminal):
         for event, _ in frames:
             assert event["tool_call_id"] == event["payload"]["tool_call_id"] == call_id, frames
             assert event["payload"]["name"] == name, frames
+        if outcome == "completed":
+            field = "kind" if end["type"] == "subAgentActivity" else "status"
+            assert frames[-1][0]["payload"]["result"] == {field: end[field]}, frames
     print(f"PASS: {len(call_ids)} action lifecycles with native item and child metadata")
 
 
@@ -159,12 +168,13 @@ if __name__ == "__main__":
     else:
         parser = argparse.ArgumentParser()
         parser.add_argument("binary", type=Path)
+        parser.add_argument("--runtime", choices=("zig", "go", "rust"), default="zig")
         parser.add_argument("--output-dir", type=Path)
         args = parser.parse_args()
         if args.output_dir:
             args.output_dir.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix="oap-codex-subagent-") as temporary:
-            events, terminal = replay(args.binary.resolve(), Path(temporary), args.output_dir)
+            trace = replay(args.binary.resolve(), args.runtime, Path(temporary), args.output_dir)
             if args.output_dir:
-                (args.output_dir / "events.json").write_text(json.dumps([*events, terminal], indent=2) + "\n")
-            verify(events, terminal)
+                (args.output_dir / "trace.json").write_text(json.dumps(trace, indent=2) + "\n")
+            verify(trace, trace[-1])
