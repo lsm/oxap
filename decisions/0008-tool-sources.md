@@ -495,12 +495,10 @@ reached. So `kind`, `display_name`, `protocol`, and `endpoint` come from the
 registry, and a caller that states one differing from the operator's is refused
 under the same typed shape rather than silently overwritten.
 
-That list is every member `ToolSourceAttachment` carries, less the four handled
-elsewhere, and it is stated that way because "the authoritative members are
-these" is the kind of claim that is falsified by a member nobody thought to
-name. `id` is the lookup key and cannot disagree with itself; `command` and
-`args` are refused outright from the wire; `environment` is additive under the
-bare-`NAME` allowlist. The four above are the remainder.
+For a registry attachment, `id` is the lookup key. The wire rejects `command`
+and `args` and permits additive `environment` entries under the bare-`NAME`
+allowlist. The separate capability-backed path below resolves
+`credential_ref` against the session and source IDs.
 
 `kind` was the member that got away, and it got away because it was doing a
 second job: the route dispatched on the caller's kind to decide whether to
@@ -574,7 +572,14 @@ daemon should run under any boundary check.
 
 ### A credential reference authorizes one session open
 
-The stdio hub can accept a capability-backed attachment as
+This amendment is staged. The shipped session schema rejects `credential_ref`.
+The schema, protocol types, validator, fixtures and client types will adopt
+the member together when support lands. At that point, this rule supersedes
+the [agent-service trust model](../drafts/agent-service.md#the-trust-model)
+for stdio attachment admission only. The reference authorizes a specific
+attachment and the hub consumes it during that open.
+
+An implementing stdio hub accepts a capability-backed attachment as
 `{ id, kind, credential_ref }`. The operator configures a fixed, operator-owned
 directory of mode `0700` with `--session-tool-sources <directory>`. For each
 external create or explicit reopen using this path, the trusted issuer
@@ -583,6 +588,9 @@ OAP session ID, the source descriptor, and the literal
 `Authorization: Bearer <credential>` header. Its filename is the canonical
 base64url encoding of a fresh 256-bit random value. The reference is that
 filename. It is distinct from both the session ID and the bearer credential.
+
+An external create using this path must carry the `session_id` the issuer
+put in the file.
 
 After public request validation and the attachment capability gates, the hub
 accepts only a canonical reference and resolves it inside that directory. The

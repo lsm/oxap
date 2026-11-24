@@ -194,6 +194,9 @@ keeps it.
 
 ### A reopen restores the bound tool sources
 
+This staged amendment governs hubs that implement the capability-backed
+attachments in [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
+
 An external explicit reopen must supply exactly the source IDs recorded on
 create, with a fresh `credential_ref` for each ID. An omitted source list for
 a binding with sources, a removed, added, or replaced ID, or a duplicate ID
@@ -212,6 +215,11 @@ session, it reuses the resolved adapter-private attachment kept only in memory
 in its `OpenedWith` record. The wake uses the bound IDs and requires no new
 external request or capability file. If the bound sources cannot be restored,
 the wake fails. The durable binding still contains only their IDs.
+
+Once implemented, this rule supersedes the live-tool-source exclusion in
+[agent-service parking](../drafts/agent-service.md#parking) and the
+[event-driven loop](../drafts/event-driven-loop.md#two-levels-of-parking) for
+sessions whose bound attachments can be restored on wake.
 
 ## Consequences
 
