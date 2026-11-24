@@ -334,6 +334,51 @@ fn claude_admission_refuses_a_closed_session_after_corroboration() {
 }
 
 #[test]
+fn claude_control_routing_preserves_native_order_across_admission() {
+    let (adapter, directory, _) = fixture("admission-control-routing");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let mut submit = session.submit(text_submit("hello"));
+    let mut context = Context::from_waker(futures::task::noop_waker_ref());
+    assert!(submit.as_mut().poll(&mut context).is_pending());
+    wait_for_peer(directory.path(), "before-echo-replied");
+    let idle = block_on(session.state()).unwrap();
+    assert!(idle.active_run_id.is_none());
+    wait_for_peer(directory.path(), "controls-buffered");
+    let (admission, stream) = block_on(submit).unwrap();
+    let events = block_on(stream.collect::<Vec<_>>())
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.envelope_type.as_str())
+            .collect::<Vec<_>>(),
+        ["run.started", "run.completed"]
+    );
+    assert!(events.iter().all(|event| event.run_id == admission.run_id));
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.sequence)
+            .collect::<Vec<_>>(),
+        [Some(1), Some(2)]
+    );
+    block_on(session.close()).unwrap();
+    assert!(
+        directory.path().join("eof").is_file(),
+        "peer did not observe the expected replies"
+    );
+    println!(
+        "PASS reverse controls: hook before admission, permissions ordered around the terminal"
+    );
+}
+
+#[test]
 fn claude_run_replays_streaming_and_settlement() {
     for (mode, case) in [
         ("run-streaming", "streaming-provenance"),
@@ -885,7 +930,11 @@ fn wait_for_peer(directory: &Path, marker: &str) {
     let observed = directory.join(marker);
     let deadline = Instant::now() + Duration::from_secs(5);
     while !observed.is_file() {
-        assert!(Instant::now() < deadline, "peer did not write {marker}");
+        assert!(
+            Instant::now() < deadline,
+            "peer did not write {marker}. Last reverse control reply: {}",
+            fs::read_to_string(directory.join("last-control-reply")).unwrap_or_default()
+        );
         thread::sleep(Duration::from_millis(10));
     }
 }
