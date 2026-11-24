@@ -44,6 +44,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
         mode if mode.starts_with("run-permission") => "permission-gates/native.jsonl",
+        mode if mode.starts_with("run-selection-") => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-tools") => "tool-lifecycle/native.jsonl",
         mode if mode.starts_with("run-interrupt-") => "interrupt-cancel/native.jsonl",
         "run-hygiene" | "run-native-wins" | "run-native-buffered" | "run-aborted" => {
@@ -405,6 +406,80 @@ fn claude_run_replays_streaming_and_settlement() {
 #[test]
 fn claude_tools_replay_corpus() {
     replay_run_events("run-tools", "tool-lifecycle");
+}
+
+#[test]
+fn claude_tool_selection_replays_policy_denials() {
+    for mode in ["run-selection-hook", "run-selection-gate"] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let mut runs = 0;
+        for (turn, frame) in frames
+            .iter()
+            .filter(|frame| frame["action"] == "submit")
+            .enumerate()
+        {
+            let text = frame["raw"]["message"]["content"].as_str().unwrap();
+            let mut submit = text_submit(text);
+            submit.request.delivery = RequestedDeliveryMode::AUTO;
+            if turn == 0 {
+                let policy = if mode == "run-selection-hook" {
+                    json!({"disallowed": ["Bash"]})
+                } else {
+                    json!({"allowed": ["Read"]})
+                };
+                submit.request.tool_choice =
+                    Some(serde_json::value::to_raw_value(&policy).unwrap());
+            }
+            let (admission, stream) = block_on(session.submit(submit.clone())).expect(mode);
+            fs::write(directory.path().join(format!("continue-{turn}")), []).unwrap();
+            let events = block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|event| event.envelope_type.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "run.started",
+                    "action.call.requested",
+                    "action.call.started",
+                    "action.call.failed",
+                    "run.completed"
+                ]
+            );
+            let failure = serde_json::to_value(&events[3]).unwrap();
+            let code = if turn == 0 {
+                "refused_by_policy"
+            } else {
+                "claude_tool_error"
+            };
+            assert_eq!(failure["payload"]["error"]["code"], code, "{mode}");
+            if turn == 0 {
+                let message = if mode == "run-selection-hook" {
+                    "Bash is excluded by this run's tool_choice"
+                } else {
+                    "refused by the run's tool_choice"
+                };
+                assert_eq!(failure["payload"]["error"]["message"], message);
+            }
+            assert_eq!(events[3].in_reply_to.as_ref(), Some(&events[2].id));
+            let mut trace = RunTrace::new(admission, adapter.describe(), events);
+            trace.submitted = Some(submit.request);
+            trace.assert_valid();
+            runs += 1;
+        }
+        block_on(session.close()).unwrap();
+        assert!(directory.path().join("eof").is_file());
+        assert_eq!(runs, 2);
+        println!("PASS {mode}: native refusal, linked tool failure, no permission ask, and no policy on the next run");
+    }
 }
 
 #[test]
