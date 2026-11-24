@@ -598,10 +598,25 @@ fn check_interrupt(mode: &str, terminal: &str) {
             "claude_aborted_streaming"
         );
     }
-    assert!(matches!(
-        block_on(session.cancel(run.clone())),
-        Err(Error::RunNotFound)
-    ));
+    let retry = block_on(session.cancel(run.clone()));
+    let status = terminal.strip_prefix("run.").unwrap();
+    if status == "cancelled" {
+        let retry = retry.unwrap();
+        assert!(retry.accepted);
+        assert_eq!(retry.status.as_str(), status);
+        assert_eq!(&retry.run_id, run);
+    } else {
+        assert!(
+            matches!(
+                retry,
+                Err(Error::RunAlreadyTerminal {
+                    run_id: Some(ref id),
+                    status: Some(ref actual),
+                }) if id == run && actual.as_str() == status
+            ),
+            "{mode}: {retry:?}"
+        );
+    }
     let (recovery, replay) = block_on(session.resume(ResumeRequest {
         run_id: run.clone(),
         after_sequence: 2,
@@ -613,6 +628,10 @@ fn check_interrupt(mode: &str, terminal: &str) {
         [serde_json::to_vec(&events[2]).unwrap()]
     );
     block_on(session.close()).unwrap();
+    assert!(matches!(
+        block_on(session.cancel(run.clone())),
+        Err(Error::SessionClosed)
+    ));
     if mode != "run-interrupt-no-receipt" {
         assert!(directory.path().join("eof").is_file());
     }
