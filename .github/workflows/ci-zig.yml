@@ -500,6 +500,9 @@ jobs:
       - name: Verify DeepSeek sessions resume across a hub restart
         run: python3 .claude/skills/verify/scripts/deepseek-native-resume.py --binary /tmp/oapx-hub/bin/oxap --goap /tmp/oapx-hub/bin/goap
 
+      - name: Verify live Codex context usage and reattach
+        run: python3 .claude/skills/verify/scripts/codex-context-usage.py /tmp/oapx-hub/bin/oxap
+
       - name: Verify Codex inline image prompts
         run: |
           python3 .claude/skills/verify/scripts/codex-inline-images.py /tmp/oapx-hub/bin/oxap

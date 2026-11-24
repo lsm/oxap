@@ -931,6 +931,14 @@ pub const SessionCapture = struct {
     }
 };
 
+pub const ContextUsage = struct {
+    pub const max_tokens = 9_007_199_254_740_991;
+
+    used_tokens: u64,
+    window_tokens: ?u64 = null,
+    compaction_threshold_tokens: ?u64 = null,
+};
+
 pub const SessionState = struct {
     session_id: []const u8,
     status: SessionStatus,
@@ -946,6 +954,7 @@ pub const SessionState = struct {
     recovered: bool = false,
     recovery_reason: ?[]const u8 = null,
     as_of: ?SessionCapture = null,
+    context_usage: ?ContextUsage = null,
     reasoning_level: ?[]const u8 = null,
     compaction_policy_json: ?[]const u8 = null,
 
