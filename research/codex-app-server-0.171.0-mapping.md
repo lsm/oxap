@@ -57,3 +57,14 @@ An unsupported model returns `unsupported_feature` before a native turn starts.
 The same synthetic stdio hub fixture checks native input order, capability
 revisions and pre-admission refusals on both binaries. The Rust adapter still
 needs these behaviors.
+
+## Live context usage in Zig
+
+`thread/tokenUsage/updated` reports the latest call's
+`tokenUsage.last.totalTokens` and optional `modelContextWindow`. The Zig
+adapter projects these into session state, including the usage replay on
+`thread/resume`. The start of a `contextCompaction` item invalidates the sample.
+Codex recomputes usage before completing the item, so completion keeps fresh
+usage. The notification has no effective compaction threshold. Codex can clamp
+the configured limit and can count a different portion of context against it,
+so this adapter leaves the marker absent.
