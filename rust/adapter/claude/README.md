@@ -110,8 +110,11 @@ or close. A matching native turn marker or compacting status admits the run.
 The stream begins with `run.started`, then the reducer applies buffered
 observations in arrival order. Explicitly foreign markers, child echoes, and
 injected output do not join the turn. The adapter streams text and reasoning
-deltas. A matching result settles a basic run, reports native usage, cost and
-structured output, and returns a connected session to idle. A native terminal
+deltas. A matching result reports native usage, cost and structured output.
+An active local agent or workflow or a positive queued turn count holds the
+result. A terminal task notice releases that child. A later result can
+replace the held result, and a native idle notice can publish it. The parent
+keeps its run ID and owns the session until settlement. A native terminal
 takes precedence over a subsequent disconnect. Without one, the adapter
 drains valid observations before publishing an inferred failure for an
 admitted run. Transport loss before the run is installed refuses the pending

@@ -43,6 +43,8 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-settlement" => "settlement-statuses/native.jsonl",
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
+        mode if mode.starts_with("run-children") => "background-children/native.jsonl",
+        "run-queued-continuation" => "queued-continuation/native.jsonl",
         mode if mode.starts_with("run-permission") => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-selection-") => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-tools") => "tool-lifecycle/native.jsonl",
@@ -406,6 +408,118 @@ fn claude_run_replays_streaming_and_settlement() {
 #[test]
 fn claude_tools_replay_corpus() {
     replay_run_events("run-tools", "tool-lifecycle");
+}
+
+#[test]
+fn claude_child_settlement_replays_deferred_runs() {
+    for (mode, case) in [
+        ("run-children", "background-children"),
+        ("run-children-mixed", "background-children"),
+        ("run-queued-continuation", "queued-continuation"),
+    ] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let expected = expected_run_events(case);
+        let turns: Vec<_> = expected
+            .split_inclusive(|event| event["type"] == "run.completed")
+            .collect();
+        let submits = frames.iter().filter(|frame| frame["action"] == "submit");
+        assert_eq!(turns.len(), submits.clone().count());
+        for (index, (expected, frame)) in turns.into_iter().zip(submits).enumerate() {
+            let text = frame["raw"]["message"]["content"].as_str().unwrap();
+            let mut submit = text_submit(text);
+            submit.request.delivery = RequestedDeliveryMode::AUTO;
+            let (admission, mut stream) = block_on(session.submit(submit.clone())).unwrap();
+            wait_for_peer(directory.path(), &format!("deferred-{index}"));
+            let state = block_on(session.state()).unwrap();
+            assert_eq!(state.status.as_str(), "running", "{mode} turn {index}");
+            assert_eq!(state.active_run_id, admission.run_id);
+            assert!(matches!(
+                block_on(session.submit(text_submit("overlap"))),
+                Err(Error::RunActive)
+            ));
+            let prefix = expected.len() - 1;
+            let mut events = block_on(stream.by_ref().take(prefix).collect::<Vec<_>>())
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert!(stream.next().now_or_never().is_none());
+            fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+            events.extend(
+                block_on(stream.collect::<Vec<_>>())
+                    .into_iter()
+                    .map(Result::unwrap),
+            );
+            assert_run_events(&admission, &events, expected, mode);
+            assert_eq!(block_on(session.state()).unwrap().status.as_str(), "idle");
+            let mut trace = RunTrace::new(admission, adapter.describe(), events);
+            trace.submitted = Some(submit.request);
+            trace.assert_valid();
+        }
+        block_on(session.close()).unwrap();
+        assert!(directory.path().join("eof").is_file());
+        println!(
+            "PASS {mode}: {} corpus envelopes and exclusive ownership through settlement",
+            expected.len()
+        );
+    }
+}
+
+#[test]
+fn claude_child_settlement_requires_final_evidence_at_disconnect() {
+    for mode in [
+        "run-children-live-eof",
+        "run-children-pending-eof",
+        "run-children-settled-eof",
+    ] {
+        let (adapter, directory, frames) = fixture(mode);
+        let session = block_on(adapter.open(OpenRequest {
+            session_id: "session".into(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let text = frames[2]["raw"]["message"]["content"].as_str().unwrap();
+        let mut submit = session.submit(text_submit(text));
+        if mode == "run-children-live-eof" {
+            let (_, stream) = block_on(submit).unwrap();
+            wait_for_peer(directory.path(), "deferred-0");
+            fs::write(directory.path().join("continue-0"), []).unwrap();
+            let events = block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[1].envelope_type.as_str(), "run.failed");
+            let payload = serde_json::to_value(&events[1]).unwrap();
+            assert_eq!(payload["payload"]["error"]["code"], "claude_process_exit");
+            assert_eq!(payload["payload"]["settled_by"], "inferred");
+        } else {
+            let mut context = Context::from_waker(futures::task::noop_waker_ref());
+            assert!(submit.as_mut().poll(&mut context).is_pending());
+            wait_until_closed(session.as_ref());
+            if mode == "run-children-pending-eof" {
+                assert!(matches!(block_on(submit), Err(Error::SessionClosed)));
+            } else {
+                let (admission, stream) = block_on(submit).unwrap();
+                let events = block_on(stream.collect::<Vec<_>>())
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                assert_run_events(
+                    &admission,
+                    &events,
+                    &expected_run_events("background-children")[..2],
+                    mode,
+                );
+            }
+        }
+        block_on(session.close()).unwrap();
+        println!("PASS {mode}: the drain settled from available child evidence");
+    }
 }
 
 #[test]

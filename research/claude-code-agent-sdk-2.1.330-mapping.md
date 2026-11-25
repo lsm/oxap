@@ -19,6 +19,12 @@ The old SDK package's recorded digest was reproduced before comparing declaratio
 
 ## Rust port divergence
 
+When a result reports queued work and a local child is still open, Go can
+publish the held result when that child settles. Rust keeps the queued
+continuation active until a matching result clears the count or native idle
+confirms the session has drained. The mixed process replay checks both a
+child terminal while queued work remains and idle with an open child.
+
 Rust requires an explicit responder matching the opening participant on a
 permission decision and rejects conflicting responder fields. Go permits
 an omitted responder at the adapter boundary.
