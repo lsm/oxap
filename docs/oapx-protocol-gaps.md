@@ -94,11 +94,13 @@ durable history.
 
 ### 2. Resume attachment (session reattach)
 
-**Spec.** `+session-reattach` is executable under Decision 0040: a reopen is a
-member of `session.open.request`, gated by `session.open.reopen`, answered
-with the state document, with three refusals that fail closed
-(`decisions/0040-a-session-reopens-through-its-own-binding.md:79`, `:88`,
-`:132`; `drafts/conformance.md:693`). The hub records one binding per open in
+**Spec.** `+session-reattach` is executable under Decision 0040. A
+[reopen](../decisions/0040-a-session-reopens-through-its-own-binding.md#a-reopen-is-a-member-on-the-open-request-not-a-new-verb)
+is a member of `session.open.request`. It is
+[gated by `session.open.reopen`](../decisions/0040-a-session-reopens-through-its-own-binding.md#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe)
+and answered with the state document or one of
+[three refusals](../decisions/0040-a-session-reopens-through-its-own-binding.md#the-three-refusals-and-each-fails-closed)
+(`drafts/conformance.md:693`). The hub records one binding per open in
 its session history, and a restarted hub lists and reopens what a shutdown
 left behind (`drafts/agent-service.md:72`, `:1398`).
 

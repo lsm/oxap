@@ -13,8 +13,9 @@ Profile: `open-agent-protocol.agent-control-core`
 Unit: `tool-sources` (claim term `+tool-sources`; plan sub-units T3a and T3b)
 Extends: [Decision 0001](0001-agent-control-v0.1-executable-core.md) and
 [Decision 0002](0002-admission-before-start.md) without amending either
-Amends: [the agent-service trust model](../drafts/agent-service.md#the-trust-model)
-for stdio attachment admission when the staged amendment is implemented
+Amends: [the trust model](../drafts/agent-service.md#the-trust-model) and
+[tool sources on the wire](../drafts/agent-service.md#tool-sources-on-the-wire)
+in the agent-service draft when the staged stdio amendment is implemented
 Gated by: [Decision 0003](0003-staged-unit-graduation.md)
 Design: [Staged Units Graduation Plan](../drafts/staged-units-graduation.md),
 section "T3. Tool sources and control-layer tools"
@@ -231,8 +232,7 @@ catalog the descriptor did not publish.
 its own carrying the descriptor's members and, for a `process` source, the
 attachment-only `command`, `args`, and `environment` (the registry's allowlist
 form: a bare `NAME` forwards the endpoint's own value, `NAME=value` passes
-literally). An attachment can also carry `credential_ref`, the one-time
-capability defined below.
+literally).
 
 The separation is the point. `environment` can hold a literal credential, and
 `ToolSourceDescriptor` is what `action.tools.list.response` and `session.state`
@@ -243,10 +243,6 @@ keeps `additionalProperties: false` without them, which makes the leak a schema
 rejection rather than a convention, and the validator adds
 `attachment_field_in_catalog` for a published source carrying one anyway — the
 tolerant bundle and a hand-rolled serializer are caught too.
-
-`credential_ref` is attachment-only and subject to the same publication rule.
-`headers` belongs exclusively to the adapter-private attachment. A public
-request carrying literal headers is refused at the wire boundary.
 
 That rule reads the payload's raw JSON, because decoding is what hides the
 defect: an attachment-only member unmarshals into no field of
@@ -578,9 +574,14 @@ daemon should run under any boundary check.
 This amendment is staged. The shipped session schema rejects `credential_ref`.
 The schema, protocol types, validator, fixtures and client types will adopt
 the member together when support lands. At that point, this rule supersedes
-the [agent-service trust model](../drafts/agent-service.md#the-trust-model)
-for stdio attachment admission only. The reference authorizes a specific
-attachment and the hub consumes it during that open.
+the [agent-service trust model](../drafts/agent-service.md#the-trust-model) and
+[tool sources on the wire](../drafts/agent-service.md#tool-sources-on-the-wire)
+for capability-backed stdio attachments. The hub consumes the reference
+during the open it authorizes.
+
+`credential_ref` is attachment-only and follows the same publication rule as
+other attachment-only fields. `headers` belongs exclusively to the
+adapter-private attachment. The wire boundary refuses literal headers.
 
 An implementing stdio hub accepts a capability-backed attachment as
 `{ id, kind, credential_ref }`. The operator configures a fixed, operator-owned

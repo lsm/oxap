@@ -17,10 +17,10 @@ Source: [`decisions/0040-a-session-reopens-through-its-own-binding.md`](../../de
 
 | id | rule | lines | code | Go | Zig | Rust |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/1` | An open with `reopen: true` to an endpoint that does not advertise `session.open.reopen` above `unavailable` MUST be refused `unsupported_feature` naming the key, `details.reason: "unadvertised"`. | L89–106 | `unavailable_capability` | `reopen.go:reopenGate` | `semantic.zig:reopenGate` | `state/controls/reopen_gates.rs:reopen_gate`, `state/controls/reopen_gates.rs:reopen_admission`, `state/controls/reopen_gates.rs:reopen_refusal` |
-| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/2` | A reopen under a `degraded` disclosure without the caller's opt-in MUST be refused `capability_degraded`. | L89–106 | `degraded_without_optin` | `reopen.go:reopenGate` | `semantic.zig:reopenGate` | `state/controls/reopen_gates.rs:reopen_gate`, `state/controls/reopen_gates.rs:reopen_admission`, `state/controls/reopen_gates.rs:reopen_refusal` |
-| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/3` | A successful reopen MUST list no run under way, unless the same open carried a message that admitted one. As amended by 0050 § 5, it may also list restored runs as `queued`. | L89–106 | `session_state_mismatch` | `reopen.go:reopenResponse` | `semantic.zig:reopenResponse` | `state/admissions.rs:reopen_response` |
-| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/4` | A `session.open.request` setting `reopen: true` MUST carry `session_id`. | L102–103 | `schema_invalid` | schema | schema | schema |
+| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/1` | An open with `reopen: true` to an endpoint that does not advertise `session.open.reopen` above `unavailable` MUST be refused `unsupported_feature` naming the key, `details.reason: "unadvertised"`. | L93–110 | `unavailable_capability` | `reopen.go:reopenGate` | `semantic.zig:reopenGate` | `state/controls/reopen_gates.rs:reopen_gate`, `state/controls/reopen_gates.rs:reopen_admission`, `state/controls/reopen_gates.rs:reopen_refusal` |
+| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/2` | A reopen under a `degraded` disclosure without the caller's opt-in MUST be refused `capability_degraded`. | L93–110 | `degraded_without_optin` | `reopen.go:reopenGate` | `semantic.zig:reopenGate` | `state/controls/reopen_gates.rs:reopen_gate`, `state/controls/reopen_gates.rs:reopen_admission`, `state/controls/reopen_gates.rs:reopen_refusal` |
+| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/3` | A successful reopen MUST list no run under way, unless the same open carried a message that admitted one. As amended by 0050 § 5, it may also list restored runs as `queued`. | L93–110 | `session_state_mismatch` | `reopen.go:reopenResponse` | `semantic.zig:reopenResponse` | `state/admissions.rs:reopen_response` |
+| `0040#the-capability-key-is-sessionopenreopen-and-a-reopen-is-gated-like-subscribe/4` | A `session.open.request` setting `reopen: true` MUST carry `session_id`. | L106–107 | `schema_invalid` | schema | schema | schema |
 
 ### [0040] The reply is the state document, and it declares what the session runs under
 
@@ -28,7 +28,7 @@ Source: [`decisions/0040-a-session-reopens-through-its-own-binding.md`](../../de
 
 | id | rule | lines | code | Go | Zig | Rust |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0040#the-reply-is-the-state-document-and-it-declares-what-the-session-runs-under/1` | A successful reopen MUST declare `recovery.recovered: true`. | L89–106, L109–130 | `session_state_mismatch` | `reopen.go:reopenResponse` | `semantic.zig:reopenResponse` | `state/admissions.rs:reopen_response` |
+| `0040#the-reply-is-the-state-document-and-it-declares-what-the-session-runs-under/1` | A successful reopen MUST declare `recovery.recovered: true`. | L93–110, L113–134 | `session_state_mismatch` | `reopen.go:reopenResponse` | `semantic.zig:reopenResponse` | `state/admissions.rs:reopen_response` |
 
 ### [0044] A requested compaction is a run
 
@@ -198,7 +198,7 @@ Source: [`decisions/0040-a-session-reopens-through-its-own-binding.md`](../../de
 
 | id | rule | lines | code | Go | Zig | Rust |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0040#the-three-refusals-and-each-fails-closed/1` | A create naming a bound id MUST be refused `session_exists`, a reopen with no binding `unknown_session`, and a reopen the harness cannot load `unsupported_feature`. | L133–142 | — | — | — | — |
+| `0040#the-three-refusals-and-each-fails-closed/1` | A create naming a bound id MUST be refused `session_exists`, a reopen with no binding `unknown_session`, and a reopen the harness cannot load `unsupported_feature`. | L137–146 | — | — | — | — |
 
 ### [0040] A store that is gone answers `unsupported_feature`, and the code comes from the binding
 
@@ -206,7 +206,7 @@ Source: [`decisions/0040-a-session-reopens-through-its-own-binding.md`](../../de
 
 | id | rule | lines | code | Go | Zig | Rust |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0040#a-store-that-is-gone-answers-unsupported_feature-and-the-code-comes-from-the-binding/1` | A reopen whose binding names a store that is gone MUST be refused `unsupported_feature`, never `unknown_session`. | L145–170 | — | — | — | — |
+| `0040#a-store-that-is-gone-answers-unsupported_feature-and-the-code-comes-from-the-binding/1` | A reopen whose binding names a store that is gone MUST be refused `unsupported_feature`, never `unknown_session`. | L149–174 | — | — | — | — |
 
 ### [0044] Two features, one unit
 

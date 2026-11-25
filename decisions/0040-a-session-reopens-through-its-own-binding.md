@@ -179,9 +179,9 @@ A binding is a record the **host** supplies and the library reads and writes
 through an interface, not a file format the protocol imposes. It carries: the
 OAP session id, the harness id and the pin it was opened under, the harness'
 own session id, the working directory and home directory the open ran in,
-the model and settings the open asked for, and the source IDs from create in
-`tool_source_ids`. Credentials, credential references, trusted headers, and
-resolved environment values are excluded from the binding.
+and the model and settings the open asked for. Credentials, credential
+references, trusted headers, and resolved environment values are excluded
+from the binding.
 
 It is written **atomically** and a torn write is **detected, never read**: a
 record that cannot be parsed whole is an absence, not a partial truth, because
@@ -201,13 +201,20 @@ keeps it.
 This staged amendment governs hubs that implement the capability-backed
 attachments in [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
 
-An external explicit reopen using the capability-backed path must supply
-exactly the source IDs recorded on create, with a fresh `credential_ref` for
-each ID using that path. A binding created without capability-backed
-attachments continues to reopen under the existing rules, including registry
-lookup by ID for operator-configured sources. For a capability-backed reopen,
-an omitted source list or a removed, added, replaced, or duplicate ID refuses
-the reopen. Each capability-backed source needs a new file resolved under
+Create records the source IDs in `tool_source_ids` and records nonsecret
+provenance for each ID indicating whether the source was admitted through a
+capability file. The host chooses how to store that marker. Reopen uses the
+recorded provenance even if the registry now contains a source with the same
+ID. It refuses a source that cannot be restored through its recorded path.
+
+An external explicit reopen of a binding with capability-backed sources must
+supply exactly the source IDs recorded on create, with a fresh
+`credential_ref` for every ID marked capability-backed. The other IDs follow
+the existing rules, including registry lookup by ID for operator-configured
+sources. A binding created without capability-backed attachments continues
+under the existing reopen rules. For a capability-backed reopen, an omitted
+source list or a removed, added, replaced, or duplicate ID refuses the reopen.
+Each capability-backed source needs a new file resolved under
 [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
 A missing, invalid, cross-session, or replayed reference or an unavailable
 source refuses the reopen. Source-set mismatches use the same
@@ -220,7 +227,8 @@ Idle park is a detach of the same logical session. When the hub wakes a parked
 session, it reuses the resolved adapter-private attachment kept only in memory
 in its `OpenedWith` record. The wake uses the bound IDs and requires no new
 external request or capability file. If the bound sources cannot be restored,
-the wake fails. The durable binding still contains only their IDs.
+the wake fails. The durable binding keeps the IDs and their provenance
+markers.
 
 Once implemented, this rule supersedes the live-tool-source exclusion in
 [agent-service parking](../drafts/agent-service.md#parking) and the
