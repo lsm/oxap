@@ -34,4 +34,5 @@ cargo test --locked --manifest-path rust/Cargo.toml -p oxap-sdk --test oap_clien
 ```
 
 Use an isolated test environment with no provider credentials. The SDK
-fixtures echo the chosen level or publish it in catalog metadata.
+fixtures echo the chosen level or publish it in catalog metadata. The Rust
+fixture also checks that `max` survives catalog decoding and session open.

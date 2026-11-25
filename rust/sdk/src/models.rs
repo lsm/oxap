@@ -135,6 +135,7 @@ pub enum ReasoningLevel {
     Medium,
     High,
     Xhigh,
+    Max,
     Ultra,
 }
 
