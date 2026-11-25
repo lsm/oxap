@@ -14,7 +14,7 @@ const json_encode = @import("json_encode");
 
 pub const bridge = @import("bridge.zig");
 pub const endpoint_id = session.endpoint_id;
-pub const capability_revision = session.capability_revision ++ "-steer";
+pub const capability_revision = harness_pins.codex_app_server_zig_capability_revision;
 const app_server_args = [_][]const u8{ "app-server", "--listen", "stdio://" };
 
 const features = table: {

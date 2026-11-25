@@ -86,14 +86,16 @@ func checkHarness(tree fs.FS, harness Harness) []Finding {
 			findings = append(findings, Finding{Harness: harness.ID, Version: version.Label, Code: CodeDuplicateLabel, Detail: "the label keys more than one version"})
 		}
 		labels[version.Label] = true
-		if version.CapabilityRevision == "" {
-			continue
+		for _, revision := range []string{version.CapabilityRevision, version.ZigCapabilityRevision} {
+			if revision == "" {
+				continue
+			}
+			if other, seen := revisions[revision]; seen {
+				findings = append(findings, Finding{Harness: harness.ID, Version: version.Label, Code: CodeDuplicateRevision, Detail: fmt.Sprintf("capability revision %q is also %s's", revision, other)})
+				continue
+			}
+			revisions[revision] = version.Label
 		}
-		if other, seen := revisions[version.CapabilityRevision]; seen {
-			findings = append(findings, Finding{Harness: harness.ID, Version: version.Label, Code: CodeDuplicateRevision, Detail: fmt.Sprintf("capability revision %q is also %s's", version.CapabilityRevision, other)})
-			continue
-		}
-		revisions[version.CapabilityRevision] = version.Label
 	}
 	for _, version := range harness.Versions {
 		findings = append(findings, checkVersion(tree, harness, version, labels, current)...)

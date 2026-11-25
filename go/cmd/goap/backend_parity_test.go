@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lsm/oxap/go/adapter/codex/appserver"
+	"github.com/lsm/oxap/harnesses"
 )
 
 func TestBackendsMatchOapx(t *testing.T) {
@@ -52,7 +52,7 @@ func TestBackendsMatchOapx(t *testing.T) {
 				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(goExchange.envelopes), len(scenario))
 			}
 			zigExpected := goExchange
-			if backend == "codex" {
+			if filepath.Base(dir) == "codex" {
 				zigExpected.envelopes = codexSteerExpectations(t, goExchange.envelopes)
 			}
 			compareBackendExchanges(t, "oapx", zigExpected, exchangeWithChild(t, dir, backend, scenario, oapx))
@@ -75,14 +75,15 @@ type backendExchange struct {
 
 func codexSteerExpectations(t *testing.T, lines []string) []string {
 	t.Helper()
+	pin := harnesses.Current("codex-app-server")
 	expected := make([]string, 0, len(lines))
 	for _, line := range lines {
 		var frame map[string]any
 		if err := json.Unmarshal([]byte(line), &frame); err != nil {
 			t.Fatal(err)
 		}
-		if frame["capability_revision"] == appserver.CapabilityRevision {
-			frame["capability_revision"] = appserver.CapabilityRevision + "-steer"
+		if frame["capability_revision"] == pin.CapabilityRevision {
+			frame["capability_revision"] = pin.ZigCapabilityRevision
 		}
 		if frame["type"] == "capabilities.response" {
 			payload, _ := frame["payload"].(map[string]any)
@@ -91,6 +92,18 @@ func codexSteerExpectations(t *testing.T, lines []string) []string {
 				t.Fatalf("Codex capabilities response has no feature map: %s", line)
 			}
 			features["session.message.delivery.steer"] = map[string]any{"level": "native"}
+		}
+		if frame["in_reply_to"] == "r2" {
+			payload, _ := frame["payload"].(map[string]any)
+			refusal, _ := payload["error"].(map[string]any)
+			details, _ := refusal["details"].(map[string]any)
+			if refusal["code"] != "unsupported_feature" || details["feature"] != "session.message.delivery.steer" {
+				t.Fatalf("expected Go to refuse idle Codex steer as unsupported: %s", line)
+			}
+			payload["error"] = map[string]any{
+				"code": "invalid_steer_target", "message": "adapter: steer target cannot take guidance",
+				"details": map[string]any{"reason": "no_active_run"},
+			}
 		}
 		encoded, err := json.Marshal(frame)
 		if err != nil {

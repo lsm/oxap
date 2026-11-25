@@ -74,6 +74,7 @@ func pinValues(catalog Catalog) map[string]pinValue {
 			add(harness.ID, version.Label, "label", version.Label)
 			add(harness.ID, version.Label, "endpoint_version", version.EndpointVersion)
 			add(harness.ID, version.Label, "capability_revision", version.CapabilityRevision)
+			add(harness.ID, version.Label, "zig_capability_revision", version.ZigCapabilityRevision)
 			add(harness.ID, version.Label, "corpus", version.Corpus)
 			for _, admitted := range version.Admits {
 				add(harness.ID, version.Label, "admits", admitted)
