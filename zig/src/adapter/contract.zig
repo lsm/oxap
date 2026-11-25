@@ -95,6 +95,7 @@ pub const Descriptor = struct {
     endpoint: oap_types.Endpoint,
     capability_revision: []const u8,
     features: []const Feature,
+    private_tool_sources: bool = false,
     tools: []const oap_types.ToolDefinition = &.{},
     sources: []const oap_types.ToolSourceDescriptor = &.{},
     limits: ?oap_types.Limits = null,
@@ -136,6 +137,7 @@ pub const OpenRequest = struct {
     allow_degraded_features: []const []const u8 = &.{},
     tools_json: ?[]const u8 = null,
     tool_sources_json: ?[]const u8 = null,
+    private_tool_sources: []const ConfiguredSource = &.{},
     reopen: bool = false,
     native_session_id: []const u8 = "",
     bound_model_id: []const u8 = "",
@@ -544,6 +546,24 @@ pub fn refuseUnadvertisedOpenElections(descriptor: Descriptor, request: *const o
             return refusal.unsupportedField(setting.key, reason_unadvertised, setting.field);
         }
         if (level == .degraded and !request.allowsDegraded(setting.key)) return refusal.degraded(setting.key);
+    }
+}
+
+pub fn refuseCredentialReferences(arena: std.mem.Allocator, raw: ?[]const u8, refusal: *Refusal) Failure!void {
+    const input = raw orelse return;
+    const list = std.json.parseFromSliceLeaky([]std.json.Value, arena, input, .{}) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        return;
+    };
+    for (list) |entry| {
+        if (entry != .object or !entry.object.contains("credential_ref")) continue;
+        const id = entry.object.get("id") orelse .null;
+        refusal.* = .{
+            .feature = feature_tool_sources_attach,
+            .reason = reason_unsatisfiable,
+            .source = if (id == .string) id.string else "",
+        };
+        return error.UnsupportedFeature;
     }
 }
 

@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const oap_types = @import("oap_types");
 pub const config = @import("config");
+pub const session_tool_sources = @import("session_tool_sources.zig");
 const contract = @import("contract");
 const memory = @import("memory");
 const compat = @import("compat");
@@ -52,6 +53,7 @@ pub const Options = struct {
     hold_ns: u64 = default_hold_ns,
     shutdown_ns: u64 = default_shutdown_ns,
     tool_sources: []const contract.ConfiguredSource = &.{},
+    session_tool_source_dir: ?std.Io.Dir = null,
     bindings: ?binding.Bindings = null,
     park_after_ns: u64 = 0,
 };
@@ -616,6 +618,7 @@ pub const Hub = struct {
     park_after_ns: u64,
     shutdown_ns: u64,
     tool_sources: []const contract.ConfiguredSource,
+    session_tool_source_dir: ?std.Io.Dir,
     adapters: std.ArrayList(Registered) = .empty,
     placed: std.ArrayList(Registered) = .empty,
     entries: std.ArrayList(Entry) = .empty,
@@ -642,6 +645,7 @@ pub const Hub = struct {
             .park_after_ns = options.park_after_ns,
             .shutdown_ns = options.shutdown_ns,
             .tool_sources = options.tool_sources,
+            .session_tool_source_dir = options.session_tool_source_dir,
             .bindings = options.bindings,
         };
     }
@@ -982,7 +986,16 @@ pub const Hub = struct {
             }
         }
         try contract.refuseUnadvertisedOpenElections(descriptor, &request.payload(), &refused.reason);
-        try registered.adapter.admit(arena, request.contractRequest("", "", false), &refused.reason);
+        var private_sources: []const contract.ConfiguredSource = &.{};
+        if (request.tool_sources_json) |raw| {
+            if (descriptor.private_tool_sources) {
+                const dir = self.session_tool_source_dir orelse return error.UnresolvableAttachment;
+                private_sources = try session_tool_sources.resolve(arena, dir, self.tool_sources, request.session_id, request.reopen, raw, &refused.reason);
+            } else {
+                try contract.refuseCredentialReferences(arena, raw, &refused.reason);
+            }
+        }
+        if (!descriptor.private_tool_sources) try registered.adapter.admit(arena, request.contractRequest("", "", false), &refused.reason);
         if (request.session_id.len > 0 and self.findSession(request.session_id) != null) return error.SessionExists;
         var native_session_id: []const u8 = "";
         var bound_model_id: []const u8 = "";
@@ -1018,7 +1031,10 @@ pub const Hub = struct {
         }
         const placed = try self.placedIn(registered, directory);
         if (request.reopen and directory.len > 0 and !std.mem.eql(u8, directory, placed.directory)) return error.DirectoryMismatch;
-        var session = placed.adapter.open(arena, request.contractRequest(native_session_id, bound_model_id, adopted_native), &refused.reason) catch |err| {
+        var adapter_request = request.contractRequest(native_session_id, bound_model_id, adopted_native);
+        adapter_request.private_tool_sources = private_sources;
+        if (descriptor.private_tool_sources) adapter_request.tool_sources_json = null;
+        var session = placed.adapter.open(arena, adapter_request, &refused.reason) catch |err| {
             if (request.reopen and err == error.UnknownSession) return refused.reason.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
             return err;
         };

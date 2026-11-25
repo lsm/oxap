@@ -516,6 +516,7 @@ const AgentRegistry = struct {
     environ: *const std.process.Environ.Map,
     surface: ConfigSurface,
     configured_sources: []const adapter_contract.ConfiguredSource = &.{},
+    session_tool_sources: bool = false,
     production: ?*tui_app.ProductionRuntime = null,
     provider_service: ?*const oap_remote_provider_transport.Config = null,
     provider_bridge: agent_oap_provider_bridge.InProcessOapProviderBridge = undefined,
@@ -579,7 +580,8 @@ const AgentRegistry = struct {
             return built.adapter();
         }
         if (std.mem.eql(u8, entry.kind, "codex")) {
-            const config = try codexBackendConfig(self.surface, arena, entry, self.environ);
+            var config = try codexBackendConfig(self.surface, arena, entry, self.environ);
+            config.session_tool_sources = self.session_tool_sources;
             const built = try arena.create(codex_adapter.Adapter);
             built.* = codex_adapter.Adapter.init(self.allocator, config);
             try self.codexes.append(self.allocator, built);
@@ -763,6 +765,7 @@ fn parkAfterNs(text: []const u8) error{InvalidHubOption}!u64 {
 const MultiSessionOptions = struct {
     address: ?[]const u8 = null,
     history_path: ?[]const u8 = null,
+    session_tool_sources_path: ?[]const u8 = null,
     save_sessions: ?bool = null,
     park_after_ns: u64 = default_park_after_ns,
     configured: bool = false,
@@ -794,6 +797,7 @@ fn runHub(
     var config: ?[]const u8 = null;
     var addr: ?[]const u8 = null;
     var history_path: ?[]const u8 = null;
+    var session_tool_sources_path: ?[]const u8 = null;
     var save_sessions: ?bool = null;
     var park_after_ns: u64 = default_park_after_ns;
     var index: usize = 0;
@@ -803,6 +807,12 @@ fn runHub(
             save_sessions = true;
         } else if (std.mem.eql(u8, argument, "--no-save-oapx-sessions")) {
             save_sessions = false;
+        } else if (std.mem.eql(u8, argument, "--session-tool-sources")) {
+            index += 1;
+            if (index >= args.len) return error.InvalidHubOption;
+            session_tool_sources_path = args[index];
+        } else if (std.mem.startsWith(u8, argument, "--session-tool-sources=")) {
+            session_tool_sources_path = argument["--session-tool-sources=".len..];
         } else if (std.mem.eql(u8, argument, "--session-history")) {
             index += 1;
             if (index >= args.len) return error.InvalidHubOption;
@@ -834,6 +844,10 @@ fn runHub(
             return error.InvalidHubOption;
         }
     }
+    if (!over_stdio and session_tool_sources_path != null) {
+        try compat.stdio.writeAll(stderr, "oxap serve: --session-tool-sources requires --stdio\n");
+        return error.InvalidHubOption;
+    }
     if (over_stdio and addr != null) {
         try compat.stdio.writeAll(stderr, "oxap serve: --stdio takes no listen address; --addr and --stdio are mutually exclusive\n");
         return error.InvalidHubOption;
@@ -860,6 +874,7 @@ fn runHub(
     return runMultiSessionAgent(allocator, arena, &environ, file, .{
         .address = if (over_stdio) null else addr orelse hub_http.defaultBind(),
         .history_path = history_path,
+        .session_tool_sources_path = session_tool_sources_path,
         .save_sessions = save_sessions,
         .park_after_ns = park_after_ns,
     }, stdin, stdout, stderr);
@@ -884,8 +899,16 @@ fn runMultiSessionAgent(
             try redactions.keys.append(arena, .{ .variable = endpoint.credential_env, .value = value });
         }
     }
+    const source_dir = if (options.session_tool_sources_path) |path|
+        hub.session_tool_sources.open(path) catch |err| {
+            try surface.refuse("cannot open --session-tool-sources directory: {s}", .{@errorName(err)});
+            return error.BackendRefused;
+        }
+    else
+        null;
+    defer if (source_dir) |dir| dir.close(compat.fs.defaultIo());
     const tool_sources = try configuredSources(arena, file.tool_sources);
-    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources, .provider_service = options.provider_service };
+    var registry = AgentRegistry{ .allocator = allocator, .environ = environ, .surface = surface, .configured_sources = tool_sources, .session_tool_sources = source_dir != null, .provider_service = options.provider_service };
     defer registry.deinit();
     var saved: ?ServedSessions = null;
     defer if (saved) |*held| held.deinit();
@@ -903,7 +926,7 @@ fn runMultiSessionAgent(
     }
     var bindings: ?hub.binding.Store = null;
     defer if (bindings) |*store| store.deinit();
-    var core = hub.Hub.init(allocator, wallClockNanoseconds, .{ .tool_sources = tool_sources, .park_after_ns = options.park_after_ns });
+    var core = hub.Hub.init(allocator, wallClockNanoseconds, .{ .tool_sources = tool_sources, .session_tool_source_dir = source_dir, .park_after_ns = options.park_after_ns });
     defer core.deinit();
     var load_diagnostic = adapter_config.Diagnostic{};
     core.load(arena, file, .{ .context = &registry, .make = AgentRegistry.build }, &load_diagnostic) catch |failure| {
@@ -1629,6 +1652,7 @@ fn printUsage(file: std.Io.File) !void {
         \\  oxap serve provider --http 127.0.0.1:<port>
         \\  oxap serve agent,provider --stdio [--model <model-ref>]
         \\  oxap serve --stdio | --addr <host:port> [--config <path>] [--session-history <path>] [--no-save-oapx-sessions]
+        \\                  [--session-tool-sources <directory>]  Resolve one-time tool credentials in the stdio hub
         \\                  [--park-after <seconds>]         Stop a session's harness once idle that long (default 5, 0 never); its next input reopens it
         \\                                                   Many sessions on one wire; hub is its old name
         \\  oxap validate [--format human|json] [--mode strict|tolerant] [--pack DIR]... <trace.json>...

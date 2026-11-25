@@ -3569,6 +3569,20 @@
       ]
     },
     {
+      "id": "tool-source-credential-reference",
+      "path": "valid/tool-source-credential-reference.json",
+      "kind": "positive",
+      "valid": true,
+      "phase": "",
+      "codes": [],
+      "units": [
+        "tool-sources"
+      ],
+      "provenance": [
+        "decisions/0008-tool-sources.md"
+      ]
+    },
+    {
       "id": "tool-source-attach-refused-over-limit",
       "path": "valid/tool-source-attach-refused-over-limit.json",
       "kind": "positive",

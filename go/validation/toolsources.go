@@ -10,7 +10,7 @@ import (
 	"github.com/lsm/oxap/go/protocol"
 )
 
-var attachmentOnlyMembers = []string{"command", "args", "environment"}
+var attachmentOnlyMembers = []string{"command", "args", "environment", "credential_ref"}
 
 type pendingList struct {
 	index, line int
@@ -301,7 +301,7 @@ func (s *state) checkRawSources(i, line int, e protocol.Envelope, pointer string
 	for index, source := range sources {
 		for _, member := range attachmentOnlyMembers {
 			if _, ok := source[member]; ok {
-				s.addExpected(CodeAttachmentFieldInCatalog, i, line, e, fmt.Sprintf("%s/%d/%s", pointer, index, member), "a published tool source carries an attachment-only member", "no command, args, or environment", member)
+				s.addExpected(CodeAttachmentFieldInCatalog, i, line, e, fmt.Sprintf("%s/%d/%s", pointer, index, member), "a published tool source carries an attachment-only member", "no attachment-only members", member)
 			}
 		}
 	}

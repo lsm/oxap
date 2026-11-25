@@ -282,6 +282,20 @@ attachment is not a way to configure the daemon:
 | A probe the daemon could not read is reported as one | `TestOpenReportsAProbeItCouldNotRead` |
 | Every advertising adapter admits tool sources; every unadvertising one refuses | `TestEveryAdapterRefusesUnadvertisedToolSources`, `TestAdvertisingAdaptersAdmitToolSources` |
 
+The Zig stdio hub also accepts capability-backed Codex creates when started
+with `--session-tool-sources <directory>` on Linux or macOS. The private
+directory belongs to the hub operator and has mode 0700. The issuer atomically
+publishes each mode 0600 file under a new canonical base64url reference
+encoding 32 random bytes. The file contains `session_id`, a `source` object
+with `id`, `kind: "remote"`, `protocol: "mcp"`, and `endpoint`, and a
+`headers` object with `Authorization: Bearer <credential>`. The bearer encodes
+32 separate random bytes. The request names the session and carries only
+`id`, `kind` and `credential_ref` in the attachment. The hub claims the file
+once and forwards the descriptor and headers to Codex's private thread-start
+pipe. Responses publish the source descriptor. Explicit reopen with tool
+sources waits for binding provenance. See the
+[session tool sources journey](../.claude/skills/verify/journeys/codex-session-tool-sources.md).
+
 ## The transports
 
 Both transports are the same hub. They differ in framing, in what a refusal

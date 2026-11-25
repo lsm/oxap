@@ -105,6 +105,11 @@ pub fn resolve_attachments(
             tool_source: attachment.id.clone(),
             reason,
         };
+        if attachment.credential_ref.is_some() {
+            return Err(refuse(
+                "this transport does not resolve credential references".into(),
+            ));
+        }
         if !attachment.command.is_empty() || !attachment.args.is_empty() {
             return Err(refuse("the daemon does not accept a command or arguments from the wire; name an operator-configured source by id".into()));
         }

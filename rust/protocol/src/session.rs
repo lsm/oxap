@@ -57,6 +57,8 @@ pub struct ToolSourceAttachment {
     pub args: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub environment: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub credential_ref: Option<String>,
 }
 
 impl ToolSourceAttachment {

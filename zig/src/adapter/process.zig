@@ -34,6 +34,7 @@ pub const Spawn = struct {
     read_idle_ns: u64 = default_read_idle_ns,
     framing: Framing = .lines,
     stderr_redaction: ?StderrRedaction = null,
+    discard_stderr: bool = false,
 };
 
 pub const Departure = enum { running, exited, signalled, stranded };
@@ -125,18 +126,18 @@ pub const Transport = struct {
             .cwd = if (request.working_directory) |path| .{ .path = path } else .inherit,
             .stdin = .pipe,
             .stdout = .pipe,
-            .stderr = if (request.stderr_redaction == null) .inherit else .pipe,
+            .stderr = if (request.discard_stderr) .ignore else if (request.stderr_redaction == null) .inherit else .pipe,
             .create_no_window = true,
         });
         errdefer child.kill(self.io());
 
-        if (request.stderr_redaction) |redaction| {
+        if (!request.discard_stderr) if (request.stderr_redaction) |redaction| {
             const buffer = try allocator.alloc(u8, redaction.value.len + 4096);
             errdefer allocator.free(buffer);
             self.stderr_task = try self.io().concurrent(copyStderr, .{ self, child.stderr.?, redaction, buffer });
             self.stderr_buffer = buffer;
             child.stderr = null;
-        }
+        };
         self.child = child;
         self.multi.init(allocator, self.io(), self.streams.toStreams(), &.{child.stdout.?});
         self.reading = true;
