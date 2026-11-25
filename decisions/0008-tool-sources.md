@@ -584,14 +584,21 @@ other attachment-only fields. `headers` belongs exclusively to the
 adapter-private attachment. The wire boundary refuses literal headers.
 
 An implementing stdio hub accepts a capability-backed attachment as
-`{ id, kind, credential_ref }`. The operator configures a fixed, operator-owned
-directory of mode `0700` with `--session-tool-sources <directory>`. For each
-external create or explicit reopen using this path, the trusted issuer
-atomically writes a fresh mode `0600` capability file. The file contains the
-OAP session ID, the source descriptor, and the literal
-`Authorization: Bearer <credential>` header. Its filename is the canonical
-base64url encoding of a fresh 256-bit random value. The reference is that
-filename. It is distinct from both the session ID and the bearer credential.
+`{ id, kind, credential_ref }` for a `remote` source with protocol `mcp`.
+The file carries a remote MCP descriptor. Process attachments continue to
+use the operator's registry, and a capability file carrying `command` or
+`args` is invalid.
+
+The operator configures a fixed, operator-owned directory of mode `0700`
+with `--session-tool-sources <directory>`. The operator authorizes the
+integration preparing the open to write there. That write access is the basis
+for trusting the issuer. Before submitting a create or explicit reopen, the
+issuer has the OAP session ID for the request and obtains a bearer grant for
+that session from the MCP server's authorization layer. It atomically writes
+a fresh mode `0600` capability file with the session ID, the descriptor, and
+the literal `Authorization: Bearer <credential>` header. Its filename is the
+canonical base64url encoding of a fresh 256-bit random value. The reference
+is that filename, distinct from the session ID and the bearer credential.
 
 An external create using this path must carry the `session_id` the issuer
 put in the file.
@@ -599,10 +606,10 @@ put in the file.
 After public request validation and the attachment capability gates, the hub
 accepts only a canonical reference and resolves it inside that directory. The
 file's session ID and source ID must match the open exactly. Its descriptor
-is authoritative and must satisfy the requested kind and the adapter's
-attachment constraints. The hub claims the file atomically before calling
-the adapter and deletes it after use. A claim can serve only one open, even
-when opens race or the adapter refuses the open.
+is authoritative and must specify a remote MCP source, match the requested
+kind, and satisfy the adapter's attachment constraints. The hub claims the
+file atomically before calling the adapter and deletes it after use. A claim
+can serve only one open, even when opens race or the adapter refuses the open.
 
 A missing reference for a capability-backed source, an invalid reference or
 file, a cross-session or wrong-source reference, a duplicate source ID or
