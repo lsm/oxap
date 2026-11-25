@@ -239,7 +239,7 @@ const Call = union(enum) {
     thread_start,
     thread_resume,
     turn_start: usize,
-    turn_steer: usize,
+    turn_steer: struct { index: usize, target_sequence: u64, status: oap.RunStatus },
     turn_interrupt: usize,
 };
 
@@ -582,7 +582,11 @@ pub const Reducer = struct {
             .message_ids = try self.messageIDs(submission.messages),
         };
         try run.steers.ensureUnusedCapacity(arena, 1);
-        try self.queueCall(.{ .turn_steer = index }, frame);
+        try self.queueCall(.{ .turn_steer = .{
+            .index = index,
+            .target_sequence = run.next_sequence - 1,
+            .status = std.meta.stringToEnum(oap.RunStatus, run.status) orelse .running,
+        } }, frame);
         run.steers.appendAssumeCapacity(.{ .identity = identity });
     }
 
@@ -804,7 +808,8 @@ pub const Reducer = struct {
                 }
                 try self.admit(index, turn);
             },
-            .turn_steer => |index| {
+            .turn_steer => |steer_call| {
+                const index = steer_call.index;
                 const run = &self.runs.items[index];
                 if (!std.mem.eql(u8, native.text(result, &.{"turnId"}), run.turn_id)) return self.callFailed(what, undecodable(what));
                 if (run.terminal) return self.callFailed(what, .{ .method = native.method_turn_steer, .message = "the run already settled" });
@@ -816,9 +821,9 @@ pub const Reducer = struct {
                     .submission_id = steer_entry.identity.submission_id,
                     .run_id = run.id,
                     .model_id = "",
-                    .status = std.meta.stringToEnum(oap.RunStatus, run.status) orelse .running,
+                    .status = steer_call.status,
                     .message_ids = steer_entry.identity.message_ids,
-                    .target_sequence = run.next_sequence - 1,
+                    .target_sequence = steer_call.target_sequence,
                 } });
                 if (steer_entry.observed) try self.settleSteer(index, at, true);
                 try self.finishDeferredTurn(index);
@@ -843,9 +848,9 @@ pub const Reducer = struct {
                     self.state.status = "idle";
                 }
             },
-            .turn_steer => |index| {
-                _ = self.runs.items[index].steers.pop();
-                try self.finishDeferredTurn(index);
+            .turn_steer => |steer_call| {
+                _ = self.runs.items[steer_call.index].steers.pop();
+                try self.finishDeferredTurn(steer_call.index);
             },
             .turn_interrupt => |index| self.runs.items[index].cancel_in_flight = false,
         }
