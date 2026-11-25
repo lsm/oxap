@@ -78,7 +78,7 @@
     "capability_revision": "cap-v1",
     "payload": {
       "session_id": "s1",
-      "reasoning_level": "high"
+      "reasoning_level": "ultra"
     }
   },
   {
@@ -92,7 +92,7 @@
     "capability_revision": "cap-v1",
     "payload": {
       "session_id": "s1",
-      "reasoning_level": "high",
+      "reasoning_level": "ultra",
       "previous_reasoning_level": "low"
     }
   },
@@ -108,7 +108,7 @@
     "payload": {
       "session_id": "s1",
       "status": "idle",
-      "reasoning_level": "high"
+      "reasoning_level": "ultra"
     }
   }
 ]

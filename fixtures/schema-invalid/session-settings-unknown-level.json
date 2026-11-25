@@ -48,7 +48,7 @@
     "capability_revision": "cap-v1",
     "payload": {
       "session_id": "s1",
-      "reasoning_level": "ultra"
+      "reasoning_level": "persistent"
     }
   }
 ]

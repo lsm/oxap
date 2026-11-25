@@ -228,9 +228,12 @@ fn main() {
             (PROVIDER, "provider.models.list.request") => {
                 let mut entry = json!({
                     "model_ref": "fixture/openai-responses@mock", "model_id": "mock", "provider_id": "fixture",
-                    "wire": "openai-responses", "auth_status": "authenticated",
+                    "wire": "openai-responses", "auth_status": "authenticated", "reasoning_default": "ultra",
                     "capabilities": ["chat", "streaming"]
                 });
+                if shape == "max-reasoning" {
+                    entry["reasoning_default"] = json!("max");
+                }
                 match shape.as_str() {
                     "absent-source" => {}
                     "null-source" => entry["source"] = Value::Null,

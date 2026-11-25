@@ -22,6 +22,10 @@ async fn combined_oap_connection_runs_both_profiles() {
         .await
         .expect("models");
     assert_eq!(listed.models[0].model_ref, "fixture/openai-responses@mock");
+    assert_eq!(
+        listed.models[0].reasoning_default,
+        Some(oxap_sdk::ReasoningLevel::Ultra)
+    );
     let request = ExecutionRequest::prompt("fixture/openai-responses@mock", "hello");
     let provider = client
         .provider()
@@ -63,6 +67,35 @@ async fn combined_oap_connection_runs_both_profiles() {
     }
     assert_eq!(text, "agent works");
     client.close().await;
+}
+
+#[tokio::test]
+async fn max_reasoning_round_trips_through_the_rust_sdk() {
+    let client = ClientBuilder::new()
+        .command(env!("CARGO_BIN_EXE_oap-protocol-fake"))
+        .args(["--catalog-shape=max-reasoning"])
+        .connect()
+        .await
+        .expect("connects to OAP profiles");
+    let listed = client
+        .models()
+        .list(ListModelsRequest::default())
+        .await
+        .expect("accepts max in catalog metadata");
+    assert_eq!(
+        serde_json::to_value(listed.models[0].reasoning_default).unwrap(),
+        json!("max")
+    );
+
+    let mut request = ExecutionRequest::prompt("fixture/openai-responses@settings", "hello");
+    request.options.reasoning_effort =
+        Some(serde_json::from_value(json!("max")).expect("max is a run option"));
+    let run = client.agent().run(request).await;
+    client.close().await;
+    assert!(run
+        .expect("settings run")
+        .text()
+        .contains("reasoning=\"max\""));
 }
 
 #[tokio::test]
@@ -283,11 +316,11 @@ async fn agent_tools_and_settings_travel_over_oap_and_temperature_is_refused() {
     assert_eq!(*calls.lock().expect("lock"), 1);
     let mut configured =
         ExecutionRequest::prompt("fixture/openai-responses@settings", "hello").with_max_tokens(32);
-    configured.options.reasoning_effort = Some(oxap_sdk::ReasoningEffort::High);
+    configured.options.reasoning_effort = Some(oxap_sdk::ReasoningEffort::Ultra);
     let settings = client.agent().run(configured).await.expect("settings run");
     assert_eq!(
         settings.text(),
-        "reasoning=\"high\" output=32 user_input=false participant=\"rust-sdk\""
+        "reasoning=\"ultra\" output=32 user_input=false participant=\"rust-sdk\""
     );
     let zero =
         ExecutionRequest::prompt("fixture/openai-responses@settings", "hello").with_max_tokens(0);
