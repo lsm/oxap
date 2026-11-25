@@ -3580,6 +3580,10 @@
       ],
       "provenance": [
         "decisions/0008-tool-sources.md"
+      ],
+      "rules": [
+        "0008#attachment-is-for-the-sessions-lifetime/6",
+        "0008#attachment-is-for-the-sessions-lifetime/7"
       ]
     },
     {
