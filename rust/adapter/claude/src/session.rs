@@ -83,14 +83,44 @@ enum TurnFrame {
 
 impl PendingTurn {
     fn has_terminal(&self) -> bool {
-        self.buffered.iter().any(|entry| {
-            matches!(entry, TurnFrame::Observation(Observation::Result(frame), true) if settles_turn(frame))
+        let mut settlement = RunSettlement::default();
+        self.buffered.iter().any(|entry| match entry {
+            TurnFrame::Observation(frame, corroborates) => settlement.observe(frame, *corroborates),
+            TurnFrame::Permission(_) => false,
         })
     }
 }
 
-fn settles_turn(frame: &native::ResultFrame) -> bool {
-    frame.queued_turn_count.unwrap_or_default() <= 0
+#[derive(Default)]
+struct RunSettlement {
+    children: HashSet<String>,
+    queued_work: Option<bool>,
+}
+
+impl RunSettlement {
+    fn observe(&mut self, observation: &Observation, corroborates: bool) -> bool {
+        match observation {
+            Observation::Result(frame) if corroborates => {
+                self.queued_work = Some(frame.queued_turn_count.unwrap_or_default() > 0);
+            }
+            Observation::TaskStarted(frame)
+                if matches!(frame.task_type.as_str(), "local_agent" | "local_workflow") =>
+            {
+                self.children.insert(frame.task_id.clone());
+            }
+            Observation::TaskNotification(frame) => {
+                self.children.remove(&frame.task_id);
+            }
+            Observation::TaskUpdated(frame) if frame.terminal() => {
+                self.children.remove(&frame.task_id);
+            }
+            Observation::SessionState(frame) if frame.state == "idle" => {
+                return self.queued_work.is_some();
+            }
+            _ => return false,
+        }
+        self.queued_work == Some(false) && self.children.is_empty()
+    }
 }
 
 struct ActiveTurn {
@@ -101,6 +131,8 @@ struct ActiveTurn {
     tools: Vec<ObservedTool>,
     gates: Vec<PermissionGate>,
     policy: RunToolPolicy,
+    settlement: RunSettlement,
+    deferred: Option<Box<native::ResultFrame>>,
 }
 
 #[derive(Default)]
@@ -244,7 +276,7 @@ impl SessionData {
             let _ = waiter.send(outcome.clone());
         }
         if let Some(frame) = interrupt.terminal {
-            self.apply(Observation::Result(frame), true, runtime);
+            self.publish_result(frame, runtime);
         }
     }
 
@@ -509,6 +541,7 @@ impl SessionData {
         }
         let Some(turn) = &mut self.active else { return };
         let session_id = &self.session.session_id;
+        let can_settle = turn.settlement.observe(&observation, corroborates);
         let event = match observation {
             Observation::StreamEvent(frame) => {
                 let Some((kind, text)) = frame.stream_delta() else {
@@ -528,17 +561,14 @@ impl SessionData {
                     message_id: Some(turn.message_id.clone()),
                     part,
                 };
-                Envelope::new(EnvelopeType::CONTENT_DELTA, runtime.new_id("event"), &delta)
-                    .expect("delta payload serializes")
+                Some(
+                    Envelope::new(EnvelopeType::CONTENT_DELTA, runtime.new_id("event"), &delta)
+                        .expect("delta payload serializes"),
+                )
             }
-            Observation::Result(frame) if corroborates && settles_turn(&frame) => {
-                if frame.cancelled() && !turn.cancel_accepted {
-                    if let Some(interrupt) = &mut self.interrupt {
-                        interrupt.terminal = Some(frame);
-                        return;
-                    }
-                }
-                turn.terminal(session_id, &frame, runtime.new_id("event"))
+            Observation::Result(frame) if corroborates => {
+                turn.deferred = Some(frame);
+                None
             }
             Observation::Assistant(frame) => {
                 return self.apply_tools(frame.message.content.unwrap_or_default(), true, runtime);
@@ -546,8 +576,31 @@ impl SessionData {
             Observation::User(frame) => {
                 return self.apply_tools(frame.blocks().unwrap_or_default(), false, runtime);
             }
-            _ => return,
+            _ => None,
         };
+        if can_settle {
+            let frame = turn
+                .deferred
+                .take()
+                .expect("settlement requires a matching result");
+            self.publish_result(frame, runtime);
+        } else if let Some(event) = event {
+            self.publish(event, runtime);
+        }
+    }
+
+    fn publish_result(&mut self, frame: Box<native::ResultFrame>, runtime: &Runtime) {
+        let turn = self
+            .active
+            .as_ref()
+            .expect("settlement requires an active run");
+        if frame.cancelled() && !turn.cancel_accepted {
+            if let Some(interrupt) = &mut self.interrupt {
+                interrupt.terminal = Some(frame);
+                return;
+            }
+        }
+        let event = turn.terminal(&self.session.session_id, &frame, runtime.new_id("event"));
         self.publish(event, runtime);
     }
 
@@ -824,6 +877,8 @@ impl SessionData {
             tools: Vec::new(),
             gates: Vec::new(),
             policy: turn.policy,
+            settlement: RunSettlement::default(),
+            deferred: None,
         });
         for entry in turn.buffered {
             match entry {

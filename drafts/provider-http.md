@@ -49,6 +49,21 @@ open. Parallel inference streams are separate HTTP requests; no connection-
 global event order is implied. An HTTP client must route on OAP `in_reply_to`
 and `inference_id`, not an SSE `id`, TCP connection, or arrival order.
 
+## Retired 0.1 requests in OXAP 0.2
+
+A request object declaring `protocol: "open-agent-protocol"` and
+`version: "0.1"`, with a non-empty string `id`, receives `200 OK` with
+`Content-Type: application/json`. This is an OAP refusal, not an HTTP transport
+failure, and it applies even when the request's `profile` is absent, unknown,
+or wrong.
+
+The body is exactly one unary Model Provider `error` envelope, never SSE. It
+carries `protocol: "oxap"`, `version: "0.2"`, profile
+`oxap.model-provider-core`, a fresh response id, `in_reply_to` equal to the
+request id, `payload.error.code: "unsupported_version"`, and
+`payload.protocol_versions: ["0.2"]`. Without a correlatable id, the existing
+HTTP transport-failure rules apply; no OAP envelope is invented for one.
+
 ## Transport failures
 
 HTTP statuses 400, 413, 415, 429, and 5xx report failures to accept or carry

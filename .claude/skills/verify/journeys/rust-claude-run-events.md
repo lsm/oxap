@@ -23,5 +23,6 @@ session returns to idle and accepts the next submit.
 
 The buffered variant sends streaming deltas before the matching echo. The
 live variant sends them after the public submit returns. The result arbitration
-journey covers disconnect inference. Interrupts and queued continuations are
-covered by later slices.
+journey covers disconnect inference. The [interrupt journey](rust-claude-interrupt.md)
+covers cancellation. The [background settlement journey](rust-claude-background-children.md)
+covers children and queued continuations.

@@ -334,6 +334,39 @@ once and both transports obey it; the tables below say which shapes differ.
   `TestModelsRouteServesAnEmptyCatalogAsAnEmptyList`,
   `TestModelsRouteStampsTheListersRevision`.
 
+### Retired 0.1 requests in OXAP 0.2
+
+For an operation that carries `request`, a nested object declaring
+`protocol: "open-agent-protocol"` and `version: "0.1"` is refused
+`unsupported_version` before schema validation or adapter dispatch. An absent,
+unknown, or wrongly typed nested `profile` does not change the code or decide
+whether the request is correlatable.
+
+On stdio, a valid outer request line supplies the correlation. The nested
+envelope does not need a valid `id`. The answer reuses the outer numeric `id`
+and has the ordinary transport-error shape, with no nested error envelope and
+no second correlation id:
+
+```json
+{"id":7,"ok":false,"result":null,"error":{"code":"unsupported_version","message":"..."}}
+```
+
+The connection stays open. An outer line that does not satisfy the existing
+framing rules retains its fatal framing behavior.
+
+On HTTP, the nested envelope needs a non-empty string `id` for this correlated
+refusal. The response is `400 Bad Request` with `Content-Type:
+application/json` and exactly one Agent Control `error.response` envelope. It
+carries `protocol: "oxap"`, `version: "0.2"`, profile
+`oxap.agent-control-core`, a fresh response id, `in_reply_to` equal to the
+nested request id, and `payload.error.code: "unsupported_version"`. It is a
+unary JSON response, never SSE. Without such an id, the existing decode or
+schema refusal and synthetic-correlation rules apply instead of a special
+`unsupported_version` response.
+
+Current-tree pinning: **none**; this is a 0.2 contract, tracked as
+[G15](#known-gaps) until the wire cutover adds its conformance cases.
+
 ### The stdio transport-object wire
 
 One JSON object per line, UTF-8, `\n`-terminated. **Stdout carries protocol
@@ -2419,6 +2452,12 @@ here; each was a place a differential test would otherwise not see.
   requests, and its 5 s bound, are unpinned; the named test calls the stop
   check with no connections. What closes it is a queueing reference adapter with a test of the
   `lost` path, and a teardown that abandons a job thread after the window.
+
+- **G15 — open pending the 0.2 cutover.** No current Go test pins the
+  retired-wire rules in either transport. The cutover must pin the stdio
+  wrapper correlated by the outer id without a nested id, the HTTP
+  `error.response` correlated by the original nested id, and both bindings'
+  fallback to their existing rules when no correlatable id exists.
 
 One asymmetry is deliberate and is **not** a gap: a cross-origin refusal exists
 on the HTTP transport alone. A stdio peer is a separate process on the far side
