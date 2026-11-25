@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.44] - 2026-11-25
+
+### Added
+
+- The Rust Claude adapter streams text, reasoning, and native tool calls. It supports cancellation, replay, permission decisions, and per-run tool selection, and waits for native child work before completing a run. ([#1999](https://github.com/lsm/oxap/pull/1999), [#2001](https://github.com/lsm/oxap/pull/2001), [#2002](https://github.com/lsm/oxap/pull/2002), [#2003](https://github.com/lsm/oxap/pull/2003), [#2004](https://github.com/lsm/oxap/pull/2004), [#2005](https://github.com/lsm/oxap/pull/2005), [#2006](https://github.com/lsm/oxap/pull/2006), [#2007](https://github.com/lsm/oxap/pull/2007), [#2015](https://github.com/lsm/oxap/pull/2015), [#2016](https://github.com/lsm/oxap/pull/2016))
+- Codex accepts inline images in the Zig, Go, and Rust adapters. ([#2008](https://github.com/lsm/oxap/pull/2008), [#2009](https://github.com/lsm/oxap/pull/2009), [#2013](https://github.com/lsm/oxap/pull/2013))
+- The Zig hub streams live Codex context usage and shows the latest sample after reattach. ([#2012](https://github.com/lsm/oxap/pull/2012))
+- Codex exposes subagent activity and collaboration calls in the parent run stream. ([#2010](https://github.com/lsm/oxap/pull/2010))
+- The protocol specifies how session-bound tool credentials are attached and renewed on explicit reopen. ([#2014](https://github.com/lsm/oxap/pull/2014))
+- Codex supports `ultra` reasoning at session open and in settings updates. ([#2011](https://github.com/lsm/oxap/pull/2011))
+
+### Merged pull requests
+
+- Document the errors returned when clients use retired wire operations. ([#1988](https://github.com/lsm/oxap/pull/1988))
+
 ## [0.1.0-alpha.43] - 2026-11-23
 
 ### Added
