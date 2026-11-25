@@ -819,9 +819,7 @@ pub const Session = struct {
     fn submit(ptr: *anyopaque, arena: std.mem.Allocator, request: *const oap_types.MessageSubmitRequest, envelope_id: []const u8, refusal: *contract.Refusal) contract.Failure!oap_types.MessageSubmitResponse {
         const self = cast(ptr);
         const steering = request.delivery == .steer;
-        if (steering and (request.model_id != null or request.instructions != null or
-            request.tool_choice_json != null or request.output_schema_json != null))
-            return refusal.unsupported("session.message.delivery.steer", contract.reason_unsatisfiable);
+        if (steering) try contract.refuseSteerControls(descriptor, request, refusal);
         if (request.model_id) |model| {
             if (model.len == 0) return refusal.missingModel("");
         }

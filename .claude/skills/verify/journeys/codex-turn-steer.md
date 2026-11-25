@@ -15,5 +15,7 @@ pending, the state snapshot must list its submit request in
 `admitted_submit_requests`. Expect one native
 `turn/start`, one native `turn/steer`, a correlated applied event before the
 original run's terminal, and the guidance in the next model request. Both a
-wrong target and a completed target must be refused. The script retains the
-native requests, OAP events and hub stderr.
+wrong target and a completed target must be refused. A steer with run controls
+must be refused for the specific control, with an unadvertised control taking
+precedence over an advertised one. The script retains the native requests,
+OAP events and hub stderr.
