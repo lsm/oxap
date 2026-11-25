@@ -82,7 +82,10 @@ the other way round makes this fixture fail, which is what makes it worth having
 
 **The served backend tests compare content, run order and child messages.**
 `TestBackendsMatchOapx` uses a single Go exchange per fixture and compares
-it with Zig and, when available, Rust. The three-way fixtures are `acp`,
+it with Zig and, when available, Rust. For Codex, Zig advertises native
+steering under its own `-steer` capability revision. The parity comparison
+expects those two descriptor changes on the Zig side and compares the
+shared behavior and native traffic as before. The three-way fixtures are `acp`,
 `codex`, `deepseek`, `deepseek-switch` and `memory`. `copilot` is covered
 by the Go and Rust job's `TestBackendsMatchRustHub`.
 `TestMemoryBackendMatchesOapx` compares the memory backend's output as a

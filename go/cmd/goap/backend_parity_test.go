@@ -17,6 +17,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/lsm/oxap/go/adapter/codex/appserver"
 )
 
 func TestBackendsMatchOapx(t *testing.T) {
@@ -49,7 +51,11 @@ func TestBackendsMatchOapx(t *testing.T) {
 			if len(goExchange.envelopes) < len(scenario) {
 				t.Fatalf("goap wrote %d lines for %d requests; the fixture does not start", len(goExchange.envelopes), len(scenario))
 			}
-			compareBackendExchanges(t, "oapx", goExchange, exchangeWithChild(t, dir, backend, scenario, oapx))
+			zigExpected := goExchange
+			if backend == "codex" {
+				zigExpected.envelopes = codexSteerExpectations(t, goExchange.envelopes)
+			}
+			compareBackendExchanges(t, "oapx", zigExpected, exchangeWithChild(t, dir, backend, scenario, oapx))
 			if rust != "" && rustHubServes(t, dir) {
 				t.Run("rust", func(t *testing.T) {
 					compareBackendExchanges(t, "oap-rust-hub", goExchange, exchangeWithChild(t, dir, backend, scenario, rust))
@@ -65,6 +71,34 @@ func TestBackendsMatchOapx(t *testing.T) {
 type backendExchange struct {
 	envelopes []string
 	child     string
+}
+
+func codexSteerExpectations(t *testing.T, lines []string) []string {
+	t.Helper()
+	expected := make([]string, 0, len(lines))
+	for _, line := range lines {
+		var frame map[string]any
+		if err := json.Unmarshal([]byte(line), &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame["capability_revision"] == appserver.CapabilityRevision {
+			frame["capability_revision"] = appserver.CapabilityRevision + "-steer"
+		}
+		if frame["type"] == "capabilities.response" {
+			payload, _ := frame["payload"].(map[string]any)
+			features, ok := payload["features"].(map[string]any)
+			if !ok {
+				t.Fatalf("Codex capabilities response has no feature map: %s", line)
+			}
+			features["session.message.delivery.steer"] = map[string]any{"level": "native"}
+		}
+		encoded, err := json.Marshal(frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected = append(expected, string(encoded))
+	}
+	return expected
 }
 
 func compareBackendExchanges(t *testing.T, peer string, goExchange, peerExchange backendExchange) {
