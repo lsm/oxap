@@ -1314,6 +1314,52 @@ test "a turn is admitted on its turn/start answer and settles on turn/completed"
     try testing.expectEqual(contract.Activity.idle, probe.handle.?.activity());
 }
 
+test "native steer settles on the original run or drops before its terminal" {
+    const script = fake_prelude ++ fake_turn_admitted ++
+        \\take
+        \\printf '{"method":"item/completed","params":{"threadId":"native-thread","turnId":"native-turn","item":{"type":"userMessage","id":"native-message","clientId":"apply-steer"}}}\n'
+        \\printf '{"id":3,"result":{"turnId":"native-turn"}}\n'
+        \\take; printf '{"id":4,"result":{"turnId":"native-turn"}}\n'
+        \\printf '{"method":"turn/completed","params":{"threadId":"native-thread","turn":{"id":"native-turn","status":"completed"}}}\n'
+        \\
+    ++ fake_idle;
+    var probe: Probe = undefined;
+    try probe.init(script);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    const handle = try probe.open(&refusal);
+    const admitted = try probe.submit("first", &refusal);
+    const arena = probe.arena.allocator();
+    var seen = std.ArrayList(contract.Event).empty;
+    _ = try probe.pumpUntil("run.started", &seen);
+    var messages = [_]oap_types.Message{.{ .role = .user, .content = .{ .text = "adjust" } }};
+    var request = oap_types.MessageSubmitRequest{
+        .session_id = "s1",
+        .messages = &messages,
+        .delivery = .steer,
+        .target_run_id = "stale",
+    };
+    try testing.expectError(error.InvalidSteerTarget, handle.submit(arena, &request, "stale-steer", &refusal));
+    request.target_run_id = admitted.run_id;
+    for ([_][]const u8{ "apply-steer", "drop-steer" }, 1..) |id, sequence| {
+        const steered = try handle.submit(arena, &request, id, &refusal);
+        try testing.expectEqual(oap_types.Admission.steered, steered.admission);
+        try testing.expectEqualStrings(admitted.run_id.?, steered.run_id.?);
+        try testing.expectEqual(@as(?u64, sequence), steered.target_sequence);
+    }
+    _ = try probe.pumpUntil("run.completed", &seen);
+    try testing.expectEqual(@as(usize, 4), seen.items.len);
+    try testing.expectEqualStrings("run.steer.applied", (try kinds(arena, seen.items))[1]);
+    try testing.expectEqualStrings("run.steer.dropped", (try kinds(arena, seen.items))[2]);
+    try testing.expect(std.mem.indexOf(u8, seen.items[1].line, "\"request_id\":\"apply-steer\"") != null);
+    try testing.expect(std.mem.indexOf(u8, seen.items[2].line, "\"request_id\":\"drop-steer\"") != null);
+    try testing.expectError(error.InvalidSteerTarget, handle.submit(arena, &request, "late-steer", &refusal));
+    const written = try probe.fake.written(arena);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, written, "\"method\":\"turn/start\""));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, written, "\"method\":\"turn/steer\""));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, written, "\"expectedTurnId\":\"native-turn\""));
+}
+
 test "state reports the settled run's last sequence as its transcript cursor" {
     var probe: Probe = undefined;
     try probe.init(fake_prelude ++ fake_text_turn ++ fake_idle);
