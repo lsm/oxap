@@ -98,6 +98,7 @@ tee -a {shlex.quote(str(wire))} | {shlex.quote(str(codex))} "$@" | tee -a {shlex
         [pending] = active["pending_steers"]
         assert active.get("admitted_submit_requests") == [request_id], f"missing steer admission anchor: {state}"
         assert pending["request_id"] == request_id and pending["submission_id"] == admission["submission_id"], state
+        (root / "pending-state.json").write_text(json.dumps(state, indent=2) + "\n")
         server.release.set()
         terminal = hub.completed("s1")
         events = [frame["envelope"] for frame in hub.seen if "envelope" in frame] + [terminal]
@@ -121,7 +122,7 @@ tee -a {shlex.quote(str(wire))} | {shlex.quote(str(codex))} "$@" | tee -a {shlex
         assert methods[1]["params"]["expectedTurnId"] == native_start["turn"]["id"], methods
         (root / "events.json").write_text(json.dumps(events, indent=2) + "\n")
         print(f"PASS: hub exit={hub.process.returncode}, turn/start=1, turn/steer=1, "
-              f"applied=1, completed=1, sampling requests={len(server.requests)}, stale refusals=2")
+              f"pending anchors=1, applied=1, completed=1, sampling requests={len(server.requests)}, stale refusals=2")
     finally:
         server.release.set()
         hub.cleanup()

@@ -10,7 +10,9 @@ python3 .claude/skills/verify/scripts/codex-turn-steer.py \
 
 The script starts a disposable stdio hub and real Codex app server with an
 empty home and a loopback Responses fixture on a free port. The fixture holds
-the first model response until the steer is admitted. Expect one native
+the first model response until the steer is admitted. While guidance is
+pending, the state snapshot must list its submit request in
+`admitted_submit_requests`. Expect one native
 `turn/start`, one native `turn/steer`, a correlated applied event before the
 original run's terminal, and the guidance in the next model request. Both a
 wrong target and a completed target must be refused. The script retains the

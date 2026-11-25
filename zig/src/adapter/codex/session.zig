@@ -549,11 +549,20 @@ pub const Reducer = struct {
         errdefer arena.free(snapshot);
         const relationship = try arena.dupe(u8, "primary");
         errdefer arena.free(relationship);
+        const anchors = try arena.alloc([]const u8, pending.items.len);
+        errdefer arena.free(anchors);
+        var anchored: usize = 0;
+        errdefer for (anchors[0..anchored]) |anchor| arena.free(anchor);
+        for (pending.items, anchors) |entry, *anchor| {
+            anchor.* = try arena.dupe(u8, entry.request_id);
+            anchored += 1;
+        }
         snapshot[0] = .{
             .run_id = id,
             .status = std.meta.stringToEnum(oap.RunStatus, run.status) orelse .running,
             .relationship = relationship,
             .as_of_sequence = run.next_sequence - 1,
+            .admitted_submit_requests = anchors,
             .pending_steers = try pending.toOwnedSlice(arena),
         };
         return snapshot;
@@ -2537,6 +2546,8 @@ fn pendingSteerSnapshot(allocator: std.mem.Allocator, reducer: *const Reducer) !
     defer for (runs) |*run| run.deinit(allocator);
     try testing.expectEqual(@as(usize, 1), runs.len);
     try testing.expectEqualStrings("steer-request", runs[0].pending_steers[0].request_id);
+    try testing.expectEqual(@as(usize, 1), runs[0].admitted_submit_requests.len);
+    try testing.expectEqualStrings("steer-request", runs[0].admitted_submit_requests[0]);
 }
 
 test "pending steer state owns its snapshot across allocation failures" {
