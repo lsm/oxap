@@ -171,6 +171,7 @@ const Item = struct {
     tool_call_id: []const u8,
     name: []const u8,
     arguments: std.json.Value,
+    native_item: ?std.json.Value = null,
     started: bool = true,
     terminal: bool = false,
 };
@@ -790,6 +791,10 @@ pub const Reducer = struct {
     }
 
     fn emit(self: *Reducer, index: usize, kind: []const u8, payload: std.json.ObjectMap, tool_call_id: []const u8, terminal: bool) !void {
+        try self.emitWithExtensions(index, kind, payload, tool_call_id, terminal, null);
+    }
+
+    fn emitWithExtensions(self: *Reducer, index: usize, kind: []const u8, payload: std.json.ObjectMap, tool_call_id: []const u8, terminal: bool, extensions: ?std.json.ObjectMap) !void {
         const run = &self.runs.items[index];
         if (run.terminal) return;
         const sequence = run.next_sequence;
@@ -809,6 +814,7 @@ pub const Reducer = struct {
         try self.put(&envelope, "run_id", str(run.id));
         try self.putNonEmpty(&envelope, "tool_call_id", tool_call_id);
         try self.put(&envelope, "capability_revision", str(self.options.revision));
+        if (extensions) |fields| try self.put(&envelope, "extensions", .{ .object = fields });
         try self.envelopes.append(self.allocator(), .{ .object = envelope });
         if (!terminal) return;
         run.terminal = true;
@@ -966,10 +972,15 @@ pub const Reducer = struct {
         try self.emit(index, "content.delta", payload, "", false);
     }
 
-    fn itemName(self: *Reducer, params: std.json.Value) ![]const u8 {
-        const kind = native.text(params, &.{ "item", "type" });
+    fn itemName(self: *Reducer, params: std.json.Value, kind: []const u8) ![]const u8 {
         if (std.mem.eql(u8, kind, "commandExecution")) return "codex.command";
         if (std.mem.eql(u8, kind, "fileChange")) return "codex.file_change";
+        if (std.mem.eql(u8, kind, "subAgentActivity")) return "codex.subagent.activity";
+        if (std.mem.eql(u8, kind, "collabAgentToolCall")) {
+            const tool = native.text(params, &.{ "item", "tool" });
+            if (tool.len == 0) return "";
+            return std.fmt.allocPrint(self.allocator(), "codex.collab.{s}", .{tool});
+        }
         if (!std.mem.eql(u8, kind, "mcpToolCall")) return "";
         const server = native.text(params, &.{ "item", "server" });
         const tool = native.text(params, &.{ "item", "tool" });
@@ -977,10 +988,17 @@ pub const Reducer = struct {
         return std.fmt.allocPrint(self.allocator(), "mcp.{s}.{s}", .{ server, tool });
     }
 
-    fn itemArguments(self: *Reducer, params: std.json.Value) !std.json.Value {
+    fn itemArguments(self: *Reducer, params: std.json.Value, kind: []const u8) !std.json.Value {
         if (native.raw(params, &.{ "item", "arguments" })) |carried| return carried;
-        const kind = native.text(params, &.{ "item", "type" });
         var arguments = std.json.ObjectMap.empty;
+        if (std.mem.eql(u8, kind, "subAgentActivity")) {
+            try self.putNonEmpty(&arguments, "kind", native.text(params, &.{ "item", "kind" }));
+            return .{ .object = arguments };
+        }
+        if (std.mem.eql(u8, kind, "collabAgentToolCall")) {
+            try self.putNonEmpty(&arguments, "prompt", native.text(params, &.{ "item", "prompt" }));
+            return .{ .object = arguments };
+        }
         if (std.mem.eql(u8, kind, "commandExecution")) {
             try self.put(&arguments, "command", str(native.text(params, &.{ "item", "command" })));
             try self.put(&arguments, "cwd", str(native.text(params, &.{ "item", "cwd" })));
@@ -1017,38 +1035,51 @@ pub const Reducer = struct {
         return payload;
     }
 
+    fn emitAction(self: *Reducer, index: usize, kind: []const u8, payload: std.json.ObjectMap, item: Item) !void {
+        var extensions = std.json.ObjectMap.empty;
+        if (item.native_item) |value| try self.put(&extensions, "com.openai.codex.item", value);
+        try self.emitWithExtensions(index, kind, payload, item.tool_call_id, false, if (extensions.count() > 0) extensions else null);
+    }
+
     fn onItem(self: *Reducer, started: bool, params: std.json.Value) !void {
         const index = self.runFor(native.text(params, &.{"threadId"}), native.text(params, &.{"turnId"})) orelse return;
         const run = self.runs.items[index];
         if (!run.started or run.terminal) return;
-        if (!started and std.mem.eql(u8, native.text(params, &.{ "item", "type" }), "agentMessage")) {
+        const kind = native.text(params, &.{ "item", "type" });
+        if (!started and std.mem.eql(u8, kind, "agentMessage")) {
             if (native.pointer(params, &.{ "item", "moderation" })) |moderation| {
                 if (moderation != .null) return self.failRun(index, "unsupported_moderation", "Codex moderation cannot be represented by this adapter", "");
             }
             self.runs.items[index].final_text = try self.allocator().dupe(u8, native.text(params, &.{ "item", "text" }));
             return;
         }
-        const name = try self.itemName(params);
+        const name = try self.itemName(params, kind);
         const native_id = native.text(params, &.{ "item", "id" });
         if (name.len == 0 or native_id.len == 0) return;
+        const activity = std.mem.eql(u8, kind, "subAgentActivity");
+        const collaboration = std.mem.eql(u8, kind, "collabAgentToolCall");
+        const native_item = if (activity or collaboration) native.raw(params, &.{"item"}) else null;
         const existing = self.findItem(native_id);
         if (started) {
             if (existing != null) return;
             const tool_call_id = try self.nextID("tool-call");
-            const arguments = try self.itemArguments(params);
-            try self.items.append(self.allocator(), .{ .native_id = native_id, .run_id = run.id, .tool_call_id = tool_call_id, .name = name, .arguments = arguments });
-            const item = self.items.items[self.items.items.len - 1];
-            try self.emit(index, "action.call.requested", try self.actionPayload(index, item, true), item.tool_call_id, false);
-            try self.emit(index, "action.call.started", try self.actionPayload(index, item, true), item.tool_call_id, false);
+            const arguments = try self.itemArguments(params, kind);
+            const item = Item{ .native_id = native_id, .run_id = run.id, .tool_call_id = tool_call_id, .name = name, .arguments = arguments, .native_item = native_item };
+            try self.items.append(self.allocator(), item);
+            try self.emitAction(index, "action.call.requested", try self.actionPayload(index, item, true), item);
+            try self.emitAction(index, "action.call.started", try self.actionPayload(index, item, true), item);
             return;
         }
         const at = existing orelse return self.failRun(index, "invalid_native_action", "item/completed arrived without one active item/started", "");
         const item = &self.items.items[at];
         if (!std.mem.eql(u8, item.run_id, run.id) or item.terminal) return self.failRun(index, "invalid_native_action", "item/completed arrived without one active item/started", "");
         item.terminal = true;
+        item.native_item = native_item;
         var payload = try self.actionPayload(index, item.*, false);
         const failure = native.pointer(params, &.{ "item", "error" });
-        if (failure != null or std.mem.eql(u8, native.text(params, &.{ "item", "status" }), "failed")) {
+        const status = native.text(params, &.{ "item", "status" });
+        if (collaboration and std.mem.eql(u8, status, "interrupted")) return self.emitAction(index, "action.call.cancelled", payload, item.*);
+        if (failure != null or std.mem.eql(u8, status, "failed")) {
             var message: []const u8 = "native action failed";
             if (failure != null) {
                 const carried = native.text(params, &.{ "item", "error", "message" });
@@ -1058,9 +1089,14 @@ pub const Reducer = struct {
             try self.put(&reason, "code", str("native_action_failed"));
             try self.put(&reason, "message", str(message));
             try self.put(&payload, "error", .{ .object = reason });
-            return self.emit(index, "action.call.failed", payload, item.tool_call_id, false);
+            return self.emitAction(index, "action.call.failed", payload, item.*);
         }
-        if (std.mem.eql(u8, native.text(params, &.{ "item", "type" }), "commandExecution")) {
+        if (activity or collaboration) {
+            var result = std.json.ObjectMap.empty;
+            if (activity) try self.putNonEmpty(&result, "kind", native.text(params, &.{ "item", "kind" }));
+            if (collaboration) try self.putNonEmpty(&result, "status", status);
+            try self.put(&payload, "result", .{ .object = result });
+        } else if (std.mem.eql(u8, kind, "commandExecution")) {
             var result = std.json.ObjectMap.empty;
             try self.put(&result, "command", str(native.text(params, &.{ "item", "command" })));
             try self.put(&result, "cwd", str(native.text(params, &.{ "item", "cwd" })));
@@ -1078,7 +1114,7 @@ pub const Reducer = struct {
             try self.put(&output, "output", str(if (carried) |value| value.string else ""));
             try self.put(&payload, "result", .{ .object = output });
         }
-        try self.emit(index, "action.call.completed", payload, item.tool_call_id, false);
+        try self.emitAction(index, "action.call.completed", payload, item.*);
     }
 
     fn onCompleted(self: *Reducer, params: std.json.Value) !void {
@@ -1175,14 +1211,14 @@ pub const Reducer = struct {
             const item = self.items.items[at];
             var payload = try self.actionPayload(index, item, false);
             if (std.mem.eql(u8, status, native.turn_interrupted)) {
-                try self.emit(index, "action.call.cancelled", payload, item.tool_call_id, false);
+                try self.emitAction(index, "action.call.cancelled", payload, item);
                 continue;
             }
             var failure = std.json.ObjectMap.empty;
             try self.put(&failure, "code", str("native_action_incomplete"));
             try self.put(&failure, "message", str("native turn ended before the action completed"));
             try self.put(&payload, "error", .{ .object = failure });
-            try self.emit(index, "action.call.failed", payload, item.tool_call_id, false);
+            try self.emitAction(index, "action.call.failed", payload, item);
         }
     }
 

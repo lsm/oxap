@@ -12,6 +12,8 @@ fn name(item: &Item) -> String {
     match item.kind.as_str() {
         "commandExecution" => "codex.command".into(),
         "fileChange" => "codex.file_change".into(),
+        "subAgentActivity" => "codex.subagent.activity".into(),
+        "collabAgentToolCall" if !item.tool.is_empty() => format!("codex.collab.{}", item.tool),
         "mcpToolCall" if item.server.is_empty() && item.tool.is_empty() => "mcp.tool".into(),
         "mcpToolCall" => format!("mcp.{}.{}", item.server, item.tool),
         _ => String::new(),
@@ -27,11 +29,19 @@ fn raw(value: &impl Serialize) -> Box<RawValue> {
     to_raw_value(value).unwrap_or_else(|_| RawValue::NULL.to_owned())
 }
 
+fn text_field(name: &str, text: &str) -> Box<RawValue> {
+    raw(&BTreeMap::from_iter(
+        (!text.is_empty()).then_some((name, text)),
+    ))
+}
+
 fn arguments(item: &Item) -> Box<RawValue> {
     if let Some(arguments) = &item.arguments {
         return arguments.clone();
     }
     match item.kind.as_str() {
+        "subAgentActivity" => text_field("kind", &item.subagent.kind),
+        "collabAgentToolCall" => text_field("prompt", &item.subagent.prompt),
         "commandExecution" => raw(&BTreeMap::from([
             ("command", &item.command),
             ("cwd", &item.cwd),
@@ -47,6 +57,11 @@ fn arguments(item: &Item) -> Box<RawValue> {
 }
 
 fn result(item: &Item) -> Box<RawValue> {
+    match item.kind.as_str() {
+        "subAgentActivity" => return text_field("kind", &item.subagent.kind),
+        "collabAgentToolCall" => return text_field("status", &item.status),
+        _ => {}
+    }
     let output = raw(&item.output.clone().unwrap_or_default());
     if item.kind == "commandExecution" {
         let mut result = BTreeMap::from([
@@ -85,6 +100,7 @@ impl Shared {
         if name.is_empty() || item.id.is_empty() {
             return;
         }
+        let native_item = item.subagent.raw.as_deref();
         if method == METHOD_ITEM_STARTED {
             if inner.items.contains_key(&item.id) {
                 return;
@@ -94,14 +110,19 @@ impl Shared {
                 tool_call: ToolCallId::from(self.runtime.new_id("tool-call")),
                 name,
                 arguments: arguments(&item),
+                native_item: native_item.map(RawValue::to_owned),
                 terminal: false,
                 order: inner.next_order,
             };
             inner.next_order += 1;
             let started = payload(inner, &binding, true);
             inner.items.insert(item.id, binding);
-            self.emit_action(inner, id, EnvelopeType::ACTION_CALL_REQUESTED, &started);
-            self.emit_action(inner, id, EnvelopeType::ACTION_CALL_STARTED, &started);
+            for kind in [
+                EnvelopeType::ACTION_CALL_REQUESTED,
+                EnvelopeType::ACTION_CALL_STARTED,
+            ] {
+                self.emit_action(inner, id, kind, &started, native_item);
+            }
             return;
         }
         let Some(binding) = inner
@@ -121,7 +142,9 @@ impl Shared {
         binding.terminal = true;
         let binding = binding.clone();
         let mut ended = payload(inner, &binding, false);
-        if item.error.is_some() || item.status == "failed" {
+        let kind = if item.kind == "collabAgentToolCall" && item.status == "interrupted" {
+            EnvelopeType::ACTION_CALL_CANCELLED
+        } else if item.error.is_some() || item.status == "failed" {
             let message = item
                 .error
                 .map(|error| error.message)
@@ -132,11 +155,12 @@ impl Shared {
                 message,
                 ..ProtocolError::default()
             });
-            self.emit_action(inner, id, EnvelopeType::ACTION_CALL_FAILED, &ended);
-            return;
-        }
-        ended.result = Some(result(&item));
-        self.emit_action(inner, id, EnvelopeType::ACTION_CALL_COMPLETED, &ended);
+            EnvelopeType::ACTION_CALL_FAILED
+        } else {
+            ended.result = Some(result(&item));
+            EnvelopeType::ACTION_CALL_COMPLETED
+        };
+        self.emit_action(inner, id, kind, &ended, native_item);
     }
 
     pub(crate) fn close_pending(&self, inner: &mut Inner, id: &RunId, interrupted: bool) {
@@ -152,16 +176,17 @@ impl Shared {
         pending.sort_by_key(|binding| binding.order);
         for binding in pending {
             let mut ended = payload(inner, &binding, false);
-            if interrupted {
-                self.emit_action(inner, id, EnvelopeType::ACTION_CALL_CANCELLED, &ended);
-                continue;
-            }
-            ended.error = Some(ProtocolError {
-                code: "native_action_incomplete".into(),
-                message: "native turn ended before the action completed".into(),
-                ..ProtocolError::default()
-            });
-            self.emit_action(inner, id, EnvelopeType::ACTION_CALL_FAILED, &ended);
+            let kind = if interrupted {
+                EnvelopeType::ACTION_CALL_CANCELLED
+            } else {
+                ended.error = Some(ProtocolError {
+                    code: "native_action_incomplete".into(),
+                    message: "native turn ended before the action completed".into(),
+                    ..ProtocolError::default()
+                });
+                EnvelopeType::ACTION_CALL_FAILED
+            };
+            self.emit_action(inner, id, kind, &ended, binding.native_item.as_deref());
         }
     }
 }

@@ -78,6 +78,7 @@ type itemBinding struct {
 	toolCallID protocol.ToolCallID
 	name       string
 	arguments  json.RawMessage
+	nativeItem json.RawMessage
 	started    bool
 	terminal   bool
 	order      uint64
@@ -909,13 +910,13 @@ func (session *session) onItem(method string, value native.ItemNotification) {
 			session.mu.Unlock()
 			return
 		}
-		binding = itemBinding{runID: run.id, toolCallID: protocol.ToolCallID(session.ids.NewID("tool-call")), name: name, arguments: itemArguments(value.Item), started: true, order: session.nextOrder}
+		binding = itemBinding{runID: run.id, toolCallID: protocol.ToolCallID(session.ids.NewID("tool-call")), name: name, arguments: itemArguments(value.Item), nativeItem: value.Item.Subagent.Raw, started: true, order: session.nextOrder}
 		session.nextOrder++
 		session.items[value.Item.ID] = binding
 		session.mu.Unlock()
 		payload := actionPayload(session.state.SessionID, run.id, binding)
-		_ = session.emit(run, protocol.TypeActionCallRequested, payload, false)
-		_ = session.emit(run, protocol.TypeActionCallStarted, payload, false)
+		session.emitAction(run, protocol.TypeActionCallRequested, payload, binding.nativeItem)
+		session.emitAction(run, protocol.TypeActionCallStarted, payload, binding.nativeItem)
 		return
 	}
 	if !exists || binding.runID != run.id || binding.terminal {
@@ -927,17 +928,26 @@ func (session *session) onItem(method string, value native.ItemNotification) {
 	session.items[value.Item.ID] = binding
 	session.mu.Unlock()
 	payload := actionTerminalPayload(session.state.SessionID, run.id, binding)
+	if value.Item.Type == "collabAgentToolCall" && value.Item.Status == "interrupted" {
+		session.emitAction(run, protocol.TypeActionCallCancelled, payload, value.Item.Subagent.Raw)
+		return
+	}
 	if value.Item.Error != nil || value.Item.Status == "failed" {
 		message := "native action failed"
 		if value.Item.Error != nil && value.Item.Error.Message != "" {
 			message = value.Item.Error.Message
 		}
 		payload.Error = &protocol.ProtocolError{Code: "native_action_failed", Message: message}
-		_ = session.emit(run, protocol.TypeActionCallFailed, payload, false)
+		session.emitAction(run, protocol.TypeActionCallFailed, payload, value.Item.Subagent.Raw)
 		return
 	}
 	payload.Result = value.Item.Result
-	if value.Item.Type == "commandExecution" {
+	switch value.Item.Type {
+	case "subAgentActivity":
+		payload.Result, _ = json.Marshal(itemTextField("kind", value.Item.Subagent.Kind))
+	case "collabAgentToolCall":
+		payload.Result, _ = json.Marshal(itemTextField("status", value.Item.Status))
+	case "commandExecution":
 		output := ""
 		if value.Item.Output != nil {
 			output = *value.Item.Output
@@ -950,14 +960,16 @@ func (session *session) onItem(method string, value native.ItemNotification) {
 			result["nativeResult"] = value.Item.Result
 		}
 		payload.Result, _ = json.Marshal(result)
-	} else if len(payload.Result) == 0 {
-		output := ""
-		if value.Item.Output != nil {
-			output = *value.Item.Output
+	default:
+		if len(payload.Result) == 0 {
+			output := ""
+			if value.Item.Output != nil {
+				output = *value.Item.Output
+			}
+			payload.Result, _ = json.Marshal(map[string]string{"output": output})
 		}
-		payload.Result, _ = json.Marshal(map[string]string{"output": output})
 	}
-	_ = session.emit(run, protocol.TypeActionCallCompleted, payload, false)
+	session.emitAction(run, protocol.TypeActionCallCompleted, payload, value.Item.Subagent.Raw)
 }
 
 func actionPayload(sessionID protocol.SessionID, runID protocol.RunID, binding itemBinding) protocol.ActionCallPayload {
@@ -981,6 +993,10 @@ func itemArguments(item native.Item) json.RawMessage {
 	}
 	var value any
 	switch item.Type {
+	case "subAgentActivity":
+		value = itemTextField("kind", item.Subagent.Kind)
+	case "collabAgentToolCall":
+		value = itemTextField("prompt", item.Subagent.Prompt)
 	case "commandExecution":
 		value = map[string]string{"command": item.Command, "cwd": item.Cwd}
 	case "fileChange":
@@ -992,12 +1008,26 @@ func itemArguments(item native.Item) json.RawMessage {
 	return encoded
 }
 
+func itemTextField(name, text string) map[string]string {
+	if text == "" {
+		return map[string]string{}
+	}
+	return map[string]string{name: text}
+}
+
 func itemName(item native.Item) string {
 	switch item.Type {
 	case "commandExecution":
 		return "codex.command"
 	case "fileChange":
 		return "codex.file_change"
+	case "subAgentActivity":
+		return "codex.subagent.activity"
+	case "collabAgentToolCall":
+		if item.Tool != "" {
+			return "codex.collab." + item.Tool
+		}
+		return ""
 	case "mcpToolCall":
 		if item.Server != "" || item.Tool != "" {
 			return "mcp." + item.Server + "." + item.Tool
@@ -1109,11 +1139,11 @@ func (session *session) closePendingActions(run *runState, status native.TurnSta
 	for _, binding := range pending {
 		payload := actionTerminalPayload(session.state.SessionID, run.id, binding)
 		if status == native.TurnInterrupted {
-			_ = session.emit(run, protocol.TypeActionCallCancelled, payload, false)
+			session.emitAction(run, protocol.TypeActionCallCancelled, payload, binding.nativeItem)
 			continue
 		}
 		payload.Error = &protocol.ProtocolError{Code: "native_action_incomplete", Message: "native turn ended before the action completed"}
-		_ = session.emit(run, protocol.TypeActionCallFailed, payload, false)
+		session.emitAction(run, protocol.TypeActionCallFailed, payload, binding.nativeItem)
 	}
 }
 
@@ -1163,10 +1193,28 @@ func cloneEnvelope(envelope protocol.Envelope) protocol.Envelope {
 		timestamp := *envelope.TimestampMS
 		cloned.TimestampMS = &timestamp
 	}
+	if envelope.Extensions != nil {
+		cloned.Extensions = make(map[string]json.RawMessage, len(envelope.Extensions))
+		for key, value := range envelope.Extensions {
+			cloned.Extensions[key] = append(json.RawMessage(nil), value...)
+		}
+	}
 	return cloned
 }
 
 func (session *session) emit(run *runState, typ protocol.EnvelopeType, payload any, terminal bool) error {
+	return session.emitWithExtensions(run, typ, payload, terminal, nil)
+}
+
+func (session *session) emitAction(run *runState, typ protocol.EnvelopeType, payload protocol.ActionCallPayload, item json.RawMessage) {
+	var extensions map[string]json.RawMessage
+	if item != nil {
+		extensions = map[string]json.RawMessage{"com.openai.codex.item": item}
+	}
+	_ = session.emitWithExtensions(run, typ, payload, false, extensions)
+}
+
+func (session *session) emitWithExtensions(run *runState, typ protocol.EnvelopeType, payload any, terminal bool, extensions map[string]json.RawMessage) error {
 	session.emitMu.Lock()
 	defer session.emitMu.Unlock()
 	session.mu.Lock()
@@ -1196,6 +1244,7 @@ func (session *session) emit(run *runState, typ protocol.EnvelopeType, payload a
 	envelope.Sequence = &sequence
 	envelope.TimestampMS = &now
 	envelope.CapabilityRevision = session.revision
+	envelope.Extensions = extensions
 
 	session.mu.Lock()
 	session.journal = append(session.journal, envelope)
