@@ -14,12 +14,16 @@ reopen unavailable because its pinned wire reaches no store (#892), and `oapx
 serve agent` refuses it (#862). The binding is a host record with a file store
 that refuses a torn line (#479), `goap hub` and `oapx hub` write and read the
 same file (#893), and a record carries the reasoning level and compaction
-policy the open asked for. The session list stays with T8)
+policy the open asked for. The session list stays with T8). Staged amendment
+in #2014 for capability-backed reopen and idle wake.
 Date: 2026-09-28
 Protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
 Unit: `session-reattach` (plan sub-unit T7)
-Amends: nothing. Executes the `session-reattach` unit
+Amends: [agent-service parking](../drafts/agent-service.md#parking)
+and [event-driven loop parking](../drafts/event-driven-loop.md#two-levels-of-parking)
+for capability-backed attachments when the staged amendment is implemented
+Executes: the `session-reattach` unit
 [Decision 0039](0039-a-session-is-oaps-and-a-harness-is-where-it-runs.md)
 staged as T7, and its T7 section, and adds the reopen half to
 [Decision 0001](0001-agent-control-v0.1-executable-core.md)'s
@@ -174,10 +178,10 @@ needs it.
 A binding is a record the **host** supplies and the library reads and writes
 through an interface, not a file format the protocol imposes. It carries: the
 OAP session id, the harness id and the pin it was opened under, the harness'
-own session id, the working directory and home directory the open ran in, and
-the model and settings the open asked for. Two things it never carries: a
-credential, and a resolved environment value — both would turn a record of what
-was asked into a copy of what was secret.
+own session id, the working directory and home directory the open ran in,
+and the model and settings the open asked for. Credentials, credential
+references, trusted headers, and resolved environment values are excluded
+from the binding.
 
 It is written **atomically** and a torn write is **detected, never read**: a
 record that cannot be parsed whole is an absence, not a partial truth, because
@@ -191,6 +195,45 @@ a binding at open and reads it at reopen. Where it lives, who writes it, and
 whether it is per-user or per-workspace is the host's choice, which is the point:
 the protocol decides what a binding must *say*, and the host decides where it
 keeps it.
+
+### A reopen restores the bound tool sources
+
+This staged amendment governs hubs that implement the capability-backed
+attachments in [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
+
+Create records the source IDs in `tool_source_ids` and records nonsecret
+provenance for each ID indicating whether the source was admitted through a
+capability file. The host chooses how to store that marker. Reopen uses the
+recorded provenance even if the registry now contains a source with the same
+ID. It refuses a source that cannot be restored through its recorded path.
+
+An external explicit reopen of a binding with capability-backed sources must
+supply exactly the source IDs recorded on create, with a fresh
+`credential_ref` for every ID marked capability-backed. The other IDs follow
+the existing rules, including registry lookup by ID for operator-configured
+sources. A binding created without capability-backed attachments continues
+under the existing reopen rules. For a capability-backed reopen, an omitted
+source list or a removed, added, replaced, or duplicate ID refuses the reopen.
+Each capability-backed source needs a new file resolved under
+[Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
+A missing, invalid, cross-session, or replayed reference or an unavailable
+source refuses the reopen. Source-set mismatches use the same
+`unsupported_feature` response with `details.feature:
+"action.tool_sources.attach"` and `details.reason: "unsatisfiable"`, naming the
+affected source in `details.source`. The session must keep its full attachment
+set across a successful reopen.
+
+Idle park is a detach of the same logical session. When the hub wakes a parked
+session, it reuses the resolved adapter-private attachment kept only in memory
+in its `OpenedWith` record. The wake uses the bound IDs and requires no new
+external request or capability file. If the bound sources cannot be restored,
+the wake fails. The durable binding keeps the IDs and their provenance
+markers.
+
+Once implemented, this rule supersedes the live-tool-source exclusion in
+[agent-service parking](../drafts/agent-service.md#parking) and the
+[event-driven loop](../drafts/event-driven-loop.md#two-levels-of-parking) for
+sessions whose bound attachments can be restored on wake.
 
 ## Consequences
 
