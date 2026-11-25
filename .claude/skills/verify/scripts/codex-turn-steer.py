@@ -94,7 +94,9 @@ tee -a {shlex.quote(str(wire))} | {shlex.quote(str(codex))} "$@" | tee -a {shlex
         admission = steered["result"]["payload"]
         assert admission["admission"] == "steered" and admission["run_id"] == run, admission
         state = hub.call("state", session_id="s1")["result"]["payload"]
-        [pending] = state["active_runs"][0]["pending_steers"]
+        [active] = state["active_runs"]
+        [pending] = active["pending_steers"]
+        assert active.get("admitted_submit_requests") == [request_id], f"missing steer admission anchor: {state}"
         assert pending["request_id"] == request_id and pending["submission_id"] == admission["submission_id"], state
         server.release.set()
         terminal = hub.completed("s1")
