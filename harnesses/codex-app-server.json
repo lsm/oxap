@@ -7,6 +7,7 @@
       "status": "current",
       "endpoint_version": "ccf9be8cc458bd6b8336fe84d68d8893f2691a5e",
       "capability_revision": "codex-appserver-0.171.0-oap-v1",
+      "zig_capability_revision": "codex-appserver-0.171.0-oap-v1-steer",
       "ledgers": ["research/codex-app-server-0.171.0-mapping.md", "research/codex-app-server-0.167.2-mapping.md", "research/codex-app-server-0.167.0-mapping.md", "research/codex-app-server-0.163.0-mapping.md", "research/codex-app-server-0.162.1-mapping.md"],
       "corpus": "fixtures/adapters/codex-appserver-0.171.0",
       "corpus_from": "rust-v0.167.2",

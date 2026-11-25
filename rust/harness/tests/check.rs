@@ -125,6 +125,7 @@ fn a_revision_its_corpus_does_not_carry_fails() {
         status: Status::Floor,
         endpoint_version: String::new(),
         capability_revision: String::new(),
+        zig_capability_revision: String::new(),
         admits: Vec::new(),
         ledgers: claude.ledgers.clone(),
         corpus: pi.corpus.clone(),

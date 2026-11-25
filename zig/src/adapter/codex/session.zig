@@ -3,7 +3,8 @@ const jsonschema = @import("jsonschema");
 const harness_pins = @import("harness_pins");
 const rpc = @import("rpc");
 const native = @import("native");
-const ContextUsage = @import("oap_types").ContextUsage;
+const oap = @import("oap_types");
+const ContextUsage = oap.ContextUsage;
 
 pub const codex_commit = harness_pins.codex_app_server_endpoint_version;
 pub const capability_revision = harness_pins.codex_app_server_capability_revision;
@@ -74,6 +75,8 @@ pub const Admission = struct {
     run_id: []const u8,
     model_id: []const u8,
     message_ids: []const []const u8,
+    target_sequence: ?u64 = null,
+    status: oap.RunStatus = .running,
 };
 
 pub const CancelResult = struct {
@@ -136,6 +139,12 @@ pub const Resolution = struct {
     input: ?InputResolve = null,
 };
 
+const Steer = struct {
+    identity: oap.PendingSteer,
+    admitted: bool = false,
+    observed: bool = false,
+};
+
 const Run = struct {
     id: []const u8,
     message_id: []const u8,
@@ -149,6 +158,8 @@ const Run = struct {
     terminal: bool = false,
     cancel_pending: bool = false,
     cancel_in_flight: bool = false,
+    steers: std.ArrayList(Steer) = .empty,
+    deferred_terminal: ?std.json.Value = null,
     text: std.ArrayList(u8) = .empty,
     output_schema: ?[]const u8 = null,
     final_text: ?[]const u8 = null,
@@ -228,6 +239,7 @@ const Call = union(enum) {
     thread_start,
     thread_resume,
     turn_start: usize,
+    turn_steer: struct { index: usize, target_sequence: u64, status: oap.RunStatus },
     turn_interrupt: usize,
 };
 
@@ -453,30 +465,17 @@ pub const Reducer = struct {
             if (requested.len == 0) return Error.ModelNotFound;
             model = requested;
         }
-        if (submission.messages.len == 0) return Error.InvalidSubmission;
         const scratch = submission.scratch orelse self.allocator();
-        var parts: std.ArrayList(native.TurnInput) = .empty;
-        for (submission.messages) |message| {
-            if (!std.mem.eql(u8, message.role, "user")) return Error.UnsupportedInput;
-            if (message.text) |entry| {
-                try parts.append(scratch, .{ .text = entry });
-            } else {
-                if (message.parts.len == 0) return Error.UnsupportedInput;
-                try parts.appendSlice(scratch, message.parts);
-            }
-        }
+        const parts = try turnInputs(scratch, submission.messages);
         if (self.closed or self.transport_closed) return Error.SessionClosed;
         if (self.active != null) return Error.RunActive;
 
         const schema_value: ?std.json.Value = if (submission.output_schema) |schema| std.json.parseFromSliceLeaky(std.json.Value, scratch, schema, .{}) catch return Error.InvalidSubmission else null;
-        const params = try native.turnStartParams(scratch, self.thread_id, parts.items, model, submission.effort, schema_value);
+        const params = try native.turnStartParams(scratch, self.thread_id, parts, model, submission.effort, schema_value);
         const frame = try rpc.encode(scratch, .{ .request = .{ .id = self.next_request, .method = native.method_turn_start, .params = params } });
         if (frame.len > submission.frame_limit) return error.FrameTooLarge;
 
-        const message_ids = try self.allocator().alloc([]const u8, submission.messages.len);
-        for (submission.messages, message_ids) |message, *id| {
-            id.* = if (message.id.len != 0) try self.allocator().dupe(u8, message.id) else try self.nextID("message");
-        }
+        const message_ids = try self.messageIDs(submission.messages);
         if (submission.model_id != null) model = try self.allocator().dupe(u8, model);
         const run_id = try self.nextID("run");
         const message_id = try self.nextID("message");
@@ -489,6 +488,106 @@ pub const Reducer = struct {
         self.state.status = "queued";
         self.state.active_run_id = run_id;
         self.state.updated_at_ms = self.now();
+    }
+
+    fn turnInputs(scratch: std.mem.Allocator, messages: []const InputMessage) ![]const native.TurnInput {
+        if (messages.len == 0) return Error.InvalidSubmission;
+        var parts: std.ArrayList(native.TurnInput) = .empty;
+        for (messages) |message| {
+            if (!std.mem.eql(u8, message.role, "user")) return Error.UnsupportedInput;
+            if (message.text) |entry| {
+                try parts.append(scratch, .{ .text = entry });
+            } else {
+                if (message.parts.len == 0) return Error.UnsupportedInput;
+                try parts.appendSlice(scratch, message.parts);
+            }
+        }
+        return parts.items;
+    }
+
+    fn messageIDs(self: *Reducer, messages: []const InputMessage) ![]const []const u8 {
+        const message_ids = try self.allocator().alloc([]const u8, messages.len);
+        for (messages, message_ids) |message, *id| {
+            id.* = if (message.id.len != 0) try self.allocator().dupe(u8, message.id) else try self.nextID("message");
+        }
+        return message_ids;
+    }
+
+    pub fn steerState(self: *const Reducer, arena: std.mem.Allocator) ![]oap.ActiveRun {
+        const run = self.runs.items[self.active orelse return &.{}];
+        if (run.steers.items.len == 0) return &.{};
+        var pending: std.ArrayList(oap.PendingSteer) = .empty;
+        errdefer {
+            for (pending.items) |entry| entry.deinit(arena);
+            pending.deinit(arena);
+        }
+        try pending.ensureTotalCapacity(arena, run.steers.items.len);
+        for (run.steers.items) |entry| {
+            if (!entry.admitted) continue;
+            const identity = entry.identity;
+            const submission_id = try arena.dupe(u8, identity.submission_id);
+            errdefer arena.free(submission_id);
+            const request_id = try arena.dupe(u8, identity.request_id);
+            errdefer arena.free(request_id);
+            const ids = try arena.alloc([]const u8, identity.message_ids.len);
+            errdefer arena.free(ids);
+            var copied: usize = 0;
+            errdefer for (ids[0..copied]) |id| arena.free(id);
+            for (identity.message_ids, ids) |id, *slot| {
+                slot.* = try arena.dupe(u8, id);
+                copied += 1;
+            }
+            pending.appendAssumeCapacity(.{ .submission_id = submission_id, .request_id = request_id, .message_ids = ids });
+        }
+        if (pending.items.len == 0) {
+            pending.deinit(arena);
+            return &.{};
+        }
+        const id = try arena.dupe(u8, run.id);
+        errdefer arena.free(id);
+        const snapshot = try arena.alloc(oap.ActiveRun, 1);
+        errdefer arena.free(snapshot);
+        const relationship = try arena.dupe(u8, "primary");
+        errdefer arena.free(relationship);
+        const anchors = try arena.alloc([]const u8, pending.items.len);
+        errdefer arena.free(anchors);
+        var anchored: usize = 0;
+        errdefer for (anchors[0..anchored]) |anchor| arena.free(anchor);
+        for (pending.items, anchors) |entry, *anchor| {
+            anchor.* = try arena.dupe(u8, entry.request_id);
+            anchored += 1;
+        }
+        snapshot[0] = .{
+            .run_id = id,
+            .status = std.meta.stringToEnum(oap.RunStatus, run.status) orelse .running,
+            .relationship = relationship,
+            .as_of_sequence = run.next_sequence - 1,
+            .admitted_submit_requests = anchors,
+            .pending_steers = try pending.toOwnedSlice(arena),
+        };
+        return snapshot;
+    }
+
+    pub fn steer(self: *Reducer, index: usize, submission: Submission, request_id: []const u8) !void {
+        const run = &self.runs.items[index];
+        const arena = self.allocator();
+        const scratch = submission.scratch orelse arena;
+        const parts = try turnInputs(scratch, submission.messages);
+        const params = try native.turnSteerParams(scratch, self.thread_id, run.turn_id, request_id, parts);
+        const frame = try rpc.encode(scratch, .{ .request = .{ .id = self.next_request, .method = native.method_turn_steer, .params = params } });
+        if (frame.len > submission.frame_limit) return error.FrameTooLarge;
+        const identity: oap.PendingSteer = .{
+            .submission_id = try self.nextID("submission"),
+            .request_id = try arena.dupe(u8, request_id),
+            .message_ids = try self.messageIDs(submission.messages),
+        };
+        try run.steers.ensureUnusedCapacity(arena, 1);
+        try self.queueCall(.{ .turn_steer = .{
+            .index = index,
+            .target_sequence = run.next_sequence - 1,
+            .status = std.meta.stringToEnum(oap.RunStatus, run.status) orelse .running,
+        } }, frame);
+        run.steers.appendAssumeCapacity(.{ .identity = identity });
     }
 
     pub fn compactInto(self: *const Reducer, arena: *std.heap.ArenaAllocator) !Reducer {
@@ -588,7 +687,7 @@ pub const Reducer = struct {
         return null;
     }
 
-    fn admittedRun(self: *Reducer, run_id: []const u8) ?usize {
+    pub fn admittedRun(self: *Reducer, run_id: []const u8) ?usize {
         for (self.runs.items, 0..) |run, index| {
             if (run.admitted and std.mem.eql(u8, run.id, run_id)) return index;
         }
@@ -662,6 +761,7 @@ pub const Reducer = struct {
             .thread_start => native.method_thread_start,
             .thread_resume => native.method_thread_resume,
             .turn_start => native.method_turn_start,
+            .turn_steer => native.method_turn_steer,
             .turn_interrupt => native.method_turn_interrupt,
         };
     }
@@ -708,6 +808,26 @@ pub const Reducer = struct {
                 }
                 try self.admit(index, turn);
             },
+            .turn_steer => |steer_call| {
+                const index = steer_call.index;
+                const run = &self.runs.items[index];
+                if (!std.mem.eql(u8, native.text(result, &.{"turnId"}), run.turn_id)) return self.callFailed(what, undecodable(what));
+                if (run.terminal) return self.callFailed(what, .{ .method = native.method_turn_steer, .message = "the run already settled" });
+                const at = run.steers.items.len - 1;
+                const steer_entry = &run.steers.items[at];
+                steer_entry.admitted = true;
+                try self.settled.append(self.allocator(), .{ .admitted = .{
+                    .session_id = self.session_id,
+                    .submission_id = steer_entry.identity.submission_id,
+                    .run_id = run.id,
+                    .model_id = "",
+                    .status = steer_call.status,
+                    .message_ids = steer_entry.identity.message_ids,
+                    .target_sequence = steer_call.target_sequence,
+                } });
+                if (steer_entry.observed) try self.settleSteer(index, at, true);
+                try self.finishDeferredTurn(index);
+            },
             .turn_interrupt => |index| {
                 if (!native.decodes(result, native.turn_interrupt_response)) return self.callFailed(what, undecodable(what));
                 try self.interruptAcknowledged(index);
@@ -727,6 +847,10 @@ pub const Reducer = struct {
                 } else {
                     self.state.status = "idle";
                 }
+            },
+            .turn_steer => |steer_call| {
+                _ = self.runs.items[steer_call.index].steers.pop();
+                try self.finishDeferredTurn(steer_call.index);
             },
             .turn_interrupt => |index| self.runs.items[index].cancel_in_flight = false,
         }
@@ -783,6 +907,42 @@ pub const Reducer = struct {
         if (self.active) |index| try self.failRun(index, "native_transport_closed", message, "inferred");
     }
 
+    fn finishDeferredTurn(self: *Reducer, index: usize) !void {
+        const run = &self.runs.items[index];
+        const params = run.deferred_terminal orelse return;
+        run.deferred_terminal = null;
+        try self.onCompleted(params);
+    }
+
+    fn observeSteer(self: *Reducer, index: usize, client_id: []const u8) !void {
+        for (self.runs.items[index].steers.items, 0..) |*entry, at| {
+            if (!std.mem.eql(u8, entry.identity.request_id, client_id)) continue;
+            if (entry.admitted) return self.settleSteer(index, at, true);
+            entry.observed = true;
+            return;
+        }
+    }
+
+    fn settleSteer(self: *Reducer, index: usize, at: usize, applied: bool) std.mem.Allocator.Error!void {
+        const steer_entry = self.runs.items[index].steers.orderedRemove(at).identity;
+        var payload = try self.runPayload(index);
+        try self.put(&payload, "submission_id", str(steer_entry.submission_id));
+        try self.put(&payload, "request_id", str(steer_entry.request_id));
+        if (applied) {
+            var ids = std.json.Array.init(self.allocator());
+            for (steer_entry.message_ids) |id| try ids.append(str(id));
+            try self.put(&payload, "message_ids", .{ .array = ids });
+            try self.put(&payload, "boundary", str("unknown"));
+            try self.emit(index, "run.steer.applied", payload, "", false);
+        } else {
+            var reason = std.json.ObjectMap.empty;
+            try self.put(&reason, "code", str("run_terminated"));
+            try self.put(&reason, "message", str("the run terminated before Codex reported the guidance"));
+            try self.put(&payload, "reason", .{ .object = reason });
+            try self.emit(index, "run.steer.dropped", payload, "", false);
+        }
+    }
+
     fn runPayload(self: *Reducer, index: usize) !std.json.ObjectMap {
         var payload = std.json.ObjectMap.empty;
         try self.put(&payload, "session_id", str(self.session_id));
@@ -797,6 +957,11 @@ pub const Reducer = struct {
     fn emitWithExtensions(self: *Reducer, index: usize, kind: []const u8, payload: std.json.ObjectMap, tool_call_id: []const u8, terminal: bool, extensions: ?std.json.ObjectMap) !void {
         const run = &self.runs.items[index];
         if (run.terminal) return;
+        if (terminal) {
+            while (run.steers.items.len != 0 and run.steers.items[0].admitted) {
+                try self.settleSteer(index, 0, false);
+            }
+        }
         const sequence = run.next_sequence;
         run.next_sequence += 1;
         const id = try self.nextID("event");
@@ -1046,6 +1211,11 @@ pub const Reducer = struct {
         const run = self.runs.items[index];
         if (!run.started or run.terminal) return;
         const kind = native.text(params, &.{ "item", "type" });
+        if (!started and std.mem.eql(u8, kind, "userMessage")) {
+            const client_id = native.text(params, &.{ "item", "clientId" });
+            if (client_id.len != 0) try self.observeSteer(index, client_id);
+            return;
+        }
         if (!started and std.mem.eql(u8, kind, "agentMessage")) {
             if (native.pointer(params, &.{ "item", "moderation" })) |moderation| {
                 if (moderation != .null) return self.failRun(index, "unsupported_moderation", "Codex moderation cannot be represented by this adapter", "");
@@ -1119,14 +1289,20 @@ pub const Reducer = struct {
 
     fn onCompleted(self: *Reducer, params: std.json.Value) !void {
         const index = self.runFor(native.text(params, &.{"threadId"}), native.text(params, &.{ "turn", "id" })) orelse return;
-        if (self.runs.items[index].terminal) return;
+        const run = &self.runs.items[index];
+        if (run.terminal) return;
+        if (run.steers.getLastOrNull()) |last| {
+            if (!last.admitted) {
+                run.deferred_terminal = params;
+                return;
+            }
+        }
         const status = native.text(params, &.{ "turn", "status" });
         self.saved = true;
         try self.closePendingInteractions(index, status);
         try self.closePendingActions(index, status);
         var payload = try self.runPayload(index);
         if (std.mem.eql(u8, status, native.turn_completed)) {
-            const run = self.runs.items[index];
             var result: ?std.json.Value = null;
             if (run.output_schema) |schema| {
                 switch (try structuredResult(self.allocator(), schema, run.final_text)) {
@@ -2367,4 +2543,23 @@ test "a completed moderated message fails the run" {
     try feed(&reducer, "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"agentMessage\",\"id\":\"m\",\"text\":\"restricted\",\"moderation\":{\"moderated\":true}}}}");
     try std.testing.expectEqualStrings("run.failed", lastType(&reducer));
     try std.testing.expectEqualStrings("unsupported_moderation", errorCode(&reducer));
+}
+
+fn pendingSteerSnapshot(allocator: std.mem.Allocator, reducer: *const Reducer) !void {
+    const runs = try reducer.steerState(allocator);
+    defer allocator.free(runs);
+    defer for (runs) |*run| run.deinit(allocator);
+    try testing.expectEqual(@as(usize, 1), runs.len);
+    try testing.expectEqualStrings("steer-request", runs[0].pending_steers[0].request_id);
+    try testing.expectEqual(@as(usize, 1), runs[0].admitted_submit_requests.len);
+    try testing.expectEqualStrings("steer-request", runs[0].admitted_submit_requests[0]);
+}
+
+test "pending steer state owns its snapshot across allocation failures" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var reducer = try running(&arena);
+    try reducer.steer(reducer.active.?, .{ .messages = &.{.{ .text = "guidance" }} }, "steer-request");
+    try answerCall(&reducer, "{\"turnId\":\"native-turn\"}");
+    try testing.checkAllAllocationFailures(testing.allocator, pendingSteerSnapshot, .{&reducer});
 }

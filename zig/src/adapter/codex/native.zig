@@ -6,6 +6,7 @@ pub const method_initialized = "initialized";
 pub const method_thread_start = "thread/start";
 pub const method_thread_resume = "thread/resume";
 pub const method_turn_start = "turn/start";
+pub const method_turn_steer = "turn/steer";
 pub const method_model_list = "model/list";
 pub const method_config_read = "config/read";
 pub const method_turn_interrupt = "turn/interrupt";
@@ -398,7 +399,7 @@ pub fn unconfirmedHostPermission(host: ThreadStart, resumed: std.json.Value) ?[]
 
 pub const TurnInput = union(enum) { text: []const u8, image_url: []const u8 };
 
-pub fn turnStartParams(arena: std.mem.Allocator, thread_id: []const u8, parts: []const TurnInput, model: []const u8, effort: []const u8, output_schema: ?std.json.Value) !std.json.Value {
+fn turnInputParams(arena: std.mem.Allocator, thread_id: []const u8, parts: []const TurnInput) !std.json.ObjectMap {
     var input = std.json.Array.init(arena);
     for (parts) |part| {
         var element = object();
@@ -417,6 +418,18 @@ pub fn turnStartParams(arena: std.mem.Allocator, thread_id: []const u8, parts: [
     var params = object();
     try putText(arena, &params, "threadId", thread_id);
     try params.put(arena, "input", .{ .array = input });
+    return params;
+}
+
+pub fn turnSteerParams(arena: std.mem.Allocator, thread_id: []const u8, turn_id: []const u8, request_id: []const u8, parts: []const TurnInput) !std.json.Value {
+    var params = try turnInputParams(arena, thread_id, parts);
+    try putText(arena, &params, "expectedTurnId", turn_id);
+    try putText(arena, &params, "clientUserMessageId", request_id);
+    return .{ .object = params };
+}
+
+pub fn turnStartParams(arena: std.mem.Allocator, thread_id: []const u8, parts: []const TurnInput, model: []const u8, effort: []const u8, output_schema: ?std.json.Value) !std.json.Value {
+    var params = try turnInputParams(arena, thread_id, parts);
     try putNonEmpty(arena, &params, "model", model);
     try putNonEmpty(arena, &params, "effort", effort);
     if (output_schema) |schema| try params.put(arena, "outputSchema", schema);

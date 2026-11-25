@@ -116,22 +116,24 @@ fn check_harness(tree: &Path, harness: &Harness, findings: &mut Vec<Finding>) {
                 "the label keys more than one version".into(),
             ));
         }
-        if version.capability_revision.is_empty() {
-            continue;
+        for revision in [
+            &version.capability_revision,
+            &version.zig_capability_revision,
+        ] {
+            if revision.is_empty() {
+                continue;
+            }
+            if let Some(other) = revisions.get(revision.as_str()) {
+                findings.push(finding(
+                    &harness.id,
+                    &version.label,
+                    Code::DuplicateRevision,
+                    format!("capability revision {revision:?} is also {other}'s"),
+                ));
+                continue;
+            }
+            revisions.insert(revision, &version.label);
         }
-        if let Some(other) = revisions.get(version.capability_revision.as_str()) {
-            findings.push(finding(
-                &harness.id,
-                &version.label,
-                Code::DuplicateRevision,
-                format!(
-                    "capability revision {:?} is also {other}'s",
-                    version.capability_revision
-                ),
-            ));
-            continue;
-        }
-        revisions.insert(&version.capability_revision, &version.label);
     }
     for version in &harness.versions {
         check_version(tree, harness, version, &labels, &current, findings);

@@ -470,14 +470,24 @@ pub const Unavailable = struct {
 
 const RunControl = struct { key: []const u8, present: bool };
 
-pub fn refuseUnadvertisedControls(descriptor: Descriptor, request: *const oap_types.MessageSubmitRequest, refusal: *Refusal) Failure!void {
-    const controls = [_]RunControl{
+fn runControls(request: *const oap_types.MessageSubmitRequest) [4]RunControl {
+    return .{
         .{ .key = "run.instructions", .present = request.instructions != null },
         .{ .key = "run.model_selection", .present = request.model_id != null },
         .{ .key = "run.structured_output", .present = request.output_schema_json != null },
         .{ .key = "run.tool_selection", .present = request.tool_choice_json != null },
     };
-    for (controls) |control| {
+}
+
+pub fn refuseSteerControls(descriptor: Descriptor, request: *const oap_types.MessageSubmitRequest, refusal: *Refusal) Failure!void {
+    try refuseUnadvertisedControls(descriptor, request, refusal);
+    for (runControls(request)) |control| {
+        if (control.present) return refusal.unsupported(control.key, reason_unsatisfiable);
+    }
+}
+
+pub fn refuseUnadvertisedControls(descriptor: Descriptor, request: *const oap_types.MessageSubmitRequest, refusal: *Refusal) Failure!void {
+    for (runControls(request)) |control| {
         if (!control.present) continue;
         switch (descriptor.level(control.key)) {
             .unavailable => return refusal.unsupported(control.key, reason_unadvertised),
