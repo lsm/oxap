@@ -89,6 +89,17 @@ tee -a {shlex.quote(str(wire))} | {shlex.quote(str(codex))} "$@" | tee -a {shlex
         assert server.sampling.wait(30), "Codex did not start sampling"
         _, wrong = submit("steer", GUIDANCE, target_run_id="stale")
         assert not wrong["ok"] and wrong["error"]["code"] == "invalid_steer_target", wrong
+        controls = [
+            ({"model_id": "gpt-5.4"}, "run.model_selection", "unsatisfiable"),
+            ({"output_schema": {"type": "object"}}, "run.structured_output", "unsatisfiable"),
+            ({"instructions": "Replace the instructions."}, "run.instructions", "unadvertised"),
+            ({"tool_choice": {"allowed": ["shell"]}}, "run.tool_selection", "unadvertised"),
+            ({"model_id": "gpt-5.4", "tool_choice": {}}, "run.tool_selection", "unadvertised"),
+        ]
+        for fields, feature, reason in controls:
+            _, refused = submit("steer", GUIDANCE, target_run_id=run, **fields)
+            assert not refused["ok"] and refused["error"]["code"] == "unsupported_feature", refused
+            assert refused["error"]["details"] == {"feature": feature, "reason": reason}, refused
         request_id, steered = submit("steer", GUIDANCE, target_run_id=run)
         assert steered["ok"], steered
         admission = steered["result"]["payload"]
@@ -122,7 +133,7 @@ tee -a {shlex.quote(str(wire))} | {shlex.quote(str(codex))} "$@" | tee -a {shlex
         assert methods[1]["params"]["expectedTurnId"] == native_start["turn"]["id"], methods
         (root / "events.json").write_text(json.dumps(events, indent=2) + "\n")
         print(f"PASS: hub exit={hub.process.returncode}, turn/start=1, turn/steer=1, "
-              f"pending anchors=1, applied=1, completed=1, sampling requests={len(server.requests)}, stale refusals=2")
+              f"pending anchors=1, applied=1, completed=1, sampling requests={len(server.requests)}, stale refusals=2, control refusals={len(controls)}")
     finally:
         server.release.set()
         hub.cleanup()
