@@ -514,8 +514,8 @@ func TestOAPCombinedFakeHost(t *testing.T) {
 		t.Fatalf("the tool was not called with the endpoint's call: %+v", invoked)
 	}
 	response, err = client.Agent.Run(ctx, AgentRequest{ModelRef: "fixture/other:test@settings", Messages: []Message{UserMessage("hi")},
-		Options: &RunOptions{MaxTokens: MaxTokens(10), ReasoningEffort: ReasoningHigh}})
-	if err != nil || response.Message.Text != "reasoning=high output=10 user_input=false permission_mode=<nil>" {
+		Options: &RunOptions{MaxTokens: MaxTokens(10), ReasoningEffort: ReasoningUltra}})
+	if err != nil || response.Message.Text != "reasoning=ultra output=10 user_input=false permission_mode=<nil>" {
 		t.Fatalf("agent settings did not reach the open: %v, %+v", err, response)
 	}
 	for _, options := range []*RunOptions{{MaxTokens: MaxTokens(0)}, {ReasoningEffort: ReasoningMinimal}} {

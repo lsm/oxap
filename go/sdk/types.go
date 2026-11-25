@@ -97,6 +97,7 @@ const (
 	ReasoningHigh    ReasoningLevel = "high"
 	ReasoningXHigh   ReasoningLevel = "xhigh"
 	ReasoningMax     ReasoningLevel = "max"
+	ReasoningUltra   ReasoningLevel = "ultra"
 )
 
 type RunOptions struct {

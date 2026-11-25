@@ -1064,6 +1064,7 @@ const efforts = [_]struct { level: []const u8, effort: []const u8 }{
     .{ .level = "high", .effort = "high" },
     .{ .level = "xhigh", .effort = "xhigh" },
     .{ .level = "max", .effort = "max" },
+    .{ .level = "ultra", .effort = "ultra" },
 };
 
 fn effortFor(level: []const u8) ?[]const u8 {
@@ -1431,7 +1432,10 @@ test "a reopen reports the reasoning level the thread resumed under" {
     const off = (try reopenedLevel("none", null)).?;
     defer testing.allocator.free(off);
     try testing.expectEqualStrings("off", off);
-    try testing.expectEqual(@as(?[]const u8, null), try reopenedLevel("ultra", null));
+    const ultra = (try reopenedLevel("ultra", null)).?;
+    defer testing.allocator.free(ultra);
+    try testing.expectEqualStrings("ultra", ultra);
+    try testing.expectEqual(@as(?[]const u8, null), try reopenedLevel("persistent", null));
     const requested = (try reopenedLevel("high", "low")).?;
     defer testing.allocator.free(requested);
     try testing.expectEqualStrings("low", requested);
