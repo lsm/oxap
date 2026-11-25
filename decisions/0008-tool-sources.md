@@ -5,13 +5,17 @@ executable with Claude and ACP evidence. T3c control-layer tools stays staged as
 a named deferral, now carried by
 [Decision 0011](0011-control-layer-provided-tools.md), which discharged it and
 was accepted 2026-09-17 once the reference and Makai adapters both executed the
-unit)
+unit). Staged amendment in #2014 for one-time credential references and
+adapter-private headers.
 Date: 2026-09-16
 Protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
 Unit: `tool-sources` (claim term `+tool-sources`; plan sub-units T3a and T3b)
 Extends: [Decision 0001](0001-agent-control-v0.1-executable-core.md) and
 [Decision 0002](0002-admission-before-start.md) without amending either
+Amends: [the trust model](../drafts/agent-service.md#the-trust-model) and
+[tool sources on the wire](../drafts/agent-service.md#tool-sources-on-the-wire)
+in the agent-service draft when the staged stdio amendment is implemented
 Gated by: [Decision 0003](0003-staged-unit-graduation.md)
 Design: [Staged Units Graduation Plan](../drafts/staged-units-graduation.md),
 section "T3. Tool sources and control-layer tools"
@@ -490,12 +494,10 @@ reached. So `kind`, `display_name`, `protocol`, and `endpoint` come from the
 registry, and a caller that states one differing from the operator's is refused
 under the same typed shape rather than silently overwritten.
 
-That list is every member `ToolSourceAttachment` carries, less the four handled
-elsewhere, and it is stated that way because "the authoritative members are
-these" is the kind of claim that is falsified by a member nobody thought to
-name. `id` is the lookup key and cannot disagree with itself; `command` and
-`args` are refused outright from the wire; `environment` is additive under the
-bare-`NAME` allowlist. The four above are the remainder.
+For a registry attachment, `id` is the lookup key. The wire rejects `command`
+and `args` and permits additive `environment` entries under the bare-`NAME`
+allowlist. The separate capability-backed path below resolves
+`credential_ref` against the session and source IDs.
 
 `kind` was the member that got away, and it got away because it was doing a
 second job: the route dispatched on the caller's kind to decide whether to
@@ -566,6 +568,72 @@ all.
 That hardening is defence in depth; the allowlist is what the unit graduates
 on, because an executable the operator never configured is not something the
 daemon should run under any boundary check.
+
+### A credential reference authorizes one session open
+
+This amendment is staged. The shipped session schema rejects `credential_ref`.
+The schema, protocol types, validator, fixtures and client types will adopt
+the member together when support lands. At that point, this rule supersedes
+the [agent-service trust model](../drafts/agent-service.md#the-trust-model) and
+[tool sources on the wire](../drafts/agent-service.md#tool-sources-on-the-wire)
+for capability-backed stdio attachments. The hub consumes the reference
+during the open it authorizes.
+
+`credential_ref` is attachment-only and follows the same publication rule as
+other attachment-only fields. `headers` belongs exclusively to the
+adapter-private attachment. The wire boundary refuses literal headers.
+
+An implementing stdio hub accepts a capability-backed attachment as
+`{ id, kind, credential_ref }` for a `remote` source with protocol `mcp`.
+The file carries a remote MCP descriptor. Process attachments continue to
+use the operator's registry, and a capability file carrying `command` or
+`args` is invalid.
+
+The operator configures a fixed, operator-owned directory of mode `0700`
+with `--session-tool-sources <directory>`. The operator authorizes the
+integration preparing the open to write there. That write access is the basis
+for trusting the issuer. Before submitting a create or explicit reopen, the
+issuer has the OAP session ID for the request and obtains a bearer grant for
+that session from the MCP server's authorization layer. It atomically writes
+a fresh mode `0600` capability file with the session ID, the descriptor, and
+the literal `Authorization: Bearer <credential>` header. Its filename is the
+canonical base64url encoding of a fresh 256-bit random value. The reference
+is that filename, distinct from the session ID and the bearer credential.
+
+An external create using this path must carry the `session_id` the issuer
+put in the file.
+
+After public request validation and the attachment capability gates, the hub
+accepts only a canonical reference and resolves it inside that directory. The
+file's session ID and source ID must match the open exactly. Its descriptor
+is authoritative and must specify a remote MCP source, match the requested
+kind, and satisfy the adapter's attachment constraints. The hub claims the
+file atomically before calling the adapter and deletes it after use. A claim
+can serve only one open, even when opens race or the adapter refuses the open.
+
+A missing reference for a capability-backed source, an invalid reference or
+file, a cross-session or wrong-source reference, a duplicate source ID or
+reference, and a replayed reference all refuse the open. An unavailable source,
+including one whose file cannot be resolved or claimed, also refuses the open.
+These refusals use `unsupported_feature` with `details.feature:
+"action.tool_sources.attach"`, `details.reason: "unsatisfiable"`, and
+`details.source` naming the affected source. The hub must refuse unresolved
+attachments before opening the session.
+
+Resolution passes trusted headers only in the adapter-private attachment and
+consumes the reference at the hub. The reference never reaches the harness.
+Headers and references never enter published descriptors, catalogs, session
+state or metadata, or persisted bindings. Logs, including verification logs,
+redact both values and captured native configuration. Credentials and
+references stay out of command lines, process environments, and URLs. The
+endpoint remains a descriptor field. Native configuration travels over the
+private adapter pipe. Release verification checks the harness's home, including
+its rollout and configuration files, for persisted header values or references.
+Any hit blocks release.
+
+Create and explicit reopen resolve fresh files. Idle wake reuses the resolved
+adapter-private attachment under
+[Decision 0040](0040-a-session-reopens-through-its-own-binding.md#a-reopen-restores-the-bound-tool-sources).
 
 ## Evidence
 

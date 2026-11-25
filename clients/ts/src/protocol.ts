@@ -502,7 +502,7 @@ export interface SessionOpenRequest {
   compaction_policy?: CompactionPolicy;
 }
 
-export type ReasoningLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ReasoningLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export type CompactionPolicy =
   | { kind: 'auto' }

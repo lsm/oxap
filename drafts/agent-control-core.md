@@ -543,6 +543,8 @@ consents, and either refusal leaves both settings unchanged. An accepted
 update answers with `session.settings.update.response`, repeating the value now
 in force for every member the request named (never a rounded one), and
 optionally `previous_reasoning_level` and `previous_compaction_policy`.
+The shared `reasoning_level` vocabulary includes `ultra` for harnesses that
+support it natively.
 `session.state.updated` reports the new settings before any run that starts
 after the response. The update follows the model switch's ordering: it does
 not retarget a running run. The decision is

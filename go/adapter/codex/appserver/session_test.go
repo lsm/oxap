@@ -1143,7 +1143,8 @@ func TestAReopenReportsTheReasoningLevelTheThreadResumedUnder(t *testing.T) {
 	}{
 		"a shared level":               {effort: "high", want: protocol.ReasoningHigh},
 		"none is off":                  {effort: "none", want: protocol.ReasoningOff},
-		"a level OAP has no value for": {effort: "ultra", want: ""},
+		"a level OAP has no value for": {effort: "persistent", want: ""},
+		"ultra is shared":              {effort: "ultra", want: protocol.ReasoningUltra},
 		"no level reported":            {effort: "", want: ""},
 		"the requested level wins":     {effort: "high", requested: protocol.ReasoningLow, want: protocol.ReasoningLow},
 	}

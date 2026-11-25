@@ -14,7 +14,7 @@ test("a model entry carries the facts the provider published", async () => {
 
     assert.deepEqual(model.cost, { input: 3, output: 15, cache_read: 0.3, cache_write: 3.75 });
     assert.deepEqual(model.input_modalities, ["text", "image"]);
-    assert.deepEqual(model.reasoning_levels, ["off", "medium", "high"]);
+    assert.deepEqual(model.reasoning_levels, ["off", "medium", "high", "ultra"]);
     assert.equal(model.release_date, "2025-09-29");
     assert.equal(model.family, "mock-family");
     assert.deepEqual(listed.catalog, { observed_at_ms: 1_759_100_000_000, complete: true });

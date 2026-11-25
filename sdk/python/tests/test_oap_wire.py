@@ -42,7 +42,7 @@ for line in sys.stdin:
         emit(P, "provider.models.list.response", rid, payload={"models":[{
              "model_ref":"fixture/other:test@ok", "model_id":"ok", "provider_id":"fixture",
              "wire":"other", "auth_status":"authenticated", "lifecycle":"stable",
-             "source":"fallback", "capabilities":["chat", "streaming"]}]})
+             "source":"fallback", "reasoning_default":"ultra", "capabilities":["chat", "streaming"]}]})
     elif kind == "inference.create.request":
         scope={"inference_id":"inf-1"}
         emit(P, "inference.create.response", rid, scope, {"accepted":True})
@@ -174,6 +174,7 @@ class OAPWireTests(unittest.IsolatedAsyncioTestCase):
             models = await client.models.list()
             self.assertEqual(models.models[0].model_ref, "fixture/other:test@ok")
             self.assertEqual(models.models[0].source, "static_fallback")
+            self.assertEqual(models.models[0].reasoning_default, "ultra")
             response = await client.provider.complete(
                 model_ref="fixture/other:test@ok", messages=[{"role": "user", "content": "hi"}])
             self.assertEqual(response.text, "hello")
@@ -244,8 +245,8 @@ class OAPWireTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(invoked), 1)
             settings = await client.agent.run(model_ref="fixture/other:test@settings",
                 messages=[{"role": "user", "content": "hi"}],
-                options=RunOptions(max_tokens=10, reasoning_effort="high"))
-            self.assertEqual(settings.text, "reasoning=high output=10 user_input=False participant=sdk")
+                options=RunOptions(max_tokens=10, reasoning_effort="ultra"))
+            self.assertEqual(settings.text, "reasoning=ultra output=10 user_input=False participant=sdk")
             for refused, code in ((RunOptions(max_tokens=0), "invalid_request"), (RunOptions(reasoning_effort="minimal"), "unsupported_feature")):
                 with self.assertRaises(MakaiProtocolError) as rejected:
                     await client.agent.run(model_ref="fixture/other:test@settings",

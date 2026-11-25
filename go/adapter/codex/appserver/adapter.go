@@ -335,7 +335,7 @@ func oapLevel(effort string) protocol.ReasoningLevel {
 	switch level := protocol.ReasoningLevel(effort); level {
 	case "none":
 		return protocol.ReasoningOff
-	case protocol.ReasoningMinimal, protocol.ReasoningLow, protocol.ReasoningMedium, protocol.ReasoningHigh, protocol.ReasoningXHigh, protocol.ReasoningMax:
+	case protocol.ReasoningMinimal, protocol.ReasoningLow, protocol.ReasoningMedium, protocol.ReasoningHigh, protocol.ReasoningXHigh, protocol.ReasoningMax, protocol.ReasoningUltra:
 		return level
 	}
 	return ""
