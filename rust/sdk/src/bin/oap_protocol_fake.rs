@@ -231,6 +231,9 @@ fn main() {
                     "wire": "openai-responses", "auth_status": "authenticated", "reasoning_default": "ultra",
                     "capabilities": ["chat", "streaming"]
                 });
+                if shape == "max-reasoning" {
+                    entry["reasoning_default"] = json!("max");
+                }
                 match shape.as_str() {
                     "absent-source" => {}
                     "null-source" => entry["source"] = Value::Null,

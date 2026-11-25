@@ -70,6 +70,35 @@ async fn combined_oap_connection_runs_both_profiles() {
 }
 
 #[tokio::test]
+async fn max_reasoning_round_trips_through_the_rust_sdk() {
+    let client = ClientBuilder::new()
+        .command(env!("CARGO_BIN_EXE_oap-protocol-fake"))
+        .args(["--catalog-shape=max-reasoning"])
+        .connect()
+        .await
+        .expect("connects to OAP profiles");
+    let listed = client
+        .models()
+        .list(ListModelsRequest::default())
+        .await
+        .expect("accepts max in catalog metadata");
+    assert_eq!(
+        serde_json::to_value(listed.models[0].reasoning_default).unwrap(),
+        json!("max")
+    );
+
+    let mut request = ExecutionRequest::prompt("fixture/openai-responses@settings", "hello");
+    request.options.reasoning_effort =
+        Some(serde_json::from_value(json!("max")).expect("max is a run option"));
+    let run = client.agent().run(request).await;
+    client.close().await;
+    assert!(run
+        .expect("settings run")
+        .text()
+        .contains("reasoning=\"max\""));
+}
+
+#[tokio::test]
 async fn oap_auth_discovery_progress_and_completion() {
     let client = ClientBuilder::new()
         .command(env!("CARGO_BIN_EXE_oap-protocol-fake"))
