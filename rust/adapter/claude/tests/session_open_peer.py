@@ -114,6 +114,8 @@ if mode.startswith("run-"):
 
         for entry in rest[:3]:
             observe(entry["raw"])
+        if mode == "run-interrupt-compaction":
+            observe({"type": "system", "subtype": "status", "status": "compacting"})
         assert select.select([sys.stdin], [], [], 5)[0], "missing interrupt"
         line = sys.stdin.readline()
         request = json.loads(line)
@@ -279,13 +281,22 @@ if mode.startswith("run-"):
                              corpus_uuid, native_uuid)
                         blocks[0]["content"] = [{"type": "text", "text": "data"}]
                         blocks.insert(0, late)
+            if mode.startswith("run-compaction"):
+                if raw.get("status") == "compacting":
+                    send(raw, corpus_uuid, native_uuid)
+                    wait_for_host(run_index)
+                    if mode == "run-compaction-edges":
+                        send(dict(raw, uuid=raw["uuid"] + "-repeat"), corpus_uuid, native_uuid)
+                    continue
+                if mode == "run-compaction-edges" and raw.get("compact_result"):
+                    continue
             if mode == "run-buffered" and raw.get("event", {}).get("type") == "message_start":
                 buffered.append(raw)
                 continue
             if raw["type"] == "result":
                 for echo in buffered:
                     send(echo, corpus_uuid, native_uuid)
-                if mode != "run-native-buffered":
+                if mode != "run-native-buffered" and not mode.startswith("run-compaction"):
                     wait_for_host(run_index)
                 send(dict(raw, user_message_uuid="", user_message_uuids=[]), corpus_uuid, native_uuid)
                 if mode == "run-native-wins":

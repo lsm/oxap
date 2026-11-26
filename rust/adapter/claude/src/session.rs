@@ -7,9 +7,10 @@ use std::{
 use futures_channel::oneshot;
 use oxap_adapter::validate_input_answer;
 use oxap_adapter::{
-    journal::Journal, refuse_unadvertised_controls, runtime::Runtime, BoxFuture, Error,
-    EventStream, InteractionResolution, Recovery, ResumeRequest, Session, SubmitRequest,
-    ToolCatalog, ToolLister, UnsupportedControl, CONTROL_UNSATISFIABLE,
+    journal::Journal, refuse_unadvertised_controls, refuse_unadvertised_live_settings,
+    runtime::Runtime, BoxFuture, Error, EventStream, InteractionResolution, Recovery,
+    ResumeRequest, Session, SettingsUpdater, SubmitRequest, ToolCatalog, ToolLister,
+    UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
     ActionCallPayload, ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart,
@@ -20,14 +21,16 @@ use oxap_protocol::{
     SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
 };
 use oxap_protocol::{
-    InputAnswer, InputOption, InputQuestion, RunStatusUpdatedPayload, ToolChoice,
-    UserInputRequestedPayload, UserInputResolvedPayload, FEATURE_TOOL_SELECTION,
+    CapabilityDescriptor, CompactionId, CompactionOutcome, CompactionReason, InputAnswer,
+    InputOption, InputQuestion, RunCompactionEndedPayload, RunCompactionStartedPayload,
+    RunStatusUpdatedPayload, SessionSettingsUpdateRequest, SessionSettingsUpdateResponse,
+    ToolChoice, UserInputRequestedPayload, UserInputResolvedPayload, FEATURE_TOOL_SELECTION,
 };
 use serde::Deserialize;
 use serde_json::value::{to_raw_value, RawValue};
 
 use crate::{
-    adapter::{native_uuid, pin, ENDPOINT_ID},
+    adapter::{native_uuid, pin, Adapter, ENDPOINT_ID},
     catalog::Catalog,
     native::{self, ControlRequest, Observation},
     rpc::{
@@ -47,6 +50,7 @@ pub(crate) struct OpenedSession {
     process: Process,
     state: Arc<Mutex<SessionData>>,
     expand_prompts: bool,
+    operation: Mutex<()>,
     runtime: Runtime,
 }
 
@@ -133,6 +137,7 @@ struct ActiveTurn {
     policy: RunToolPolicy,
     settlement: RunSettlement,
     deferred: Option<Box<native::ResultFrame>>,
+    compaction: Option<CompactionId>,
 }
 
 #[derive(Default)]
@@ -259,6 +264,22 @@ impl Echo {
 impl SessionData {
     fn unavailable(&self) -> bool {
         self.unusable || self.session.status == SessionStatus::CLOSED
+    }
+
+    fn require_idle(&self, session_id: &SessionId) -> Result<(), Error> {
+        if self.unavailable() {
+            return Err(Error::SessionClosed);
+        }
+        if self.session.session_id != *session_id {
+            return Err(Error::RunNotFound);
+        }
+        if self.pending.is_some()
+            || self.interrupt.is_some()
+            || self.session.status != SessionStatus::IDLE
+        {
+            return Err(Error::RunActive);
+        }
+        Ok(())
     }
 
     fn interrupt_has_terminal(&self) -> bool {
@@ -543,6 +564,53 @@ impl SessionData {
         let session_id = &self.session.session_id;
         let can_settle = turn.settlement.observe(&observation, corroborates);
         let event = match observation {
+            Observation::Status(frame) if frame.compacting() => {
+                if turn.compaction.is_some() {
+                    return;
+                }
+                let id: CompactionId = runtime.new_id("compaction").into();
+                turn.compaction = Some(id.clone());
+                let payload = RunCompactionStartedPayload {
+                    session_id: session_id.clone(),
+                    run_id: turn.run_id.clone(),
+                    compaction_id: id,
+                    reason: CompactionReason::THRESHOLD,
+                    ..Default::default()
+                };
+                Some(
+                    Envelope::new(
+                        EnvelopeType::RUN_COMPACTION_STARTED,
+                        runtime.new_id("event"),
+                        &payload,
+                    )
+                    .expect("compaction start payload serializes"),
+                )
+            }
+            Observation::Status(frame) => {
+                let Some(result) = frame.compact_result else {
+                    return;
+                };
+                let outcome = if result == native::COMPACT_RESULT_SUCCESS {
+                    Ok(CompactionOutcome::COMPLETED)
+                } else {
+                    Err(ProtocolError {
+                        code: "claude_compaction_failed".into(),
+                        message: frame
+                            .compact_error
+                            .filter(|message| !message.is_empty())
+                            .unwrap_or_else(|| {
+                                format!("the CLI reported its compaction as {result}")
+                            }),
+                        ..Default::default()
+                    })
+                };
+                turn.end_compaction(session_id, outcome, runtime)
+            }
+            Observation::SystemNotice(frame)
+                if frame.subtype == native::SYSTEM_COMPACT_BOUNDARY =>
+            {
+                turn.end_compaction(session_id, Ok(CompactionOutcome::COMPLETED), runtime)
+            }
             Observation::StreamEvent(frame) => {
                 let Some((kind, text)) = frame.stream_delta() else {
                     return;
@@ -786,6 +854,23 @@ impl SessionData {
                     .respond_error("claude adapter: run settled", deadline());
                 self.append_event(gate.resolved(Vec::new(), runtime), false, runtime);
             }
+            let turn = self.active.as_mut().unwrap();
+            if turn.compaction.is_some() {
+                let outcome = if status == RunStatus::CANCELLED {
+                    Ok(CompactionOutcome::CANCELLED)
+                } else {
+                    Err(ProtocolError {
+                        code: "claude_compaction_unreported".into(),
+                        message: "the run ended before the CLI reported how its compaction ended"
+                            .into(),
+                        ..Default::default()
+                    })
+                };
+                if let Some(ended) = turn.end_compaction(&self.session.session_id, outcome, runtime)
+                {
+                    self.append_event(ended, false, runtime);
+                }
+            }
             self.append_event(event, true, runtime);
             self.settled_runs.insert(run_id, status);
             self.active = None;
@@ -879,6 +964,7 @@ impl SessionData {
             policy: turn.policy,
             settlement: RunSettlement::default(),
             deferred: None,
+            compaction: None,
         });
         for entry in turn.buffered {
             match entry {
@@ -918,6 +1004,34 @@ impl SessionData {
 }
 
 impl ActiveTurn {
+    fn end_compaction(
+        &mut self,
+        session_id: &SessionId,
+        outcome: Result<CompactionOutcome, ProtocolError>,
+        runtime: &Runtime,
+    ) -> Option<Envelope> {
+        let (outcome, error) = match outcome {
+            Ok(outcome) => (outcome, None),
+            Err(error) => (CompactionOutcome::FAILED, Some(error)),
+        };
+        let payload = RunCompactionEndedPayload {
+            session_id: session_id.clone(),
+            run_id: self.run_id.clone(),
+            compaction_id: self.compaction.take()?,
+            outcome,
+            error,
+            ..Default::default()
+        };
+        Some(
+            Envelope::new(
+                EnvelopeType::RUN_COMPACTION_ENDED,
+                runtime.new_id("event"),
+                &payload,
+            )
+            .expect("compaction end payload serializes"),
+        )
+    }
+
     fn terminal(&self, session: &SessionId, frame: &native::ResultFrame, id: String) -> Envelope {
         let [input, output, cache_read, cache_write] = [
             frame.usage.input_tokens,
@@ -1073,6 +1187,7 @@ impl OpenedSession {
             process,
             state,
             expand_prompts,
+            operation: Mutex::new(()),
             runtime,
         };
         let client = session.process.client.clone();
@@ -1140,19 +1255,9 @@ impl OpenedSession {
             native::new_user_turn(&uuid, &text, !self.expand_prompts).map_err(Error::harness)?;
         let (signal, corroborated) = oneshot::channel();
         {
+            let _operation = self.operation.lock().unwrap();
             let mut state = self.state.lock().unwrap();
-            if state.unavailable() {
-                return Err(Error::SessionClosed);
-            }
-            if state.session.session_id != request.session_id {
-                return Err(Error::RunNotFound);
-            }
-            if state.pending.is_some()
-                || state.interrupt.is_some()
-                || state.session.status != SessionStatus::IDLE
-            {
-                return Err(Error::RunActive);
-            }
+            state.require_idle(&request.session_id)?;
             state.pending = Some(PendingTurn {
                 uuid: uuid.clone(),
                 model: state.session.current_model_id.clone(),
@@ -1318,6 +1423,7 @@ impl Session for OpenedSession {
     fn close(&self) -> BoxFuture<'_, ()> {
         Box::pin(async {
             {
+                let _operation = self.operation.lock().unwrap();
                 let mut state = self.state.lock().unwrap();
                 if state.pending.is_some() || state.active.is_some() {
                     return Err(Error::RunActive);
@@ -1366,8 +1472,54 @@ impl Session for OpenedSession {
         })
     }
 
+    fn settings_updater(&self) -> Option<&dyn SettingsUpdater> {
+        Some(self)
+    }
+
     fn tool_lister(&self) -> Option<&dyn ToolLister> {
         Some(self)
+    }
+}
+
+impl SettingsUpdater for OpenedSession {
+    fn update_settings(
+        &self,
+        request: SessionSettingsUpdateRequest,
+    ) -> BoxFuture<'_, (SessionSettingsUpdateResponse, SessionState)> {
+        Box::pin(async move {
+            let descriptor = CapabilityDescriptor {
+                features: Adapter::features(),
+                ..Default::default()
+            };
+            refuse_unadvertised_live_settings(&request, &descriptor)?;
+            let flags = native::settings_flags(
+                request.reasoning_level.clone(),
+                request.compaction_policy.as_ref(),
+                true,
+            )?;
+            let _operation = self.operation.lock().unwrap();
+            let session_id = &request.session_id;
+            self.state.lock().unwrap().require_idle(session_id)?;
+            let body = native::apply_flag_settings_request(&flags).map_err(Error::harness)?;
+            self.exchange("apply_flag_settings", body)?;
+            let mut data = self.state.lock().unwrap();
+            let state = &mut data.session;
+            let mut response = SessionSettingsUpdateResponse {
+                session_id: state.session_id.clone(),
+                ..Default::default()
+            };
+            if !request.reasoning_level.is_empty() {
+                response.previous_reasoning_level =
+                    std::mem::replace(&mut state.reasoning_level, request.reasoning_level);
+                response.reasoning_level = state.reasoning_level.clone();
+            }
+            if let Some(policy) = request.compaction_policy {
+                response.previous_compaction_policy = state.compaction_policy.replace(policy);
+                response.compaction_policy = state.compaction_policy.clone();
+            }
+            state.updated_at_ms = self.runtime.now_ms();
+            Ok((response, state.clone()))
+        })
     }
 }
 

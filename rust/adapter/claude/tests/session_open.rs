@@ -307,6 +307,11 @@ fn claude_admission_waits_for_corroboration() {
         assert_eq!(running.status.as_str(), "running");
         assert_eq!(running.active_run_id.as_ref(), Some(run_id));
         assert_eq!(running.current_model_id, frames[5]["raw"]["model"]);
+        if mode == "admission-compacting" {
+            let started = stream.next().now_or_never().unwrap().unwrap().unwrap();
+            assert_eq!(started.envelope_type.as_str(), "run.compaction.started");
+            assert_eq!(started.sequence, Some(2));
+        }
         assert!(stream.next().poll_unpin(&mut context).is_pending());
         assert!(matches!(
             block_on(session.submit(text_submit("again"))),
@@ -414,20 +419,31 @@ fn claude_tools_replay_corpus() {
 
 #[test]
 fn claude_compaction_replays_the_pinned_corpus() {
-    let (adapter, directory, frames) = fixture("run-compaction");
+    check_compaction("run-compaction");
+    check_compaction("run-compaction-edges");
+}
+
+fn check_compaction(mode: &str) {
+    let (adapter, directory, frames) = fixture(mode);
     let session = block_on(adapter.open(OpenRequest {
         session_id: "session".into(),
         ..Default::default()
     }))
     .unwrap();
     assert_eq!(block_on(session.state()).unwrap().status.as_str(), "idle");
-    let updater = session.settings_updater();
+    let updater = session.settings_updater().expect("live settings updater");
     let update = SessionSettingsUpdateRequest {
         session_id: "session".into(),
         reasoning_level: ReasoningLevel::HIGH,
         ..Default::default()
     };
-    let expected = expected_run_events("compaction");
+    let mut expected = expected_run_events("compaction");
+    if mode == "run-compaction-edges" {
+        expected[7]["payload"]["error"] = json!({
+            "code": "claude_compaction_unreported",
+            "message": "the run ended before the CLI reported how its compaction ended"
+        });
+    }
     let turns = expected.split_inclusive(|event| {
         matches!(event["type"].as_str(), Some("run.completed" | "run.failed"))
     });
@@ -442,19 +458,17 @@ fn claude_compaction_replays_the_pinned_corpus() {
         let start = block_on(stream.next()).expect("stream stays open").unwrap();
         assert_eq!(start.envelope_type.as_str(), "run.compaction.started");
         events.push(start);
-        if let Some(updater) = updater {
-            assert!(matches!(
-                block_on(updater.update_settings(update.clone())),
-                Err(Error::RunActive)
-            ));
-        }
+        assert!(matches!(
+            block_on(updater.update_settings(update.clone())),
+            Err(Error::RunActive)
+        ));
         fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
         events.extend(
             block_on(stream.collect::<Vec<_>>())
                 .into_iter()
                 .map(Result::unwrap),
         );
-        assert_run_events(&admission, &events, expected, "compaction");
+        assert_run_events(&admission, &events, expected, mode);
         let mut trace = RunTrace::new(admission, adapter.describe(), events);
         trace.submitted = Some(submit.request);
         trace.assert_valid();
@@ -462,10 +476,7 @@ fn claude_compaction_replays_the_pinned_corpus() {
     }
     block_on(session.close()).unwrap();
     assert!(directory.path().join("eof").is_file());
-    println!(
-        "PASS compaction: {} corpus envelopes over two runs",
-        expected.len()
-    );
+    println!("PASS {mode}: {} envelopes over two runs", expected.len());
 }
 
 #[test]
@@ -1200,6 +1211,11 @@ fn claude_interrupt_replays_the_corpus_and_keeps_ownership() {
 }
 
 #[test]
+fn claude_compaction_closes_as_cancelled_before_the_run_terminal() {
+    check_interrupt("run-interrupt-compaction", "run.cancelled");
+}
+
+#[test]
 fn claude_interrupt_arbitrates_terminal_and_receipt_order() {
     check_interrupt("run-interrupt-terminal-first", "run.cancelled");
     check_interrupt("run-interrupt-completion", "run.completed");
@@ -1219,7 +1235,9 @@ fn check_interrupt(mode: &str, terminal: &str) {
         ..Default::default()
     }))
     .unwrap();
-    let (admission, mut stream) = block_on(session.submit(text_submit("hello"))).unwrap();
+    let mut submit = text_submit("hello");
+    submit.request.delivery = RequestedDeliveryMode::AUTO;
+    let (admission, mut stream) = block_on(session.submit(submit.clone())).unwrap();
     let run = admission.run_id.as_ref().unwrap();
     let mut events = vec![
         block_on(stream.next()).unwrap().unwrap(),
@@ -1282,10 +1300,29 @@ fn check_interrupt(mode: &str, terminal: &str) {
             .into_iter()
             .map(Result::unwrap),
     );
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[2].envelope_type.as_str(), terminal);
-    assert_eq!(events[2].sequence, Some(3));
-    if terminal == "run.cancelled" {
+    let last = events.len() - 1;
+    if mode == "run-interrupt-compaction" {
+        assert_eq!(events.len(), 5);
+        let start = serde_json::to_value(&events[2]).unwrap();
+        let end = serde_json::to_value(&events[3]).unwrap();
+        assert_eq!(start["type"], "run.compaction.started");
+        assert_eq!(end["type"], "run.compaction.ended");
+        assert_eq!(
+            end["payload"]["compaction_id"],
+            start["payload"]["compaction_id"]
+        );
+        assert_eq!(end["payload"]["outcome"], "cancelled");
+        assert!(end["payload"]["error"].is_null());
+        let mut trace = RunTrace::new(admission.clone(), adapter.describe(), events.clone());
+        trace.submitted = Some(submit.request);
+        trace.cancelled = true;
+        trace.assert_valid();
+    } else {
+        assert_eq!(events.len(), 3);
+    }
+    assert_eq!(events[last].envelope_type.as_str(), terminal);
+    assert_eq!(events[last].sequence, Some(events.len() as u64));
+    if terminal == "run.cancelled" && mode != "run-interrupt-compaction" {
         assert_run_events(
             &admission,
             &events,
@@ -1327,7 +1364,10 @@ fn check_interrupt(mode: &str, terminal: &str) {
     assert!(recovery.state.active_run_id.is_none());
     assert_eq!(
         stream_bytes(replay),
-        [serde_json::to_vec(&events[2]).unwrap()]
+        events[2..]
+            .iter()
+            .map(|event| serde_json::to_vec(event).unwrap())
+            .collect::<Vec<_>>()
     );
     block_on(session.close()).unwrap();
     assert!(matches!(
@@ -1337,7 +1377,10 @@ fn check_interrupt(mode: &str, terminal: &str) {
     if mode != "run-interrupt-no-receipt" {
         assert!(directory.path().join("eof").is_file());
     }
-    println!("PASS {mode}: 3 envelopes, one {terminal}, one native interrupt");
+    println!(
+        "PASS {mode}: {} envelopes, one {terminal}, one native interrupt",
+        events.len()
+    );
 }
 
 fn expected_run_events(case: &str) -> Vec<Value> {
