@@ -42,11 +42,8 @@ impl Catalog {
             .mcp_servers
             .iter()
             .map(|server| server.name.as_str())
-            .filter(|name| {
-                !name.is_empty()
-                    && (*name != SDK_SERVER || self.provided.is_empty())
-                    && seen.insert(*name)
-            })
+            .filter(|name| *name != SDK_SERVER || self.provided.is_empty())
+            .filter(|name| !name.is_empty() && seen.insert(*name))
             .collect();
         let mut sources = vec![native_source()];
         sources.extend(servers.iter().map(|name| ToolSourceDescriptor {
@@ -57,7 +54,7 @@ impl Catalog {
             ..ToolSourceDescriptor::default()
         }));
         seen.clear();
-        let tools: Vec<_> = init
+        let mut tools: Vec<_> = init
             .tools
             .iter()
             .flatten()
@@ -79,14 +76,19 @@ impl Catalog {
                 )]),
                 ..ToolDefinition::default()
             })
-            .map(|tool| {
-                tool.name
-                    .strip_prefix(SDK_PREFIX)
-                    .and_then(|bare| self.provided.iter().find(|provided| provided.name == bare))
-                    .cloned()
-                    .unwrap_or(tool)
-            })
             .collect();
+        for tool in &self.provided {
+            let qualified = format!("{SDK_PREFIX}{}", tool.name);
+            let Some(echo) = tools.iter().position(|entry| entry.name == qualified) else {
+                continue;
+            };
+            let bare = tools.iter().position(|entry| entry.name == tool.name);
+            let first = bare.map_or(echo, |bare| bare.min(echo));
+            tools[first] = tool.clone();
+            if let Some(bare) = bare {
+                tools.remove(bare.max(echo));
+            }
+        }
         if !self.served {
             let native_tools = tools.iter().filter(|tool| tool.source == NATIVE_SOURCE);
             self.attribution.clear();

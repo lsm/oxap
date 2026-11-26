@@ -15,7 +15,7 @@ use oxap_protocol::{
 use oxap_protocol::{SessionState, SessionStatus};
 
 use crate::{
-    catalog::{self, native_source},
+    catalog::{self, native_source, SDK_PREFIX},
     native::{apply_flag_settings_request, initialize_request, settings_flags, FlagSettings},
     provider::{configure_environment, Header, Provider},
     rpc::{Process, ProcessConfig},
@@ -312,9 +312,7 @@ impl Adapter {
                     launch.args.push("--allowedTools".into());
                 }
                 for tool in &request.tools {
-                    launch
-                        .args
-                        .push(format!("{}{}", catalog::SDK_PREFIX, tool.name));
+                    launch.args.push(format!("{SDK_PREFIX}{}", tool.name));
                 }
             }
             let initialize = initialize_request(server.as_slice()).map_err(Error::harness)?;
