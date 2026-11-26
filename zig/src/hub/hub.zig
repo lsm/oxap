@@ -505,16 +505,16 @@ const OpenedWith = struct {
         for (sources, private_tool_sources) |source, *copy| {
             const headers = try keep.alloc(std.http.Header, source.headers.len);
             for (source.headers, headers) |header, *kept| {
-                kept.* = .{ .name = try keep.dupe(u8, header.name), .value = try keep.dupe(u8, header.value) };
+                const name = try keep.dupe(u8, header.name);
+                const value = try keep.dupe(u8, header.value);
+                kept.* = .{ .name = name, .value = value };
             }
-            copy.* = .{
-                .id = try keep.dupe(u8, source.id),
-                .kind = try keep.dupe(u8, source.kind),
-                .display_name = try keep.dupe(u8, source.display_name),
-                .protocol = try keep.dupe(u8, source.protocol),
-                .endpoint = try keep.dupe(u8, source.endpoint),
-                .headers = headers,
-            };
+            const id = try keep.dupe(u8, source.id);
+            const kind = try keep.dupe(u8, source.kind);
+            const display_name = try keep.dupe(u8, source.display_name);
+            const protocol = try keep.dupe(u8, source.protocol);
+            const endpoint = try keep.dupe(u8, source.endpoint);
+            copy.* = .{ .id = id, .kind = kind, .display_name = display_name, .protocol = protocol, .endpoint = endpoint, .headers = headers };
         }
         return .{ .arena = arena, .participant = participant, .metadata_json = metadata_json, .tools_json = tools_json, .private_tool_sources = private_tool_sources, .allow_degraded_features = features };
     }
@@ -4183,6 +4183,23 @@ test "a session that cannot report live work never parks" {
     try testing.expect(session.holdsNoLiveWork());
     flaky.live_job = true;
     try testing.expect(!session.holdsNoLiveWork());
+}
+
+test "holding resolved tool sources releases its arena if an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn keepSources(allocator: std.mem.Allocator) !void {
+            const sources: []const contract.ConfiguredSource = &.{.{
+                .id = "tools",
+                .kind = "remote",
+                .protocol = "mcp",
+                .endpoint = "http://localhost/mcp",
+                .headers = &.{.{ .name = "X-Fixture", .value = "fixture" }},
+            }};
+            var opened = try OpenedWith.init(allocator, .{ .participant = "user" }, sources);
+            defer opened.arena.deinit();
+            try testing.expectEqualStrings("fixture", opened.private_tool_sources[0].headers[0].value);
+        }
+    }.keepSources, .{});
 }
 
 test "a wake reopens with the tools and metadata the session opened with" {
