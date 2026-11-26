@@ -74,8 +74,9 @@ else:
     rpc("resources/list", 2, error={"code": -32601, "message": "method not found"})
     rpc("ping", "p", result={})
     discovery("other", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+    tools = ["echo", "mcp__oap__look", "mcp__oap__echo", "mcp__oap__echo", "look"]
     send({"type": "system", "subtype": "init", "session_id": args[binding_at + 1],
-          "model": "mock-model", "tools": ["mcp__oap__echo", "mcp__oap__echo", "mcp__oap__look"],
+          "model": "mock-model", "tools": tools,
           "mcp_servers": [{"name": "oap"}]})
 
 Path("discovered").touch()
