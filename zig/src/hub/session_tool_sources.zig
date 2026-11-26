@@ -71,7 +71,7 @@ fn validSource(source: contract.ConfiguredSource) bool {
         uri.host != null and uri.user == null and uri.password == null and uri.fragment == null;
 }
 
-fn claim(arena: std.mem.Allocator, dir: std.Io.Dir, reference: []const u8, session_id: []const u8, id: []const u8) !contract.ConfiguredSource {
+fn readGrant(arena: std.mem.Allocator, dir: std.Io.Dir, reference: []const u8, session_id: []const u8, id: []const u8) !contract.ConfiguredSource {
     if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return error.UnsupportedPlatform;
     const io = compat.fs.defaultIo();
     const listing = try dir.statFile(io, reference, .{ .follow_symlinks = false });
@@ -102,10 +102,28 @@ fn claim(arena: std.mem.Allocator, dir: std.Io.Dir, reference: []const u8, sessi
         .headers = headers,
     };
     if (!validSource(source)) return error.InvalidGrant;
-    const claimed = try std.fmt.allocPrint(arena, ".claim-{s}", .{reference});
-    try dir.renamePreserve(reference, dir, claimed, io);
-    try dir.deleteFile(io, claimed);
     return source;
+}
+
+const Claim = struct {
+    reference: []const u8,
+    path: []const u8,
+    source_id: []const u8,
+};
+
+fn claimGrants(dir: std.Io.Dir, claims: []const Claim, refusal: *contract.Refusal) contract.Failure!void {
+    const io = compat.fs.defaultIo();
+    var claimed: usize = 0;
+    errdefer for (claims[0..claimed]) |grant| {
+        dir.renamePreserve(grant.path, dir, grant.reference, io) catch {};
+    };
+    for (claims) |grant| {
+        dir.renamePreserve(grant.reference, dir, grant.path, io) catch return refuse(refusal, grant.source_id);
+        claimed += 1;
+    }
+    for (claims) |grant| {
+        dir.deleteFile(io, grant.path) catch return refuse(refusal, grant.source_id);
+    }
 }
 
 pub fn resolve(
@@ -122,6 +140,7 @@ pub fn resolve(
         return refuse(refusal, "");
     };
     const sources = try arena.alloc(contract.ConfiguredSource, list.len);
+    var claims: std.ArrayList(Claim) = .empty;
     for (list, 0..) |entry, index| {
         const id = text(entry, "id");
         if (id.len == 0 or !equal(text(entry, "kind"), "remote") or reopen) return refuse(refusal, id);
@@ -131,10 +150,12 @@ pub fn resolve(
         if (entry.object.contains("credential_ref")) {
             const reference = text(entry, "credential_ref");
             if (entry.object.count() != 3 or session_id.len == 0 or !validReference(reference)) return refuse(refusal, id);
-            sources[index] = claim(arena, dir, reference, session_id, id) catch |err| {
+            sources[index] = readGrant(arena, dir, reference, session_id, id) catch |err| {
                 if (err == error.OutOfMemory) return error.OutOfMemory;
                 return refuse(refusal, id);
             };
+            const path = try std.fmt.allocPrint(arena, ".claim-{s}", .{reference});
+            try claims.append(arena, .{ .reference = reference, .path = path, .source_id = id });
         } else {
             for (registry) |source| {
                 if (!equal(source.id, id)) continue;
@@ -144,5 +165,6 @@ pub fn resolve(
             } else return refuse(refusal, id);
         }
     }
+    try claimGrants(dir, claims.items, refusal);
     return sources;
 }

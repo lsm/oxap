@@ -290,11 +290,15 @@ encoding 32 random bytes. The file contains `session_id`, a `source` object
 with `id`, `kind: "remote"`, `protocol: "mcp"`, and `endpoint`, and a
 `headers` object with `Authorization: Bearer <credential>`. The bearer encodes
 32 separate random bytes. The request names the session and carries only
-`id`, `kind` and `credential_ref` in the attachment. The hub claims the file
-once and forwards the descriptor and headers to Codex's private thread-start
-pipe. Responses publish the source descriptor. Explicit reopen with tool
-sources waits for binding provenance. See the
+`id`, `kind` and `credential_ref` in the attachment. The hub validates all
+attachments before claiming their files. It claims each file once and forwards
+the descriptor and headers to Codex's private thread-start pipe. Responses
+publish the source descriptor. Explicit reopen with tool sources waits for
+binding provenance.
+
+Pinned in Zig by the
 [session tool sources journey](../.claude/skills/verify/journeys/codex-session-tool-sources.md).
+Go: none (gap G16).
 
 ## The transports
 
@@ -2478,6 +2482,10 @@ on the HTTP transport alone. A stdio peer is a separate process on the far side
 of a pipe, so the `Origin` check is HTTP's alone — and what stdio carries in its
 place is the wire-supplied-credential refusal, which applies there too, because a
 stdio peer is not an in-process embedding of the core.
+
+- **G16 — open.** Go refuses credential references and has no test for
+  capability-backed Codex creation. The Zig stdio session tool sources journey
+  verifies grant claims, attachment isolation and credential containment.
 
 ## Divergences from the Go tree
 
