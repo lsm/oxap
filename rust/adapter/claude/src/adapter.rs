@@ -208,7 +208,7 @@ impl Adapter {
         Ok(flags)
     }
 
-    pub fn describe(&self) -> Descriptor {
+    pub(crate) fn features() -> BTreeMap<String, FeatureSupport> {
         let feature = |level, reason: &str| FeatureSupport {
             level,
             reason: reason.into(),
@@ -218,7 +218,7 @@ impl Adapter {
             modes: vec![MODE_SESSION_OPEN.into(), MODE_SESSION_LIVE.into()],
             ..feature(level, reason)
         };
-        let features: BTreeMap<String, FeatureSupport> = [
+        [
             ("protocol.initialize", feature(SupportLevel::EMULATED, "initialize control exchange at open; no capability negotiation")),
             ("capabilities", feature(SupportLevel::EMULATED, "conservative descriptor; per-turn system/init refresh recorded as evidence")),
             ("session.open", feature(SupportLevel::EMULATED, "process spawn + initialize; CLI session UUID observed on frames")),
@@ -249,7 +249,10 @@ impl Adapter {
         ]
         .into_iter()
         .map(|(key, support)| (key.to_owned(), support))
-        .collect();
+        .collect()
+    }
+
+    pub fn describe(&self) -> Descriptor {
         Descriptor {
             capabilities: CapabilityDescriptor {
                 endpoint: EndpointDescriptor {
@@ -260,7 +263,7 @@ impl Adapter {
                 },
                 protocol_versions: vec![VERSION.into()],
                 profiles: vec![PROFILE.into()],
-                features,
+                features: Self::features(),
                 sources: vec![native_source()],
                 ..CapabilityDescriptor::default()
             },

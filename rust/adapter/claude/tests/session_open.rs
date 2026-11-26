@@ -16,11 +16,12 @@ use oxap_adapter::{
 };
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
-    ContentPart, ContentPartType, Envelope, InputAnswer, Message, MessageContent, MessageRole,
-    MessageSubmitRequest, ReasoningLevel, RequestedDeliveryMode, ToolsListRequest,
-    UserInputRequestedPayload, UserInputResolveRequest, FEATURE_DELIVERY_BTW,
-    FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER, FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION,
-    FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
+    CompactionKind, CompactionPolicy, ContentPart, ContentPartType, Envelope, InputAnswer, Message,
+    MessageContent, MessageRole, MessageSubmitRequest, ReasoningLevel, RequestedDeliveryMode,
+    SessionSettingsUpdateRequest, ToolsListRequest, UserInputRequestedPayload,
+    UserInputResolveRequest, FEATURE_DELIVERY_BTW, FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER,
+    FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST,
+    FEATURE_TOOL_SELECTION,
 };
 use serde_json::{json, Value};
 
@@ -44,6 +45,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         "run-process-exit" => "process-exit/native.jsonl",
         "run-malformed" => "malformed-stdout/native.jsonl",
         mode if mode.starts_with("run-children") => "background-children/native.jsonl",
+        mode if mode.starts_with("run-compaction") => "compaction/native.jsonl",
         "run-queued-continuation" => "queued-continuation/native.jsonl",
         mode if mode.starts_with("run-permission") => "permission-gates/native.jsonl",
         mode if mode.starts_with("run-selection-") => "permission-gates/native.jsonl",
@@ -305,6 +307,11 @@ fn claude_admission_waits_for_corroboration() {
         assert_eq!(running.status.as_str(), "running");
         assert_eq!(running.active_run_id.as_ref(), Some(run_id));
         assert_eq!(running.current_model_id, frames[5]["raw"]["model"]);
+        if mode == "admission-compacting" {
+            let started = stream.next().now_or_never().unwrap().unwrap().unwrap();
+            assert_eq!(started.envelope_type.as_str(), "run.compaction.started");
+            assert_eq!(started.sequence, Some(2));
+        }
         assert!(stream.next().poll_unpin(&mut context).is_pending());
         assert!(matches!(
             block_on(session.submit(text_submit("again"))),
@@ -408,6 +415,144 @@ fn claude_run_replays_streaming_and_settlement() {
 #[test]
 fn claude_tools_replay_corpus() {
     replay_run_events("run-tools", "tool-lifecycle");
+}
+
+#[test]
+fn claude_compaction_replays_the_pinned_corpus() {
+    check_compaction("run-compaction");
+    check_compaction("run-compaction-edges");
+}
+
+fn check_compaction(mode: &str) {
+    let (adapter, directory, frames) = fixture(mode);
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    assert_eq!(block_on(session.state()).unwrap().status.as_str(), "idle");
+    let updater = session.settings_updater().expect("live settings updater");
+    let update = SessionSettingsUpdateRequest {
+        session_id: "session".into(),
+        reasoning_level: ReasoningLevel::HIGH,
+        ..Default::default()
+    };
+    let mut expected = expected_run_events("compaction");
+    if mode == "run-compaction-edges" {
+        expected[7]["payload"]["error"] = json!({
+            "code": "claude_compaction_unreported",
+            "message": "the run ended before the CLI reported how its compaction ended"
+        });
+    }
+    let turns = expected.split_inclusive(|event| {
+        matches!(event["type"].as_str(), Some("run.completed" | "run.failed"))
+    });
+    let submits = frames.iter().filter(|frame| frame["action"] == "submit");
+    assert_eq!(turns.clone().count(), submits.clone().count());
+    for (index, (expected, frame)) in turns.zip(submits).enumerate() {
+        let mut submit = text_submit(frame["raw"]["message"]["content"].as_str().unwrap());
+        submit.request.delivery = RequestedDeliveryMode::AUTO;
+        let (admission, mut stream) = block_on(session.submit(submit.clone())).unwrap();
+        let mut events = Vec::new();
+        events.push(block_on(stream.next()).unwrap().unwrap());
+        let start = block_on(stream.next()).expect("stream stays open").unwrap();
+        assert_eq!(start.envelope_type.as_str(), "run.compaction.started");
+        events.push(start);
+        assert!(matches!(
+            block_on(updater.update_settings(update.clone())),
+            Err(Error::RunActive)
+        ));
+        fs::write(directory.path().join(format!("continue-{index}")), []).unwrap();
+        events.extend(
+            block_on(stream.collect::<Vec<_>>())
+                .into_iter()
+                .map(Result::unwrap),
+        );
+        assert_run_events(&admission, &events, expected, mode);
+        let mut trace = RunTrace::new(admission, adapter.describe(), events);
+        trace.submitted = Some(submit.request);
+        trace.assert_valid();
+        assert_eq!(block_on(session.state()).unwrap().status.as_str(), "idle");
+    }
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS {mode}: {} envelopes over two runs", expected.len());
+}
+
+#[test]
+fn claude_compaction_idle_settings_commit_only_after_acceptance() {
+    let (adapter, directory, _) = fixture("live-settings");
+    let session = block_on(adapter.open(OpenRequest {
+        session_id: "session".into(),
+        ..Default::default()
+    }))
+    .unwrap();
+    let updater = session.settings_updater().expect("live settings updater");
+    let tokens = CompactionPolicy {
+        kind: CompactionKind::TOKENS,
+        tokens: 120_000,
+        ..Default::default()
+    };
+    let request = SessionSettingsUpdateRequest {
+        session_id: "session".into(),
+        reasoning_level: ReasoningLevel::HIGH,
+        compaction_policy: Some(tokens.clone()),
+        ..Default::default()
+    };
+    assert!(matches!(
+        block_on(updater.update_settings(SessionSettingsUpdateRequest {
+            session_id: "foreign".into(),
+            ..request.clone()
+        })),
+        Err(Error::RunNotFound)
+    ));
+    assert!(matches!(
+        block_on(updater.update_settings(SessionSettingsUpdateRequest {
+            compaction_policy: Some(CompactionPolicy {
+                kind: CompactionKind::SHARE,
+                share_percent: 50,
+                ..Default::default()
+            }),
+            ..request.clone()
+        })),
+        Err(Error::UnsupportedControl(_))
+    ));
+    let (applied, state) = block_on(updater.update_settings(request)).unwrap();
+    assert_eq!(applied.reasoning_level, ReasoningLevel::HIGH);
+    assert_eq!(state.reasoning_level, ReasoningLevel::HIGH);
+    assert_eq!(applied.compaction_policy.as_ref(), Some(&tokens));
+    assert_eq!(state.compaction_policy.as_ref(), Some(&tokens));
+    let auto = CompactionPolicy {
+        kind: CompactionKind::AUTO,
+        ..Default::default()
+    };
+    let reset = SessionSettingsUpdateRequest {
+        session_id: "session".into(),
+        compaction_policy: Some(auto.clone()),
+        ..Default::default()
+    };
+    let refused = block_on(updater.update_settings(reset.clone())).unwrap_err();
+    assert!(refused.to_string().contains("fixture refusal"), "{refused}");
+    assert_eq!(
+        serde_json::to_value(block_on(session.state()).unwrap()).unwrap(),
+        serde_json::to_value(&state).unwrap()
+    );
+    let (cleared, state) = block_on(updater.update_settings(reset)).unwrap();
+    assert_eq!(cleared.previous_compaction_policy, Some(tokens));
+    assert_eq!(cleared.compaction_policy.as_ref(), Some(&auto));
+    assert_eq!(state.compaction_policy, Some(auto));
+    assert_eq!(state.reasoning_level, ReasoningLevel::HIGH);
+    block_on(session.close()).unwrap();
+    assert!(directory.path().join("eof").is_file());
+    assert!(matches!(
+        block_on(updater.update_settings(SessionSettingsUpdateRequest {
+            session_id: "session".into(),
+            reasoning_level: ReasoningLevel::HIGH,
+            ..Default::default()
+        })),
+        Err(Error::SessionClosed)
+    ));
+    println!("PASS live settings: accepted, refused, and retried native exchanges");
 }
 
 #[test]
@@ -1066,6 +1211,11 @@ fn claude_interrupt_replays_the_corpus_and_keeps_ownership() {
 }
 
 #[test]
+fn claude_compaction_closes_as_cancelled_before_the_run_terminal() {
+    check_interrupt("run-interrupt-compaction", "run.cancelled");
+}
+
+#[test]
 fn claude_interrupt_arbitrates_terminal_and_receipt_order() {
     check_interrupt("run-interrupt-terminal-first", "run.cancelled");
     check_interrupt("run-interrupt-completion", "run.completed");
@@ -1085,7 +1235,9 @@ fn check_interrupt(mode: &str, terminal: &str) {
         ..Default::default()
     }))
     .unwrap();
-    let (admission, mut stream) = block_on(session.submit(text_submit("hello"))).unwrap();
+    let mut submit = text_submit("hello");
+    submit.request.delivery = RequestedDeliveryMode::AUTO;
+    let (admission, mut stream) = block_on(session.submit(submit.clone())).unwrap();
     let run = admission.run_id.as_ref().unwrap();
     let mut events = vec![
         block_on(stream.next()).unwrap().unwrap(),
@@ -1148,10 +1300,29 @@ fn check_interrupt(mode: &str, terminal: &str) {
             .into_iter()
             .map(Result::unwrap),
     );
-    assert_eq!(events.len(), 3);
-    assert_eq!(events[2].envelope_type.as_str(), terminal);
-    assert_eq!(events[2].sequence, Some(3));
-    if terminal == "run.cancelled" {
+    let last = events.len() - 1;
+    if mode == "run-interrupt-compaction" {
+        assert_eq!(events.len(), 5);
+        let start = serde_json::to_value(&events[2]).unwrap();
+        let end = serde_json::to_value(&events[3]).unwrap();
+        assert_eq!(start["type"], "run.compaction.started");
+        assert_eq!(end["type"], "run.compaction.ended");
+        assert_eq!(
+            end["payload"]["compaction_id"],
+            start["payload"]["compaction_id"]
+        );
+        assert_eq!(end["payload"]["outcome"], "cancelled");
+        assert!(end["payload"]["error"].is_null());
+        let mut trace = RunTrace::new(admission.clone(), adapter.describe(), events.clone());
+        trace.submitted = Some(submit.request);
+        trace.cancelled = true;
+        trace.assert_valid();
+    } else {
+        assert_eq!(events.len(), 3);
+    }
+    assert_eq!(events[last].envelope_type.as_str(), terminal);
+    assert_eq!(events[last].sequence, Some(events.len() as u64));
+    if terminal == "run.cancelled" && mode != "run-interrupt-compaction" {
         assert_run_events(
             &admission,
             &events,
@@ -1193,7 +1364,10 @@ fn check_interrupt(mode: &str, terminal: &str) {
     assert!(recovery.state.active_run_id.is_none());
     assert_eq!(
         stream_bytes(replay),
-        [serde_json::to_vec(&events[2]).unwrap()]
+        events[2..]
+            .iter()
+            .map(|event| serde_json::to_vec(event).unwrap())
+            .collect::<Vec<_>>()
     );
     block_on(session.close()).unwrap();
     assert!(matches!(
@@ -1203,7 +1377,10 @@ fn check_interrupt(mode: &str, terminal: &str) {
     if mode != "run-interrupt-no-receipt" {
         assert!(directory.path().join("eof").is_file());
     }
-    println!("PASS {mode}: 3 envelopes, one {terminal}, one native interrupt");
+    println!(
+        "PASS {mode}: {} envelopes, one {terminal}, one native interrupt",
+        events.len()
+    );
 }
 
 fn expected_run_events(case: &str) -> Vec<Value> {
@@ -1235,6 +1412,7 @@ fn assert_run_events(
     let mut event_ids = std::collections::HashMap::<String, Value>::new();
     let mut tool_ids = std::collections::HashMap::new();
     let mut interaction_ids = std::collections::HashMap::new();
+    let mut compaction_ids = std::collections::HashMap::new();
     for (event, expected) in actual.iter().zip(expected) {
         let mut event = serde_json::to_value(event).unwrap();
         if !event["in_reply_to"].is_null() {
@@ -1267,6 +1445,14 @@ fn assert_run_events(
             let normalized = interaction_ids[id].clone();
             event["turn_id"] = normalized.clone();
             event["payload"]["interaction_id"] = normalized;
+        }
+        if let Some(id) = event["payload"]["compaction_id"].as_str() {
+            if event["type"] == "run.compaction.started" {
+                assert!(compaction_ids
+                    .insert(id.to_owned(), expected["payload"]["compaction_id"].clone())
+                    .is_none());
+            }
+            event["payload"]["compaction_id"] = compaction_ids[id].clone();
         }
         if let Some(id) = event["payload"]["pending_user_input_id"].as_str() {
             event["payload"]["pending_user_input_id"] = interaction_ids[id].clone();
