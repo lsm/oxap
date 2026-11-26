@@ -459,7 +459,9 @@ pub const Reducer = struct {
             try self.call(.thread_start, native.method_thread_start, params);
             return;
         }
-        const params = try native.threadResumeParams(self.allocator(), self.options.resume_thread_id, self.hostPermissions());
+        var host = self.hostPermissions();
+        host.mcp_servers = mcp_servers;
+        const params = try native.threadResumeParams(self.allocator(), self.options.resume_thread_id, host);
         try self.call(.thread_resume, native.method_thread_resume, params);
     }
 

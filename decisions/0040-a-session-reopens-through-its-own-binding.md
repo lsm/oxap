@@ -14,8 +14,8 @@ reopen unavailable because its pinned wire reaches no store (#892), and `oapx
 serve agent` refuses it (#862). The binding is a host record with a file store
 that refuses a torn line (#479), `goap hub` and `oapx hub` write and read the
 same file (#893), and a record carries the reasoning level and compaction
-policy the open asked for. The session list stays with T8). Staged amendment
-in #2014 for capability-backed reopen and idle wake.
+policy the open asked for. The session list stays with T8). The Zig stdio
+hub implements the #2014 amendment for capability-backed reopen and idle wake.
 Date: 2026-09-28
 Protocol: `open-agent-protocol` version `0.1`
 Profile: `open-agent-protocol.agent-control-core`
@@ -198,7 +198,7 @@ keeps it.
 
 ### A reopen restores the bound tool sources
 
-This staged amendment governs hubs that implement the capability-backed
+This amendment governs hubs that implement the capability-backed
 attachments in [Decision 0008](0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
 
 Create records the source IDs in `tool_source_ids` and records nonsecret

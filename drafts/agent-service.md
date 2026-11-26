@@ -282,7 +282,7 @@ attachment is not a way to configure the daemon:
 | A probe the daemon could not read is reported as one | `TestOpenReportsAProbeItCouldNotRead` |
 | Every advertising adapter admits tool sources; every unadvertising one refuses | `TestEveryAdapterRefusesUnadvertisedToolSources`, `TestAdvertisingAdaptersAdmitToolSources` |
 
-The Zig stdio hub also accepts capability-backed Codex creates when started
+The Zig stdio hub also accepts capability-backed Codex creates and reopens when started
 with `--session-tool-sources <directory>` on Linux or macOS. The private
 directory belongs to the hub operator and has mode 0700. The issuer atomically
 publishes each mode 0600 file under a new canonical base64url reference
@@ -299,9 +299,12 @@ A request using a file names the session and carries only
 attachments and checks adapter admission with the resolved sources before
 claiming their files. Each claim removes the original reference and remains
 spent if cleanup under the private claim name fails. The hub forwards the
-descriptor and headers to Codex's private thread-start pipe. Responses publish
-the source descriptor. Explicit reopen with tool sources waits for binding
-provenance.
+descriptor and headers over the private adapter pipe on thread start and
+resume. It records the source IDs and whether each came from a capability
+file. An explicit reopen repeats the bound source IDs and supplies a fresh
+reference for each capability-backed source. Responses publish the source
+descriptor. [Decision 0040](../decisions/0040-a-session-reopens-through-its-own-binding.md#a-reopen-restores-the-bound-tool-sources)
+defines the binding and idle wake rules.
 
 Pinned in Zig by the
 [session tool sources journey](../.claude/skills/verify/journeys/codex-session-tool-sources.md).
@@ -1456,8 +1459,9 @@ from the binding, and its events reach the same subscriptions
 a subscription is the hub's, so an open client does not stop a park).
 
 A session parks only if the hub can bring it back as it was and nothing is in
-flight. Its adapter must offer `session.open.reopen`, and it must have no live
-tool source, because a stopped MCP server cannot resume where it was. It must be
+flight. Its adapter must offer `session.open.reopen` and be able to restore
+every bound tool source. Zig's Codex adapter restores remote MCP sources from
+the resolved attachments that the hub retains in memory. It must be
 idle, with no run, no pending interaction and no held subscription. It must have
 no live background job, and this fails closed: an adapter that cannot report its
 background work never parks, because silently killing a user's background shell

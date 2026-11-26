@@ -9,6 +9,11 @@ pub const CompactionPolicy = struct {
     tokens: ?i64 = null,
 };
 
+pub const Sources = struct {
+    ids: []const []const u8 = &.{},
+    credential_ids: []const []const u8 = &.{},
+};
+
 pub const Record = struct {
     session_id: []const u8,
     adapter: []const u8,
@@ -20,6 +25,7 @@ pub const Record = struct {
     reasoning_level: []const u8 = "",
     compaction_policy: ?CompactionPolicy = null,
     tool_source_ids: []const []const u8 = &.{},
+    credential_tool_source_ids: []const []const u8 = &.{},
     adopted: bool = false,
 };
 
@@ -42,6 +48,7 @@ const WireRecord = struct {
     reasoning_level: ?[]const u8 = null,
     compaction_policy: ?CompactionPolicy = null,
     tool_source_ids: ?[]const []const u8 = null,
+    credential_tool_source_ids: ?[]const []const u8 = null,
     adopted: ?bool = null,
 };
 
@@ -70,6 +77,7 @@ pub fn encode(allocator: std.mem.Allocator, entry: Entry) ![]u8 {
             .reasoning_level = present(entry.record.reasoning_level),
             .compaction_policy = entry.record.compaction_policy,
             .tool_source_ids = if (entry.record.tool_source_ids.len > 0) entry.record.tool_source_ids else null,
+            .credential_tool_source_ids = if (entry.record.credential_tool_source_ids.len > 0) entry.record.credential_tool_source_ids else null,
             .adopted = if (entry.record.adopted) true else null,
         },
     };
@@ -116,6 +124,7 @@ pub fn decode(arena: std.mem.Allocator, line: []const u8) !Entry {
             .reasoning_level = wire.record.reasoning_level orelse "",
             .compaction_policy = wire.record.compaction_policy,
             .tool_source_ids = wire.record.tool_source_ids orelse &.{},
+            .credential_tool_source_ids = wire.record.credential_tool_source_ids orelse &.{},
             .adopted = wire.record.adopted orelse false,
         },
     };

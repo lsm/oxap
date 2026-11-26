@@ -51,12 +51,15 @@ def verify(binary, codex, root, server, stack):
     home.mkdir()
     codex_home = root / "codex-home"
     CREATE["native_config"](codex_home, server.server_port)
+    codex_config = codex_home / "config.toml"
+    codex_config.write_text('model = "fixture"\n' + codex_config.read_text())
     config = root / "hub.json"
-    config.write_text(json.dumps({"adapters": {"codex": {
+    settings = {"adapters": {"codex": {
         "type": "codex", "executable": str(codex), "model": "fixture",
         "working_directory": str(root), "approval_policy": "never", "sandbox": "read-only",
         "environment": [f"HOME={home}", f"CODEX_HOME={codex_home}", "PATH=/usr/bin:/bin", "NODE_ENV=test"],
-    }}}))
+    }}}
+    config.write_text(json.dumps(settings))
     bindings = root / "bindings.jsonl"
     command = [str(binary), "serve", "--stdio", f"--config={config}", "--park-after", "2",
                "--session-tool-sources", str(grants), "--session-history", str(bindings),
@@ -88,23 +91,37 @@ def verify(binary, codex, root, server, stack):
         return hub.call("open", adapter="codex", request=HUB["envelope"]("session.open.request", payload))
 
     def turn(hub, phase):
-        assert hub.call("events", session_id="bound")["ok"]
         response = hub.call("submit", session_id="bound", request=HUB["envelope"](
             "session.message.submit.request", {"session_id": "bound", "delivery": "auto",
                 "messages": [{"role": "user", "content": f"{PROMPT} {phase}."}]}))
         assert response["ok"], f"submit failed for {phase}"
-        completed = hub.completed("bound")
-        assert REPLY in json.dumps(completed), f"missing fixture reply for {phase}"
-        return response["result"]["payload"]["run_id"]
+        run = response["result"]["payload"]["run_id"]
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            for frame in hub.seen:
+                event = frame.get("envelope", {})
+                if event.get("payload", {}).get("run_id") != run:
+                    continue
+                if event.get("type") in {"run.completed", "run.failed", "run.cancelled"}:
+                    assert event["type"] == "run.completed" and REPLY in json.dumps(event), f"turn failed for {phase}"
+                    return run
+            frame = hub.lines.get(timeout=max(0.1, deadline - time.monotonic()))
+            assert frame is not None, f"hub exited during {phase}"
+            hub.seen.append(frame)
+        raise AssertionError(f"turn did not settle for {phase}")
 
     original = grant("original")
     first = start("before")
     assert open_session(first, False, [original])["ok"], "create failed"
+    assert first.call("events", session_id="bound")["ok"]
     turn(first, "create")
     first.stop()
     print("create turn completed; original hub exited 0", flush=True)
     del server.routes["original"]
 
+    settings["tool_sources"] = {"tools": {"kind": "remote", "protocol": "mcp",
+                                          "endpoint": f"http://127.0.0.1:{server.server_port}/registry"}}
+    config.write_text(json.dumps(settings))
     second = start("after")
     fresh = grant("rotated")
     other_source = {**SOURCE, "id": "other"}
@@ -124,29 +141,35 @@ def verify(binary, codex, root, server, stack):
     state = reopened["result"]["payload"]
     assert state["recovery"]["recovered"] and [source["id"] for source in state["sources"]] == ["tools"]
     assert not (grants / fresh["credential_ref"]).exists(), "reopen left a reusable grant"
+    assert second.call("events", session_id="bound")["ok"]
     run = turn(second, "restart")
 
-    deadline = time.monotonic() + 12
-    while True:
-        second.call("events", session_id="bound", run_id=run, after=0)
-        if any(frame.get("event") == "oap-replay-gap" for frame in second.seen):
-            break
-        assert time.monotonic() < deadline, "idle session with bound tools did not park"
-        time.sleep(0.25)
+    time.sleep(3)
+    assert second.call("events", session_id="bound", run_id=run, after=0)["ok"]
+    gap = second.lines.get(timeout=5)
+    assert gap.get("event") == "oap-replay-gap", "idle session with bound tools did not park"
+    second.seen.append(gap)
     turn(second, "wake")
+    assert second.call("close", session_id="bound")["ok"]
+    replay = open_session(second, True, [fresh]).get("error", {})
+    assert replay.get("code") == "unsupported_feature" and replay.get("details") == {
+        "feature": CREATE["ATTACH"], "reason": "unsatisfiable", "source": "tools",
+    }, "a consumed reopen grant could be reused after close"
     second.stop()
 
     requests = server.model_requests
     assert len(requests) == 3, f"expected three model turns, saw {len(requests)}"
-    for request, label in zip(requests, ("original", "rotated", "rotated")):
-        tools = json.dumps(request["tools"])
-        assert f'{label}_tool"' in tools
+    for request, (phase, label) in zip(requests, (("create", "original"), ("restart", "rotated"), ("wake", "rotated"))):
+        tools = json.dumps(request.get("tools", []))
+        assert f"{PROMPT} {phase}." in json.dumps(request["input"])
+        assert f'{label}_tool"' in tools, f"missing {label} tool after {phase}; MCP requests={sorted(server.mcp_methods)}"
         assert sum(f'{name}_tool"' in tools for name in ("original", "rotated", "extra", "foreign")) == 1
     resumed_input = json.dumps(requests[1]["input"])
     assert f"{PROMPT} create." in resumed_input and REPLY in resumed_input, "Codex did not restore the prior model turn"
     disk = bindings.read_text()
     records = [json.loads(line.split(" ", 1)[1])["record"] for line in disk.splitlines()]
     assert records and all(record["tool_source_ids"] == ["tools"] for record in records)
+    assert all(record["credential_tool_source_ids"] == ["tools"] for record in records)
     assert len({record["native_session_id"] for record in records}) == 1
     files = [path for path in codex_home.rglob("*") if path.is_file()]
     assert sum(path.name.startswith("rollout-") for path in files) == 1
@@ -154,7 +177,7 @@ def verify(binary, codex, root, server, stack):
     published.extend((root / f"{label}-stderr.txt").read_bytes() for label in ("before", "after"))
     assert not any(canary.encode() in data for data in published + [path.read_bytes() for path in files]
                    for canary in canaries), "published credential material"
-    print(f"PASS: hub exits=0,0; model turns=3; refused reopens={len(refused)}; idle wakes=1; "
+    print(f"PASS: hub exits=0,0; model turns=3; refused reopens={len(refused) + 1}; idle wakes=1; "
           f"rollouts=1; Codex home files={len(files)}; canary hits=0")
 
 
