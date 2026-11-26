@@ -72,6 +72,19 @@ if mode in {"settings", "settings-refusal"}:
         {"type": "control_response", "response": {"subtype": "success", "response": {}}},
         mode == "settings-refusal",
     )
+if mode == "live-settings":
+    for settings, refuse in (
+        ({"autoCompactEnabled": True, "autoCompactWindow": 120000, "effortLevel": "high"}, False),
+        ({"autoCompactEnabled": None, "autoCompactWindow": None}, True),
+        ({"autoCompactEnabled": None, "autoCompactWindow": None}, False),
+    ):
+        exchange(
+            {"type": "control_request", "request": {
+                "subtype": "apply_flag_settings", "settings": settings,
+            }},
+            {"type": "control_response", "response": {"subtype": "success", "response": {}}},
+            refuse,
+        )
 if mode.startswith("run-"):
     def send(raw, corpus_uuid, native_uuid):
         raw = dict(raw, session_id=binding)
