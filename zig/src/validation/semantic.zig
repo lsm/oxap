@@ -75,7 +75,7 @@ pub const code_transcript_over_limit = "transcript_over_limit";
 pub const code_duplicate_transcript_entry = "duplicate_transcript_entry";
 pub const code_transcript_gap_mismatch = "transcript_gap_mismatch";
 
-const attachment_only_members = [_][]const u8{ "command", "args", "environment" };
+const attachment_only_members = [_][]const u8{ "command", "args", "environment", "credential_ref" };
 
 pub const implemented = [_][]const u8{
     code_unmatched_steer,                 code_duplicate_steer,                 code_pending_steer_at_terminal,

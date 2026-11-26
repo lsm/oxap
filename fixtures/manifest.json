@@ -3569,6 +3569,24 @@
       ]
     },
     {
+      "id": "tool-source-credential-reference",
+      "path": "valid/tool-source-credential-reference.json",
+      "kind": "positive",
+      "valid": true,
+      "phase": "",
+      "codes": [],
+      "units": [
+        "tool-sources"
+      ],
+      "provenance": [
+        "decisions/0008-tool-sources.md"
+      ],
+      "rules": [
+        "0008#attachment-is-for-the-sessions-lifetime/6",
+        "0008#attachment-is-for-the-sessions-lifetime/7"
+      ]
+    },
+    {
       "id": "tool-source-attach-refused-over-limit",
       "path": "valid/tool-source-attach-refused-over-limit.json",
       "kind": "positive",
@@ -3974,6 +3992,26 @@
         "decisions/0008-tool-sources.md"
       ],
       "mode": "tolerant"
+    },
+    {
+      "id": "descriptor-leaks-credential-reference",
+      "path": "semantic-invalid/descriptor-leaks-credential-reference.json",
+      "kind": "semantic-invalid",
+      "valid": false,
+      "phase": "semantic",
+      "codes": [
+        "attachment_field_in_catalog"
+      ],
+      "units": [
+        "tool-sources"
+      ],
+      "provenance": [
+        "decisions/0008-tool-sources.md"
+      ],
+      "mode": "tolerant",
+      "rules": [
+        "0008#the-attachment-shape-is-not-the-catalog-shape/1"
+      ]
     },
     {
       "id": "tools-catalog-leaks-attachment-env",

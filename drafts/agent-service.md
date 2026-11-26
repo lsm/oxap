@@ -271,7 +271,7 @@ attachment is not a way to configure the daemon:
 | A wire-supplied `command` or `args` is refused `unsupported_feature`; name an operator-configured source by id | `TestDaemonRefusesWireSuppliedProcessCredentials` |
 | A `NAME=value` literal in a wire attachment's `environment` is refused; only the bare `NAME` allowlist form is accepted | same test, and `TestCallerEnvironmentNeverNamesAVariableTwice` |
 | A wire-supplied `kind`, `display_name`, `protocol` or `endpoint` on a **configured** source is refused; the operator's value stands | `TestOpenRefusesAWireSuppliedKind`, `TestOpenRefusesAWireSuppliedDescriptorMember` |
-| An id no source is configured under is refused **only when it claims `process`** — the one kind the daemon would have to supply an executable for. Any other kind passes through to the adapter, which may accept it | `TestOpenRefusesAnUnconfiguredIDWhateverItsKind` — the name reads broader than the rule, and its body pins the opposite for `local`: an unconfigured `local` attachment opens `200` |
+| Outside the capability-backed Codex create path below, an id no source is configured under is refused **only when it claims `process`** — the one kind the daemon would have to supply an executable for. Any other kind passes through to the adapter, which may accept it | `TestOpenRefusesAnUnconfiguredIDWhateverItsKind` — the name reads broader than the rule, and its body pins the opposite for `local`: an unconfigured `local` attachment opens `200` |
 | A configured source is admitted by its bare id, and the daemon supplies the command the registry holds | `TestDaemonFillsTheRegistrysCommand`, `TestOpenOpMatchesHTTP` |
 | The caller's `environment` names extend the operator's list and never replace an entry | `TestCallerEnvironmentNeverNamesAVariableTwice` |
 | The attachment gate reads a *layered* disclosure, so a request may be refused a level the descriptor advertises underneath the top one | `TestOpenReadsAttachmentSupportFromALayer`, `TestSharedGateRefusesADisclosureAnOpenCannotElect` |
@@ -281,6 +281,31 @@ attachment is not a way to configure the daemon:
 | Only what the request cites is attached; a stale citation is refused with both revisions named, and an open citing none is admitted | `TestAttachingOpenPinsOnlyWhatItCites` |
 | A probe the daemon could not read is reported as one | `TestOpenReportsAProbeItCouldNotRead` |
 | Every advertising adapter admits tool sources; every unadvertising one refuses | `TestEveryAdapterRefusesUnadvertisedToolSources`, `TestAdvertisingAdaptersAdmitToolSources` |
+
+The Zig stdio hub also accepts capability-backed Codex creates when started
+with `--session-tool-sources <directory>` on Linux or macOS. The private
+directory belongs to the hub operator and has mode 0700. The issuer atomically
+publishes each mode 0600 file under a new canonical base64url reference
+encoding 32 random bytes. The file contains `session_id`, a `source` object
+with `id`, `kind: "remote"`, `protocol: "mcp"`, and `endpoint`, and a
+`headers` object with `Authorization: Bearer <credential>`. The bearer encodes
+32 separate random bytes. With this option, Codex accepts only remote MCP
+attachments from the operator's registry or a session-bound capability
+file. The hub refuses an unconfigured source without a valid reference,
+including a source with an endpoint supplied on the wire, under
+[Decision 0008's credential reference rule](../decisions/0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
+A request using a file names the session and carries only
+`id`, `kind` and `credential_ref` in the attachment. The hub validates all
+attachments and checks adapter admission with the resolved sources before
+claiming their files. Each claim removes the original reference and remains
+spent if cleanup under the private claim name fails. The hub forwards the
+descriptor and headers to Codex's private thread-start pipe. Responses publish
+the source descriptor. Explicit reopen with tool sources waits for binding
+provenance.
+
+Pinned in Zig by the
+[session tool sources journey](../.claude/skills/verify/journeys/codex-session-tool-sources.md).
+Go: none (gap G16).
 
 ## The transports
 
@@ -2464,6 +2489,10 @@ on the HTTP transport alone. A stdio peer is a separate process on the far side
 of a pipe, so the `Origin` check is HTTP's alone — and what stdio carries in its
 place is the wire-supplied-credential refusal, which applies there too, because a
 stdio peer is not an in-process embedding of the core.
+
+- **G16 — open.** Go refuses credential references and has no test for
+  capability-backed Codex creation. The Zig stdio session tool sources journey
+  verifies grant claims, attachment isolation and credential containment.
 
 ## Divergences from the Go tree
 

@@ -268,6 +268,7 @@ impl Registry {
                     command: entry.command,
                     args: entry.args,
                     environment,
+                    credential_ref: None,
                 },
             )?;
         }

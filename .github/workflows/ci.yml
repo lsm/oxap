@@ -117,6 +117,8 @@ jobs:
           python3 "$replay" "$RUNNER_TEMP/goap" --runtime go --output-dir "$evidence/go"
           python3 "$replay" "$RUNNER_TEMP/harness-rust/debug/oap-rust-hub" --runtime rust --output-dir "$evidence/rust"
           "$RUNNER_TEMP/goap" validate "$evidence/"*/trace.json
+      - name: Verify Codex session tool sources
+        run: python3 .claude/skills/verify/scripts/codex-session-tool-sources.py /tmp/oapx-go-sdk/bin/oxap
       - name: Prepare configured SDK launch verification
         run: python3 .claude/skills/verify/scripts/sdk-config-launch.py prepare "$RUNNER_TEMP/go-sdk-launch" /tmp/oapx-go-sdk/bin/oxap
       - name: Run the SDK tests

@@ -344,17 +344,19 @@ pub const ThreadStart = struct {
     approval_policy: []const u8 = "",
     sandbox: []const u8 = "",
     settings: Settings = .{},
+    mcp_servers: ?std.json.Value = null,
 };
 
 pub const Settings = struct {
     reasoning_effort: []const u8 = "",
     auto_compact_token_limit: ?i64 = null,
 
-    fn put(self: Settings, arena: std.mem.Allocator, params: *std.json.ObjectMap) !void {
-        if (self.reasoning_effort.len == 0 and self.auto_compact_token_limit == null) return;
+    fn put(self: Settings, arena: std.mem.Allocator, params: *std.json.ObjectMap, mcp_servers: ?std.json.Value) !void {
+        if (self.reasoning_effort.len == 0 and self.auto_compact_token_limit == null and mcp_servers == null) return;
         var config = object();
         try putNonEmpty(arena, &config, "model_reasoning_effort", self.reasoning_effort);
         if (self.auto_compact_token_limit) |limit| try config.put(arena, "model_auto_compact_token_limit", .{ .integer = limit });
+        if (mcp_servers) |servers| try config.put(arena, "mcp_servers", servers);
         try params.put(arena, "config", .{ .object = config });
     }
 };
@@ -365,7 +367,7 @@ pub fn threadStartParams(arena: std.mem.Allocator, start: ThreadStart) !std.json
     try putNonEmpty(arena, &params, "cwd", start.cwd);
     try putNonEmpty(arena, &params, "approvalPolicy", start.approval_policy);
     try putNonEmpty(arena, &params, "sandbox", start.sandbox);
-    try start.settings.put(arena, &params);
+    try start.settings.put(arena, &params, start.mcp_servers);
     return .{ .object = params };
 }
 
@@ -375,7 +377,7 @@ pub fn threadResumeParams(arena: std.mem.Allocator, thread_id: []const u8, host:
     try putNonEmpty(arena, &params, "cwd", host.cwd);
     try putNonEmpty(arena, &params, "approvalPolicy", host.approval_policy);
     try putNonEmpty(arena, &params, "sandbox", host.sandbox);
-    try host.settings.put(arena, &params);
+    try host.settings.put(arena, &params, null);
     return .{ .object = params };
 }
 

@@ -440,6 +440,10 @@ pub const Reducer = struct {
     }
 
     pub fn open(self: *Reducer) !void {
+        return self.openWithSources(null);
+    }
+
+    pub fn openWithSources(self: *Reducer, mcp_servers: ?std.json.Value) !void {
         if (self.options.participant.len == 0) return Error.InvalidParticipant;
         if (self.opening or self.opened) return Error.AlreadyOpened;
         self.opening = true;
@@ -450,6 +454,7 @@ pub const Reducer = struct {
                 .approval_policy = self.options.approval_policy,
                 .sandbox = self.options.sandbox,
                 .settings = self.options.settings,
+                .mcp_servers = mcp_servers,
             });
             try self.call(.thread_start, native.method_thread_start, params);
             return;

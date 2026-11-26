@@ -3,6 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const oap_types = @import("oap_types");
 pub const config = @import("config");
+pub const session_tool_sources = @import("session_tool_sources.zig");
 const contract = @import("contract");
 const memory = @import("memory");
 const compat = @import("compat");
@@ -52,6 +53,7 @@ pub const Options = struct {
     hold_ns: u64 = default_hold_ns,
     shutdown_ns: u64 = default_shutdown_ns,
     tool_sources: []const contract.ConfiguredSource = &.{},
+    session_tool_source_dir: ?std.Io.Dir = null,
     bindings: ?binding.Bindings = null,
     park_after_ns: u64 = 0,
 };
@@ -616,6 +618,7 @@ pub const Hub = struct {
     park_after_ns: u64,
     shutdown_ns: u64,
     tool_sources: []const contract.ConfiguredSource,
+    session_tool_source_dir: ?std.Io.Dir,
     adapters: std.ArrayList(Registered) = .empty,
     placed: std.ArrayList(Registered) = .empty,
     entries: std.ArrayList(Entry) = .empty,
@@ -642,6 +645,7 @@ pub const Hub = struct {
             .park_after_ns = options.park_after_ns,
             .shutdown_ns = options.shutdown_ns,
             .tool_sources = options.tool_sources,
+            .session_tool_source_dir = options.session_tool_source_dir,
             .bindings = options.bindings,
         };
     }
@@ -982,7 +986,20 @@ pub const Hub = struct {
             }
         }
         try contract.refuseUnadvertisedOpenElections(descriptor, &request.payload(), &refused.reason);
-        try registered.adapter.admit(arena, request.contractRequest("", "", false), &refused.reason);
+        var adapter_request = request.contractRequest("", "", false);
+        var prepared: ?session_tool_sources.Prepared = null;
+        if (descriptor.private_tool_sources) {
+            adapter_request.tool_sources_json = null;
+            if (request.tool_sources_json) |raw| {
+                const dir = self.session_tool_source_dir orelse return error.UnresolvableAttachment;
+                const attachments = try session_tool_sources.prepare(arena, dir, self.tool_sources, request.session_id, request.reopen, raw, &refused.reason);
+                adapter_request.private_tool_sources = attachments.sources;
+                prepared = attachments;
+            }
+        } else {
+            try contract.refuseCredentialReferences(arena, request.tool_sources_json, &refused.reason);
+        }
+        try registered.adapter.admit(arena, adapter_request, &refused.reason);
         if (request.session_id.len > 0 and self.findSession(request.session_id) != null) return error.SessionExists;
         var native_session_id: []const u8 = "";
         var bound_model_id: []const u8 = "";
@@ -1018,7 +1035,11 @@ pub const Hub = struct {
         }
         const placed = try self.placedIn(registered, directory);
         if (request.reopen and directory.len > 0 and !std.mem.eql(u8, directory, placed.directory)) return error.DirectoryMismatch;
-        var session = placed.adapter.open(arena, request.contractRequest(native_session_id, bound_model_id, adopted_native), &refused.reason) catch |err| {
+        adapter_request.native_session_id = native_session_id;
+        adapter_request.bound_model_id = bound_model_id;
+        adapter_request.adopted = adopted_native;
+        if (prepared) |attachments| try attachments.claim(&refused.reason);
+        var session = placed.adapter.open(arena, adapter_request, &refused.reason) catch |err| {
             if (request.reopen and err == error.UnknownSession) return refused.reason.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
             return err;
         };
@@ -3123,6 +3144,7 @@ test "an open electing what the adapter does not advertise is refused for that, 
 const Admitting = struct {
     inner: contract.Adapter,
     refusing: bool = false,
+    private_tool_sources: bool = false,
     admitted: usize = 0,
     opened: usize = 0,
 
@@ -3133,7 +3155,9 @@ const Admitting = struct {
 
 fn admittingProbe(ptr: *anyopaque, refusal: *contract.Refusal) contract.Failure!contract.Descriptor {
     const self: *Admitting = @ptrCast(@alignCast(ptr));
-    return self.inner.probe(refusal);
+    var descriptor = try self.inner.probe(refusal);
+    descriptor.private_tool_sources = self.private_tool_sources;
+    return descriptor;
 }
 
 fn admittingOpen(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!contract.Session {
@@ -3177,6 +3201,25 @@ test "an adapter's admission refusal outranks a taken name, and nothing it refus
     try testing.expectError(error.SessionExists, hub.open(arena, "admitting", .{ .session_id = "alpha" }));
     try testing.expectEqual(@as(usize, 1), admitting.opened);
     try testing.expectEqual(@as(usize, 1), hub.sessionCount());
+}
+
+test "an adapter that accepts private sources can refuse admission ahead of a taken name" {
+    var inner = memory.Adapter.init(testing.allocator);
+    defer inner.deinit();
+    var admitting = Admitting{ .inner = inner.adapter(), .private_tool_sources = true };
+    var hub = Hub.init(testing.allocator, testClock, .{});
+    defer hub.deinit();
+    try hub.register("admitting", admitting.adapter());
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+
+    _ = try hub.open(arena, "admitting", .{ .session_id = "alpha" });
+    admitting.refusing = true;
+    var refusal: OpenRefusal = .{};
+    try testing.expectError(error.UnsupportedFeature, hub.openReporting(arena, "admitting", .{ .session_id = "alpha" }, &refusal));
+    try testing.expectEqualStrings(contract.feature_compaction_policy, refusal.reason.feature);
+    try testing.expectEqual(@as(usize, 1), admitting.opened);
 }
 
 test "an adapter-assigned session id that is already taken is refused, not adopted twice" {
@@ -6558,6 +6601,7 @@ test "a control the adapter finds closed answers session_closed and releases the
 test {
     _ = binding;
     _ = run_store;
+    _ = session_tool_sources;
 }
 
 test "a reply longer than the bound is cut on a character boundary" {

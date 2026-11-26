@@ -56,6 +56,8 @@ func ResolveAttachments(hub *Hub, attachments []protocol.ToolSourceAttachment) (
 	resolved := make([]protocol.ToolSourceAttachment, 0, len(attachments))
 	for _, attachment := range attachments {
 		switch {
+		case attachment.CredentialRef != nil:
+			return nil, &AttachmentRefusal{Source: attachment.ID, Reason: "this transport does not resolve credential references"}
 		case attachment.Command != "" || len(attachment.Args) > 0:
 			return nil, &AttachmentRefusal{Source: attachment.ID, Reason: "the daemon does not accept a command or arguments from the wire; name an operator-configured source by id"}
 		case hasLiteralEnvironment(attachment.Environment):

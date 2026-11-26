@@ -367,14 +367,15 @@ const (
 )
 
 type ToolSourceAttachment struct {
-	ID          string   `json:"id"`
-	Kind        string   `json:"kind"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Protocol    string   `json:"protocol,omitempty"`
-	Endpoint    string   `json:"endpoint,omitempty"`
-	Command     string   `json:"command,omitempty"`
-	Args        []string `json:"args,omitempty"`
-	Environment []string `json:"environment,omitempty"`
+	ID            string   `json:"id"`
+	Kind          string   `json:"kind"`
+	DisplayName   string   `json:"display_name,omitempty"`
+	Protocol      string   `json:"protocol,omitempty"`
+	Endpoint      string   `json:"endpoint,omitempty"`
+	Command       string   `json:"command,omitempty"`
+	Args          []string `json:"args,omitempty"`
+	Environment   []string `json:"environment,omitempty"`
+	CredentialRef *string  `json:"credential_ref,omitempty"`
 }
 
 func (a ToolSourceAttachment) Descriptor() ToolSourceDescriptor {

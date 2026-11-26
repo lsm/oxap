@@ -571,13 +571,14 @@ daemon should run under any boundary check.
 
 ### A credential reference authorizes one session open
 
-This amendment is staged. The shipped session schema rejects `credential_ref`.
-The schema, protocol types, validator, fixtures and client types will adopt
-the member together when support lands. At that point, this rule supersedes
-the [agent-service trust model](../drafts/agent-service.md#the-trust-model) and
+The Zig stdio hub implements this amendment for Codex session creation.
+The schema, protocol types, validator, fixtures and client types carry the
+member. This rule supersedes the
+[agent-service trust model](../drafts/agent-service.md#the-trust-model) and
 [tool sources on the wire](../drafts/agent-service.md#tool-sources-on-the-wire)
 for capability-backed stdio attachments. The hub consumes the reference
-during the open it authorizes.
+during the create it authorizes. The binding and reopen rules below remain
+staged.
 
 `credential_ref` is attachment-only and follows the same publication rule as
 other attachment-only fields. `headers` belongs exclusively to the

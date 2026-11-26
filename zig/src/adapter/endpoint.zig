@@ -596,6 +596,7 @@ pub const Endpoint = struct {
             }
         }
         try contract.refuseUnadvertisedOpen(descriptor, payload, refusal);
+        try contract.refuseCredentialReferences(arena, payload.tool_sources_json, refusal);
         const tool_sources_json = try self.resolveAttachments(arena, payload.tool_sources_json, refusal);
         if (payload.session_id) |named| {
             if ((payload.reopen or contract.carriesEntries(payload.tool_sources_json)) and named.len > 0 and self.find(named) != null) {

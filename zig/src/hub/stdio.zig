@@ -213,7 +213,7 @@ fn substitutedSources(
     for (parsed.array.items) |entry| {
         if (entry != .object) continue;
         const id = if (entry.object.get("id")) |value| (if (value == .string) value.string else "") else "";
-        const configured = if (id.len > 0) hub.toolSource(id) else null;
+        const configured = if (id.len > 0 and !entry.object.contains("credential_ref")) hub.toolSource(id) else null;
         if (configured) |source| {
             try writeConfiguredSource(&writer, source, entry.object);
         } else {
@@ -2270,6 +2270,7 @@ pub const Frontend = struct {
         for (listed.array.items) |entry| {
             if (entry != .object) continue;
             const fields = entry.object;
+            if (fields.contains("credential_ref")) continue;
             const id = if (fields.get("id")) |value| (if (value == .string) value.string else "") else "";
             if (fields.get("command")) |value| {
                 if (value == .string and value.string.len > 0) {

@@ -484,6 +484,7 @@ export interface ToolSourceAttachment {
   command?: string;
   args?: string[];
   environment?: string[];
+  credential_ref?: string;
 }
 
 export type OpenMessage = Omit<MessageSubmitRequest, 'session_id'>;

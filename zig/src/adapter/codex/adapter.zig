@@ -58,6 +58,15 @@ const image_descriptor: contract.Descriptor = .{
     .features = &image_features,
 };
 
+const attach_feature: contract.Feature = .{
+    .key = contract.feature_tool_sources_attach,
+    .level = .native,
+    .modes = &.{ "session_open", "remote" },
+    .limits_json = "{\"transports\":[\"remote\"]}",
+};
+const attach_features = features ++ [_]contract.Feature{attach_feature};
+const image_attach_features = image_features ++ [_]contract.Feature{attach_feature};
+
 pub const default_compact_above: usize = 256 * 1024;
 
 pub const Config = struct {
@@ -65,6 +74,7 @@ pub const Config = struct {
     args: []const []const u8 = &.{},
     environment: []const []const u8 = &.{},
     stderr_redaction: ?process.StderrRedaction = null,
+    session_tool_sources: bool = false,
     working_directory: ?[]const u8 = null,
     model: []const u8 = "",
     approval_policy: []const u8 = "",
@@ -189,7 +199,14 @@ pub const Adapter = struct {
 
     fn routeDescriptor(self: *const Adapter) contract.Descriptor {
         const model = if (self.config.model.len > 0) self.config.model else self.default_model;
-        return if (self.supportsImages(model)) image_descriptor else descriptor;
+        const images = self.supportsImages(model);
+        var route = if (images) image_descriptor else descriptor;
+        if (self.config.session_tool_sources) {
+            route.private_tool_sources = true;
+            route.features = if (images) &image_attach_features else &attach_features;
+            route.capability_revision = if (images) capability_revision ++ "-image-mcp" else capability_revision ++ "-mcp";
+        }
+        return route;
     }
 
     fn ask(self: *Adapter, arena: std.mem.Allocator, method: []const u8, params: std.json.ObjectMap, refusal: *contract.Refusal) contract.Failure!?std.json.Value {
@@ -450,6 +467,7 @@ pub const Session = struct {
     compact_above: usize = default_compact_above,
     retained: usize = 0,
     context_updates: std.ArrayList(ContextUpdate) = .empty,
+    sources: []oap_types.ToolSourceDescriptor,
 
     const ContextUpdate = struct {
         after_run_events: usize,
@@ -461,7 +479,7 @@ pub const Session = struct {
         const self = try construct(owner, arena, request, refusal);
         errdefer self.destroy();
         try self.handshake(arena, refusal);
-        self.reducer.open() catch |err| return lift(err);
+        self.reducer.openWithSources(try mcpServers(arena, request.private_tool_sources)) catch |err| return lift(err);
         try self.flush();
         switch (try self.awaitSettled(arena, native.method_thread_start, refusal)) {
             .opened => return self,
@@ -470,10 +488,38 @@ pub const Session = struct {
                     refusal.* = .{ .feature = contract.feature_open_reopen, .reason = contract.reason_unsatisfiable, .detail = try describe(arena, refused) };
                     return error.UnsupportedFeature;
                 }
+                if (self.sources.len > 0) return refusal.fail(error.BackendFailed, "the Codex app-server refused thread/start with attached tool sources");
                 return refusal.fail(error.BackendFailed, try describe(arena, refused));
             },
             else => return refusal.fail(error.BackendFailed, "the codex app-server answered thread/start with an unrelated settlement"),
         }
+    }
+
+    fn mcpServers(arena: std.mem.Allocator, sources: []const contract.ConfiguredSource) !?std.json.Value {
+        if (sources.len == 0) return null;
+        var servers = std.json.ObjectMap.empty;
+        for (sources) |source| {
+            var server = std.json.ObjectMap.empty;
+            try server.put(arena, "url", .{ .string = source.endpoint });
+            if (source.headers.len != 0) {
+                var headers = std.json.ObjectMap.empty;
+                for (source.headers) |header| try headers.put(arena, header.name, .{ .string = header.value });
+                try server.put(arena, "http_headers", .{ .object = headers });
+            }
+            try servers.put(arena, source.id, .{ .object = server });
+        }
+        return .{ .object = servers };
+    }
+
+    fn publicSources(arena: std.mem.Allocator, sources: []const contract.ConfiguredSource) ![]oap_types.ToolSourceDescriptor {
+        const published = try arena.alloc(oap_types.ToolSourceDescriptor, sources.len);
+        for (sources, published) |source, *entry| {
+            const id = try arena.dupe(u8, source.id);
+            const endpoint = try arena.dupe(u8, source.endpoint);
+            const display_name = if (source.display_name.len == 0) null else try arena.dupe(u8, source.display_name);
+            entry.* = .{ .id = id, .kind = "remote", .protocol = "mcp", .endpoint = endpoint, .display_name = display_name };
+        }
+        return published;
     }
 
     fn construct(owner: *Adapter, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!*Session {
@@ -491,12 +537,14 @@ pub const Session = struct {
         errdefer reducer_arena.deinit();
         const resume_thread_id: []const u8 = if (request.reopen) try reducer_arena.allocator().dupe(u8, request.native_session_id) else "";
         const settings = try codexSettings(arena, request, refusal);
+        const sources = try publicSources(reducer_arena.allocator(), request.private_tool_sources);
         const argv = try std.mem.concat(arena, []const u8, &.{ config.args, try serverArgs(arena, config) });
         const transport = process.Transport.open(gpa, .{
             .executable = config.executable,
             .args = argv,
             .environment = config.environment,
             .stderr_redaction = config.stderr_redaction,
+            .discard_stderr = sources.len > 0,
             .working_directory = config.working_directory,
             .frame_limit = config.frame_limit,
             .exit_grace_ns = config.exit_grace_ns,
@@ -512,6 +560,7 @@ pub const Session = struct {
             .participant = participant,
             .reducer_arena = reducer_arena,
             .transport = transport,
+            .sources = sources,
             .reducer = session.Reducer.init(reducer_arena, .{
                 .session_id = id,
                 .participant = participant,
@@ -772,6 +821,7 @@ pub const Session = struct {
             .transcript_cursor = transcript_cursor,
             .updated_at_ms = if (current.updated_at_ms > 0) current.updated_at_ms else null,
             .recovered = current.recovered,
+            .sources = self.sources,
             .context_usage = self.reducer.context_usage,
             .reasoning_level = reportedLevel(self.reducer.options.settings.reasoning_effort),
             .compaction_policy_json = try reportedPolicy(arena, self.reducer.options),

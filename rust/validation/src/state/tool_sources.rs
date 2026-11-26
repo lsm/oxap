@@ -102,7 +102,7 @@ impl State {
             return;
         };
         for (index, source) in sources.iter().enumerate() {
-            for member in ["command", "args", "environment"] {
+            for member in ["command", "args", "environment", "credential_ref"] {
                 if source.get(member).is_some() {
                     self.add_expected(
                         codes::ATTACHMENT_FIELD_IN_CATALOG,
@@ -110,7 +110,7 @@ impl State {
                         e,
                         &format!("{pointer}/{index}/{member}"),
                         "a published tool source carries an attachment-only member",
-                        "no command, args, or environment",
+                        "no attachment-only members",
                         member,
                         &[],
                     );
