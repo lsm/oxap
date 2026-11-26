@@ -3139,6 +3139,7 @@ test "an open electing what the adapter does not advertise is refused for that, 
 const Admitting = struct {
     inner: contract.Adapter,
     refusing: bool = false,
+    private_tool_sources: bool = false,
     admitted: usize = 0,
     opened: usize = 0,
 
@@ -3149,7 +3150,9 @@ const Admitting = struct {
 
 fn admittingProbe(ptr: *anyopaque, refusal: *contract.Refusal) contract.Failure!contract.Descriptor {
     const self: *Admitting = @ptrCast(@alignCast(ptr));
-    return self.inner.probe(refusal);
+    var descriptor = try self.inner.probe(refusal);
+    descriptor.private_tool_sources = self.private_tool_sources;
+    return descriptor;
 }
 
 fn admittingOpen(ptr: *anyopaque, arena: std.mem.Allocator, request: contract.OpenRequest, refusal: *contract.Refusal) contract.Failure!contract.Session {
@@ -3193,6 +3196,25 @@ test "an adapter's admission refusal outranks a taken name, and nothing it refus
     try testing.expectError(error.SessionExists, hub.open(arena, "admitting", .{ .session_id = "alpha" }));
     try testing.expectEqual(@as(usize, 1), admitting.opened);
     try testing.expectEqual(@as(usize, 1), hub.sessionCount());
+}
+
+test "an adapter that accepts private sources can refuse admission ahead of a taken name" {
+    var inner = memory.Adapter.init(testing.allocator);
+    defer inner.deinit();
+    var admitting = Admitting{ .inner = inner.adapter(), .private_tool_sources = true };
+    var hub = Hub.init(testing.allocator, testClock, .{});
+    defer hub.deinit();
+    try hub.register("admitting", admitting.adapter());
+    var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+    defer scratch.deinit();
+    const arena = scratch.allocator();
+
+    _ = try hub.open(arena, "admitting", .{ .session_id = "alpha" });
+    admitting.refusing = true;
+    var refusal: OpenRefusal = .{};
+    try testing.expectError(error.UnsupportedFeature, hub.openReporting(arena, "admitting", .{ .session_id = "alpha" }, &refusal));
+    try testing.expectEqualStrings(contract.feature_compaction_policy, refusal.reason.feature);
+    try testing.expectEqual(@as(usize, 1), admitting.opened);
 }
 
 test "an adapter-assigned session id that is already taken is refused, not adopted twice" {
@@ -6574,6 +6596,7 @@ test "a control the adapter finds closed answers session_closed and releases the
 test {
     _ = binding;
     _ = run_store;
+    _ = session_tool_sources;
 }
 
 test "a reply longer than the bound is cut on a character boundary" {

@@ -111,8 +111,7 @@ const Claim = struct {
     source_id: []const u8,
 };
 
-fn claimGrants(dir: std.Io.Dir, claims: []const Claim, refusal: *contract.Refusal) contract.Failure!void {
-    const io = compat.fs.defaultIo();
+fn claimGrants(io: std.Io, dir: std.Io.Dir, claims: []const Claim, refusal: *contract.Refusal) contract.Failure!void {
     var claimed: usize = 0;
     errdefer for (claims[0..claimed]) |grant| {
         dir.renamePreserve(grant.path, dir, grant.reference, io) catch {};
@@ -165,6 +164,33 @@ pub fn resolve(
             } else return refuse(refusal, id);
         }
     }
-    try claimGrants(dir, claims.items, refusal);
+    try claimGrants(compat.fs.defaultIo(), dir, claims.items, refusal);
     return sources;
+}
+
+test "a cleanup error after claiming every grant leaves the references spent" {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var root = testing.tmpDir(.{});
+    defer root.cleanup();
+    const claims = [_]Claim{
+        .{ .reference = "one", .path = ".claim-one", .source_id = "first" },
+        .{ .reference = "two", .path = ".claim-two", .source_id = "second" },
+    };
+    for (claims) |grant| try root.dir.writeFile(io, .{ .sub_path = grant.reference, .data = "fixture" });
+    var fault_vtable = io.vtable.*;
+    fault_vtable.dirDeleteFile = struct {
+        fn delete(_: ?*anyopaque, dir: std.Io.Dir, path: []const u8) std.Io.Dir.DeleteFileError!void {
+            if (equal(path, ".claim-two")) return error.AccessDenied;
+            return dir.deleteFile(std.testing.io, path);
+        }
+    }.delete;
+    var fault = io;
+    fault.vtable = &fault_vtable;
+    var refusal: contract.Refusal = .{};
+    try claimGrants(fault, root.dir, &claims, &refusal);
+    for (claims) |grant| try testing.expectError(error.FileNotFound, root.dir.access(io, grant.reference, .{}));
+    try testing.expectError(error.FileNotFound, root.dir.access(io, claims[0].path, .{}));
+    try root.dir.access(io, claims[1].path, .{});
 }
