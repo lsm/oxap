@@ -85,3 +85,15 @@ Codex recomputes usage before completing the item, so completion keeps fresh
 usage. The notification has no effective compaction threshold. Codex can clamp
 the configured limit and can count a different portion of context against it,
 so this adapter leaves the marker absent.
+
+## Live turn steering in Zig
+
+An explicit steer resolves its OAP target to the active native turn and sends
+`turn/steer` with that `expectedTurnId`. The adapter uses the OAP request ID
+as `clientUserMessageId`. The matching `turnId` in the reply admits the
+steer. The adapter settles it when Codex completes a `userMessage` item with
+the matching `clientId` on that turn. The item does not identify the exact
+model input boundary, so OAP reports `boundary: "unknown"`. When the run
+settles first, it drops pending steer requests with `run_terminated` before
+the terminal envelope. An unknown or finished target receives
+`invalid_steer_target` before the adapter sends guidance.

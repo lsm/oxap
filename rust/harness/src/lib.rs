@@ -66,6 +66,8 @@ pub struct Version {
     pub endpoint_version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub capability_revision: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub zig_capability_revision: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub admits: Vec<String>,
     pub ledgers: Vec<String>,

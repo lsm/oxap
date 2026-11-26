@@ -6,15 +6,16 @@ import (
 )
 
 type Pin struct {
-	Label              string      `json:"label"`
-	Status             string      `json:"status"`
-	EndpointVersion    string      `json:"endpoint_version"`
-	CapabilityRevision string      `json:"capability_revision"`
-	Admits             []string    `json:"admits"`
-	Corpus             string      `json:"corpus"`
-	Components         []Component `json:"components"`
-	Artifacts          []Artifact  `json:"artifacts"`
-	Sources            []Source    `json:"sources"`
+	Label                 string      `json:"label"`
+	Status                string      `json:"status"`
+	EndpointVersion       string      `json:"endpoint_version"`
+	CapabilityRevision    string      `json:"capability_revision"`
+	ZigCapabilityRevision string      `json:"zig_capability_revision"`
+	Admits                []string    `json:"admits"`
+	Corpus                string      `json:"corpus"`
+	Components            []Component `json:"components"`
+	Artifacts             []Artifact  `json:"artifacts"`
+	Sources               []Source    `json:"sources"`
 }
 
 type Component struct {

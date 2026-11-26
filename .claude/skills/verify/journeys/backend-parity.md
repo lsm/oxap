@@ -16,3 +16,8 @@ ACP, Codex, DeepSeek, DeepSeek model switching and memory through the
 three real stdio endpoints. Each fixture compares the envelopes, sequenced
 run order and data written to the scripted harness. The memory adapter
 runs in-process.
+
+For Codex, the Zig comparison expects the cataloged steer revision, the
+native feature, and an `invalid_steer_target` refusal for idle steering.
+Both comparisons still check all shared run events and native messages. Use `-run '^TestBackendsMatchOapx$/^codex$'` with
+`go test ./go/cmd/goap -count=1 -v` to isolate this fixture.

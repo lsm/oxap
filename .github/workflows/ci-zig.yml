@@ -506,6 +506,9 @@ jobs:
       - name: Verify live Codex context usage and reattach
         run: python3 .claude/skills/verify/scripts/codex-context-usage.py /tmp/oapx-hub/bin/oxap
 
+      - name: Verify Codex steer admission ordering
+        run: python3 .claude/skills/verify/scripts/codex-steer-order.py /tmp/oapx-hub/bin/oxap /tmp/oxap-codex-steer-order
+
       - name: Verify Codex inline image prompts
         run: |
           python3 .claude/skills/verify/scripts/codex-inline-images.py /tmp/oapx-hub/bin/oxap

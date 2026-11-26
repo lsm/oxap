@@ -14,20 +14,26 @@ const json_encode = @import("json_encode");
 
 pub const bridge = @import("bridge.zig");
 pub const endpoint_id = session.endpoint_id;
-pub const capability_revision = session.capability_revision;
+pub const capability_revision = harness_pins.codex_app_server_zig_capability_revision;
 const app_server_args = [_][]const u8{ "app-server", "--listen", "stdio://" };
 
 const features = table: {
     @setEvalBranchQuota(20000);
-    var built: [session.features.len]contract.Feature = undefined;
-    for (session.features, &built) |feature, *slot| {
-        slot.* = .{
+    var built: [session.features.len + 1]contract.Feature = undefined;
+    var index: usize = 0;
+    for (session.features) |feature| {
+        built[index] = .{
             .key = feature.name,
             .level = std.meta.stringToEnum(oap_types.SupportLevel, feature.level).?,
             .reason = if (feature.reason.len > 0) feature.reason else null,
             .scope = if (feature.scope.len > 0) feature.scope else null,
             .modes = feature.modes,
         };
+        index += 1;
+        if (std.mem.eql(u8, feature.name, "session.message.delivery.auto")) {
+            built[index] = .{ .key = "session.message.delivery.steer", .level = .native };
+            index += 1;
+        }
     }
     const done = built;
     break :table done;
@@ -810,6 +816,7 @@ pub const Session = struct {
             .session_id = self.id,
             .status = std.meta.stringToEnum(oap_types.SessionStatus, current.status) orelse .running,
             .active_run_id = active_run_id,
+            .active_runs = try self.reducer.steerState(arena),
             .current_model_id = current_model_id,
             .transcript_cursor = transcript_cursor,
             .updated_at_ms = if (current.updated_at_ms > 0) current.updated_at_ms else null,
@@ -841,9 +848,28 @@ pub const Session = struct {
         return .{ .image_url = try std.fmt.allocPrint(arena, "data:{s};base64,{s}", .{ mime, data }) };
     }
 
+    fn invalidSteer(refusal: *contract.Refusal, reason: []const u8) contract.Failure {
+        refusal.reason = reason;
+        return error.InvalidSteerTarget;
+    }
+
+    fn steerTarget(self: *Session, target: ?[]const u8, refusal: *contract.Refusal) contract.Failure!usize {
+        if (self.reducer.closed or self.reducer.transport_closed) return error.SessionClosed;
+        const index = if (target) |run_id|
+            self.reducer.admittedRun(run_id) orelse return invalidSteer(refusal, "unknown_target")
+        else
+            self.reducer.active orelse return invalidSteer(refusal, "no_active_run");
+        const run = self.reducer.runs.items[index];
+        if (run.terminal) return invalidSteer(refusal, "terminal");
+        if (!run.started) return invalidSteer(refusal, if (target != null) "queued" else "no_active_run");
+        if (run.cancel_in_flight or run.cancel_pending) return invalidSteer(refusal, "not_steerable");
+        return index;
+    }
+
     fn submit(ptr: *anyopaque, arena: std.mem.Allocator, request: *const oap_types.MessageSubmitRequest, envelope_id: []const u8, refusal: *contract.Refusal) contract.Failure!oap_types.MessageSubmitResponse {
-        _ = envelope_id;
         const self = cast(ptr);
+        const steering = request.delivery == .steer;
+        if (steering) try contract.refuseSteerControls(descriptor, request, refusal);
         if (request.model_id) |model| {
             if (model.len == 0) return refusal.missingModel("");
         }
@@ -854,7 +880,9 @@ pub const Session = struct {
             }
         }
         if (!std.mem.eql(u8, request.session_id, self.id) or request.messages.len == 0) return error.InvalidSubmission;
-        if (request.delivery != .auto or request.allow_degraded_features.len != 0) return error.InvalidSubmission;
+        if ((!steering and request.delivery != .auto) or request.allow_degraded_features.len != 0) return error.InvalidSubmission;
+        const target = if (steering) try self.steerTarget(request.target_run_id, refusal) else null;
+        if (steering and envelope_id.len == 0) return error.InvalidSubmission;
         const inputs = try arena.alloc(session.InputMessage, request.messages.len);
         var encoded: usize = 0;
         for (request.messages, inputs) |message, *input| {
@@ -877,21 +905,24 @@ pub const Session = struct {
         var model_id = request.model_id;
         if (encoded > 0) {
             const current = self.reducer.state.current_model_id;
-            const model = model_id orelse if (current.len > 0) current else self.owner.default_model;
+            const active_model = if (target) |index| self.reducer.runs.items[index].model else "";
+            const model = model_id orelse if (active_model.len > 0) active_model else if (current.len > 0) current else self.owner.default_model;
             if (!self.owner.supportsImages(model)) {
                 refusal.* = .{ .feature = image_feature, .reason = contract.reason_unsatisfiable, .model_id = model, .detail = "the effective Codex model does not support inline images" };
                 return error.UnsupportedFeature;
             }
             model_id = model;
         }
-        self.reducer.submit(.{
+        const submission: session.Submission = .{
             .messages = inputs,
             .model_id = model_id,
             .effort = self.pending_effort,
             .output_schema = request.output_schema_json,
             .scratch = arena,
             .frame_limit = if (encoded > 0) @min(self.owner.config.frame_limit, max_image_turn_frame) else self.owner.config.frame_limit,
-        }) catch |err| return switch (err) {
+        };
+        const send = if (target) |index| self.reducer.steer(index, submission, envelope_id) else self.reducer.submit(submission);
+        send catch |err| return switch (err) {
             error.ModelNotFound => refusal.missingModel(request.model_id orelse ""),
             error.FrameTooLarge => refusal.fail(error.InvalidSubmission, "the Codex turn exceeds the native frame limit"),
             error.InvalidSubmission, error.UnsupportedInput => error.InvalidSubmission,
@@ -900,9 +931,10 @@ pub const Session = struct {
             else => lift(err),
         };
         try self.flush();
-        switch (try self.awaitSettled(arena, native.method_turn_start, refusal)) {
+        const method = if (steering) native.method_turn_steer else native.method_turn_start;
+        switch (try self.awaitSettled(arena, method, refusal)) {
             .admitted => |admission| {
-                self.pending_effort = "";
+                if (!steering) self.pending_effort = "";
                 const message_ids = try arena.alloc([]const u8, admission.message_ids.len);
                 for (admission.message_ids, message_ids) |source, *slot| slot.* = try arena.dupe(u8, source);
                 const submission_id = try arena.dupe(u8, admission.submission_id);
@@ -912,18 +944,29 @@ pub const Session = struct {
                     .session_id = self.id,
                     .accepted = true,
                     .submission_id = submission_id,
-                    .requested_delivery = .auto,
-                    .effective_delivery = .start,
-                    .delivery_resolution = "session_idle",
-                    .admission = .started,
+                    .requested_delivery = request.delivery,
+                    .effective_delivery = if (steering) .steer else .start,
+                    .delivery_resolution = if (steering) null else "session_idle",
+                    .admission = if (steering) .steered else .started,
                     .run_id = run_id,
-                    .status = .running,
+                    .status = admission.status,
+                    .target_sequence = admission.target_sequence,
                     .model_id = admitted_model,
                     .message_ids = message_ids,
                 };
             },
-            .refused => |refused| return refusal.fail(error.BackendFailed, try describe(arena, refused)),
-            else => return refusal.fail(error.BackendFailed, "the codex app-server answered turn/start with an unrelated settlement"),
+            .refused => |refused| {
+                if (target) |index| {
+                    if (self.reducer.runs.items[index].terminal and !self.reducer.transport_closed)
+                        return invalidSteer(refusal, "terminal");
+                    if (std.mem.eql(u8, refused.message, "no active turn to steer") or
+                        std.mem.startsWith(u8, refused.message, "expected active turn id `") or
+                        std.mem.startsWith(u8, refused.message, "cannot steer a "))
+                        return invalidSteer(refusal, "not_steerable");
+                }
+                return refusal.fail(error.BackendFailed, try describe(arena, refused));
+            },
+            else => return refusal.fail(error.BackendFailed, "the codex app-server answered the turn request with an unrelated settlement"),
         }
     }
 
@@ -1309,10 +1352,14 @@ fn kinds(allocator: std.mem.Allocator, events: []const contract.Event) ![]const 
     return names;
 }
 
-test "the descriptor is the Go adapter's, under its revision" {
-    try testing.expectEqualStrings(session.capability_revision, capability_revision);
-    try testing.expectEqual(session.features.len, descriptor.features.len);
-    for (session.features, descriptor.features) |pinned, served| {
+test "the descriptor adds native steer to the pinned features" {
+    try testing.expectEqual(.native, descriptor.level("session.message.delivery.steer"));
+    try testing.expectEqual(session.features.len + 1, descriptor.features.len);
+    var index: usize = 0;
+    for (descriptor.features) |served| {
+        if (std.mem.eql(u8, served.key, "session.message.delivery.steer")) continue;
+        const pinned = session.features[index];
+        index += 1;
         try testing.expectEqualStrings(pinned.name, served.key);
         try testing.expectEqualStrings(pinned.level, @tagName(served.level));
         try testing.expectEqualStrings(pinned.reason, served.reason orelse "");
@@ -1363,6 +1410,54 @@ test "a turn is admitted on its turn/start answer and settles on turn/completed"
         try testing.expect(std.mem.indexOf(u8, event.line, "\"capability_revision\":\"" ++ capability_revision ++ "\"") != null);
     }
     try testing.expectEqual(contract.Activity.idle, probe.handle.?.activity());
+}
+
+test "native steer settles on the original run or drops before its terminal" {
+    const script = fake_prelude ++ fake_turn_admitted ++
+        \\take
+        \\printf '{"method":"item/completed","params":{"threadId":"native-thread","turnId":"native-turn","item":{"type":"userMessage","id":"native-message","clientId":"apply-steer"}}}\n'
+        \\printf '{"id":3,"result":{"turnId":"native-turn"}}\n'
+        \\take
+        \\printf '{"method":"turn/completed","params":{"threadId":"native-thread","turn":{"id":"native-turn","status":"completed"}}}\n'
+        \\printf '{"id":4,"result":{"turnId":"native-turn"}}\n'
+        \\
+    ++ fake_idle;
+    var probe: Probe = undefined;
+    try probe.init(script);
+    defer probe.deinit();
+    var refusal = contract.Refusal{};
+    const handle = try probe.open(&refusal);
+    const admitted = try probe.submit("first", &refusal);
+    const arena = probe.arena.allocator();
+    var seen = std.ArrayList(contract.Event).empty;
+    _ = try probe.pumpUntil("run.started", &seen);
+    var messages = [_]oap_types.Message{.{ .role = .user, .content = .{ .text = "adjust" } }};
+    var request = oap_types.MessageSubmitRequest{
+        .session_id = "s1",
+        .messages = &messages,
+        .delivery = .steer,
+        .target_run_id = "stale",
+    };
+    try testing.expectError(error.InvalidSteerTarget, handle.submit(arena, &request, "stale-steer", &refusal));
+    request.target_run_id = admitted.run_id;
+    for ([_][]const u8{ "apply-steer", "drop-steer" }, 1..) |id, sequence| {
+        const steered = try handle.submit(arena, &request, id, &refusal);
+        try testing.expectEqual(oap_types.Admission.steered, steered.admission);
+        try testing.expectEqualStrings(admitted.run_id.?, steered.run_id.?);
+        try testing.expectEqual(@as(?u64, sequence), steered.target_sequence);
+    }
+    _ = try probe.pumpUntil("run.completed", &seen);
+    try testing.expectEqual(@as(usize, 4), seen.items.len);
+    try testing.expectEqualStrings("run.steer.applied", (try kinds(arena, seen.items))[1]);
+    try testing.expectEqualStrings("run.steer.dropped", (try kinds(arena, seen.items))[2]);
+    try testing.expect(std.mem.indexOf(u8, seen.items[1].line, "\"request_id\":\"apply-steer\"") != null);
+    try testing.expect(std.mem.indexOf(u8, seen.items[2].line, "\"request_id\":\"drop-steer\"") != null);
+    try testing.expectEqualStrings("run_terminated", (try probe.payloadOf(seen.items[2])).get("reason").?.object.get("code").?.string);
+    try testing.expectError(error.InvalidSteerTarget, handle.submit(arena, &request, "late-steer", &refusal));
+    const written = try probe.fake.written(arena);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, written, "\"method\":\"turn/start\""));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, written, "\"method\":\"turn/steer\""));
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, written, "\"expectedTurnId\":\"native-turn\""));
 }
 
 test "state reports the settled run's last sequence as its transcript cursor" {
