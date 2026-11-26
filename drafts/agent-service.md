@@ -271,7 +271,7 @@ attachment is not a way to configure the daemon:
 | A wire-supplied `command` or `args` is refused `unsupported_feature`; name an operator-configured source by id | `TestDaemonRefusesWireSuppliedProcessCredentials` |
 | A `NAME=value` literal in a wire attachment's `environment` is refused; only the bare `NAME` allowlist form is accepted | same test, and `TestCallerEnvironmentNeverNamesAVariableTwice` |
 | A wire-supplied `kind`, `display_name`, `protocol` or `endpoint` on a **configured** source is refused; the operator's value stands | `TestOpenRefusesAWireSuppliedKind`, `TestOpenRefusesAWireSuppliedDescriptorMember` |
-| An id no source is configured under is refused **only when it claims `process`** — the one kind the daemon would have to supply an executable for. Any other kind passes through to the adapter, which may accept it | `TestOpenRefusesAnUnconfiguredIDWhateverItsKind` — the name reads broader than the rule, and its body pins the opposite for `local`: an unconfigured `local` attachment opens `200` |
+| Outside the capability-backed Codex create path below, an id no source is configured under is refused **only when it claims `process`** — the one kind the daemon would have to supply an executable for. Any other kind passes through to the adapter, which may accept it | `TestOpenRefusesAnUnconfiguredIDWhateverItsKind` — the name reads broader than the rule, and its body pins the opposite for `local`: an unconfigured `local` attachment opens `200` |
 | A configured source is admitted by its bare id, and the daemon supplies the command the registry holds | `TestDaemonFillsTheRegistrysCommand`, `TestOpenOpMatchesHTTP` |
 | The caller's `environment` names extend the operator's list and never replace an entry | `TestCallerEnvironmentNeverNamesAVariableTwice` |
 | The attachment gate reads a *layered* disclosure, so a request may be refused a level the descriptor advertises underneath the top one | `TestOpenReadsAttachmentSupportFromALayer`, `TestSharedGateRefusesADisclosureAnOpenCannotElect` |
@@ -289,7 +289,12 @@ publishes each mode 0600 file under a new canonical base64url reference
 encoding 32 random bytes. The file contains `session_id`, a `source` object
 with `id`, `kind: "remote"`, `protocol: "mcp"`, and `endpoint`, and a
 `headers` object with `Authorization: Bearer <credential>`. The bearer encodes
-32 separate random bytes. The request names the session and carries only
+32 separate random bytes. With this option, Codex accepts only remote MCP
+attachments from the operator's registry or a session-bound capability
+file. The hub refuses an unconfigured source without a valid reference,
+including a source with an endpoint supplied on the wire, under
+[Decision 0008's credential reference rule](../decisions/0008-tool-sources.md#a-credential-reference-authorizes-one-session-open).
+A request using a file names the session and carries only
 `id`, `kind` and `credential_ref` in the attachment. The hub validates all
 attachments and checks adapter admission with the resolved sources before
 claiming their files. Each claim removes the original reference and remains

@@ -10,7 +10,8 @@ The stdio replay opens two Codex sessions with the same source ID and
 different one-time capability files. Expect each native thread to receive
 only its own server. A missing, invalid, cross-session, wrong-source,
 duplicate or replayed reference must refuse before starting a thread. A
-duplicate or unresolved sibling must leave earlier grants available. Check
+duplicate, unresolved sibling, or taken session name must leave valid grants
+available. Check
 that neither the reference nor bearer reached the public responses, session
 bindings or hub diagnostics.
 

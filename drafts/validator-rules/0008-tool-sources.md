@@ -68,7 +68,7 @@ Source: [`decisions/0008-tool-sources.md`](../../decisions/0008-tool-sources.md#
 
 | id | rule | lines | code | Go | Zig | Rust |
 | --- | --- | --- | --- | --- | --- | --- |
-| `0008#the-attachment-shape-is-not-the-catalog-shape/1` | A published tool source (descriptor top level, each layer, list response, open response, session state) MUST NOT carry `command`, `args` or `environment`. | L230–263 | `attachment_field_in_catalog` | `toolsources.go:checkRawSources` | `semantic.zig:checkRawSources` | `state/tool_sources.rs:check_published_sources`, `state.rs:apply` |
+| `0008#the-attachment-shape-is-not-the-catalog-shape/1` | A published tool source (descriptor top level, each layer, list response, open response, session state) MUST NOT carry `command`, `args`, `environment` or `credential_ref`. | L230–263 | `attachment_field_in_catalog` | `toolsources.go:checkRawSources` | `semantic.zig:checkRawSources` | `state/tool_sources.rs:check_published_sources`, `state.rs:apply` |
 
 ### [0008] Attachment is bounded by what the endpoint disclosed
 

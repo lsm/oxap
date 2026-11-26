@@ -3994,6 +3994,26 @@
       "mode": "tolerant"
     },
     {
+      "id": "descriptor-leaks-credential-reference",
+      "path": "semantic-invalid/descriptor-leaks-credential-reference.json",
+      "kind": "semantic-invalid",
+      "valid": false,
+      "phase": "semantic",
+      "codes": [
+        "attachment_field_in_catalog"
+      ],
+      "units": [
+        "tool-sources"
+      ],
+      "provenance": [
+        "decisions/0008-tool-sources.md"
+      ],
+      "mode": "tolerant",
+      "rules": [
+        "0008#the-attachment-shape-is-not-the-catalog-shape/1"
+      ]
+    },
+    {
       "id": "tools-catalog-leaks-attachment-env",
       "path": "semantic-invalid/tools-catalog-leaks-attachment-env.json",
       "kind": "semantic-invalid",

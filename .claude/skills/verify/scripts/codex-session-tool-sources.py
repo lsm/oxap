@@ -184,6 +184,7 @@ def verify(binary, root, codex, server):
         assert feature["level"] == "native" and set(feature["modes"]) == {"session_open", "remote"}
         assert feature["limits"]["transports"] == ["remote"]
         refused("alpha", attach(None))
+        refused("alpha", attach(None, protocol="mcp", endpoint="http://127.0.0.1:1/mcp"))
         refused("alpha", attach("../not-a-reference"))
         refused("alpha", attach(secrets.token_urlsafe(32)))
         invalid_mode, _ = issue("alpha", 10007)
@@ -207,6 +208,10 @@ def verify(binary, root, codex, server):
             state = reply["result"]["payload"]
             assert [source["id"] for source in state["sources"]] == ["tools"]
             assert not (grants / reference).exists(), "the grant was left reusable"
+        fresh, _ = issue("alpha", 10008)
+        taken = opened("alpha", attach(fresh))
+        assert taken.get("error", {}).get("code") == "session_exists", "a duplicate session was not refused"
+        assert (grants / fresh).is_file(), "a duplicate session consumed a valid grant"
         if codex:
             for session in ("alpha", "beta"):
                 assert hub.call("events", session_id=session)["ok"]
@@ -238,7 +243,7 @@ def verify(binary, root, codex, server):
                 content = path.read_bytes()
                 assert not any(needle in content for needle in needles), "credential material in Codex home"
             print(f"native model requests with isolated tools=2, scanned files={len(files)}, rollouts={rollouts}, file canary hits=0")
-        print(f"hub exit=0, isolated sessions=2, attachment refusals={9 if codex else 10}, published canary hits=0")
+        print(f"hub exit=0, isolated sessions=2, attachment refusals={10 if codex else 11}, taken session refusals=1, published canary hits=0")
     finally:
         hub.cleanup()
 
