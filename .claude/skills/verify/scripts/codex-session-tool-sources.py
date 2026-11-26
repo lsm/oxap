@@ -172,11 +172,11 @@ def verify(binary, root, codex, server):
         return hub.call("open", adapter="codex", request=HUB["envelope"]("session.open.request", {
             "session_id": session, "tool_sources": list(sources), "reasoning_level": "high"}))
 
-    def refused(session, *sources):
+    def refused(session, *sources, source="tools"):
         reply = opened(session, *sources)
         error = reply.get("error", {})
         assert error.get("code") == "unsupported_feature", "open did not refuse the attachment"
-        assert error.get("details") == {"feature": ATTACH, "reason": "unsatisfiable", "source": "tools"}
+        assert error.get("details") == {"feature": ATTACH, "reason": "unsatisfiable", "source": source}
 
     try:
         reply = hub.call("capabilities", adapter="codex")
@@ -195,6 +195,9 @@ def verify(binary, root, codex, server):
         refused("alpha", attach(foreign))
         duplicate, _ = issue("alpha", 10005)
         refused("alpha", attach(duplicate), attach(duplicate))
+        assert (grants / duplicate).is_file(), "a duplicate attachment consumed a valid grant"
+        refused("alpha", attach(alpha), attach(None, id="missing"), source="missing")
+        assert (grants / alpha).is_file(), "an unresolved sibling consumed a valid grant"
         literal = opened("alpha", attach(None, headers={"Authorization": "Bearer " + canaries[-1]}))
         assert literal.get("error", {}).get("code") == "schema_invalid", "wire accepted literal headers"
         assert not list(root.glob("start-*")), "a refused open reached thread/start"
@@ -235,7 +238,7 @@ def verify(binary, root, codex, server):
                 content = path.read_bytes()
                 assert not any(needle in content for needle in needles), "credential material in Codex home"
             print(f"native model requests with isolated tools=2, scanned files={len(files)}, rollouts={rollouts}, file canary hits=0")
-        print(f"hub exit=0, isolated sessions=2, attachment refusals={8 if codex else 9}, published canary hits=0")
+        print(f"hub exit=0, isolated sessions=2, attachment refusals={9 if codex else 10}, published canary hits=0")
     finally:
         hub.cleanup()
 
