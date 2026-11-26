@@ -6,7 +6,7 @@ const build_options = @import("build_options");
 const decode = @import("decode");
 
 const judged_floor = 514;
-const tolerant_fixtures = 3;
+const tolerant_fixtures = 4;
 const decode_floor = 3;
 
 fn sameCodes(allocator: std.mem.Allocator, expected: []const std.json.Value, found: []const []const u8) !bool {

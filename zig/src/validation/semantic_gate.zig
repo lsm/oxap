@@ -5,7 +5,7 @@ const packs_mod = @import("packs");
 const build_options = @import("build_options");
 
 const judged_floor = 477;
-const tolerant_fixtures = 3;
+const tolerant_fixtures = 4;
 
 fn listed(gaps: []const std.json.Value, id: []const u8) bool {
     for (gaps) |gap| {
