@@ -376,3 +376,7 @@ fn valid_session_uuid(id: &str) -> bool {
     }
     true
 }
+
+#[cfg(all(test, unix))]
+#[path = "../tests/support/provided_discovery.rs"]
+mod provided_discovery;
