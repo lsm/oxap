@@ -121,11 +121,21 @@ fn claimGrants(io: std.Io, dir: std.Io.Dir, claims: []const Claim, refusal: *con
         claimed += 1;
     }
     for (claims) |grant| {
-        dir.deleteFile(io, grant.path) catch return refuse(refusal, grant.source_id);
+        dir.deleteFile(io, grant.path) catch {};
     }
 }
 
-pub fn resolve(
+pub const Prepared = struct {
+    dir: std.Io.Dir,
+    sources: []const contract.ConfiguredSource,
+    claims: []const Claim,
+
+    pub fn claim(self: Prepared, refusal: *contract.Refusal) contract.Failure!void {
+        try claimGrants(compat.fs.defaultIo(), self.dir, self.claims, refusal);
+    }
+};
+
+pub fn prepare(
     arena: std.mem.Allocator,
     dir: std.Io.Dir,
     registry: []const contract.ConfiguredSource,
@@ -133,7 +143,7 @@ pub fn resolve(
     reopen: bool,
     raw: []const u8,
     refusal: *contract.Refusal,
-) contract.Failure![]const contract.ConfiguredSource {
+) contract.Failure!Prepared {
     const list = std.json.parseFromSliceLeaky([]std.json.Value, arena, raw, .{}) catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;
         return refuse(refusal, "");
@@ -164,8 +174,7 @@ pub fn resolve(
             } else return refuse(refusal, id);
         }
     }
-    try claimGrants(compat.fs.defaultIo(), dir, claims.items, refusal);
-    return sources;
+    return .{ .dir = dir, .sources = sources, .claims = claims.items };
 }
 
 test "a cleanup error after claiming every grant leaves the references spent" {

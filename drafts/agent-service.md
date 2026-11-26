@@ -291,10 +291,12 @@ with `id`, `kind: "remote"`, `protocol: "mcp"`, and `endpoint`, and a
 `headers` object with `Authorization: Bearer <credential>`. The bearer encodes
 32 separate random bytes. The request names the session and carries only
 `id`, `kind` and `credential_ref` in the attachment. The hub validates all
-attachments before claiming their files. It claims each file once and forwards
-the descriptor and headers to Codex's private thread-start pipe. Responses
-publish the source descriptor. Explicit reopen with tool sources waits for
-binding provenance.
+attachments and checks adapter admission with the resolved sources before
+claiming their files. Each claim removes the original reference and remains
+spent if cleanup under the private claim name fails. The hub forwards the
+descriptor and headers to Codex's private thread-start pipe. Responses publish
+the source descriptor. Explicit reopen with tool sources waits for binding
+provenance.
 
 Pinned in Zig by the
 [session tool sources journey](../.claude/skills/verify/journeys/codex-session-tool-sources.md).

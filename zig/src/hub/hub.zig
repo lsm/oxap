@@ -986,16 +986,20 @@ pub const Hub = struct {
             }
         }
         try contract.refuseUnadvertisedOpenElections(descriptor, &request.payload(), &refused.reason);
-        var private_sources: []const contract.ConfiguredSource = &.{};
-        if (request.tool_sources_json) |raw| {
-            if (descriptor.private_tool_sources) {
+        var adapter_request = request.contractRequest("", "", false);
+        var prepared: ?session_tool_sources.Prepared = null;
+        if (descriptor.private_tool_sources) {
+            adapter_request.tool_sources_json = null;
+            if (request.tool_sources_json) |raw| {
                 const dir = self.session_tool_source_dir orelse return error.UnresolvableAttachment;
-                private_sources = try session_tool_sources.resolve(arena, dir, self.tool_sources, request.session_id, request.reopen, raw, &refused.reason);
-            } else {
-                try contract.refuseCredentialReferences(arena, raw, &refused.reason);
+                const attachments = try session_tool_sources.prepare(arena, dir, self.tool_sources, request.session_id, request.reopen, raw, &refused.reason);
+                adapter_request.private_tool_sources = attachments.sources;
+                prepared = attachments;
             }
+        } else {
+            try contract.refuseCredentialReferences(arena, request.tool_sources_json, &refused.reason);
         }
-        if (!descriptor.private_tool_sources) try registered.adapter.admit(arena, request.contractRequest("", "", false), &refused.reason);
+        try registered.adapter.admit(arena, adapter_request, &refused.reason);
         if (request.session_id.len > 0 and self.findSession(request.session_id) != null) return error.SessionExists;
         var native_session_id: []const u8 = "";
         var bound_model_id: []const u8 = "";
@@ -1031,9 +1035,10 @@ pub const Hub = struct {
         }
         const placed = try self.placedIn(registered, directory);
         if (request.reopen and directory.len > 0 and !std.mem.eql(u8, directory, placed.directory)) return error.DirectoryMismatch;
-        var adapter_request = request.contractRequest(native_session_id, bound_model_id, adopted_native);
-        adapter_request.private_tool_sources = private_sources;
-        if (descriptor.private_tool_sources) adapter_request.tool_sources_json = null;
+        adapter_request.native_session_id = native_session_id;
+        adapter_request.bound_model_id = bound_model_id;
+        adapter_request.adopted = adopted_native;
+        if (prepared) |attachments| try attachments.claim(&refused.reason);
         var session = placed.adapter.open(arena, adapter_request, &refused.reason) catch |err| {
             if (request.reopen and err == error.UnknownSession) return refused.reason.unsupported(contract.feature_open_reopen, contract.reason_unsatisfiable);
             return err;
