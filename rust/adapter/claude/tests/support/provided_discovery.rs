@@ -3,7 +3,7 @@ use std::{fs, os::unix::fs::PermissionsExt};
 use futures::executor::block_on;
 use oxap_adapter::CONTROL_UNADVERTISED;
 use oxap_protocol::{ToolDefinition, ToolsListRequest, FEATURE_TOOLS_PROVIDE};
-use serde_json::{json, value::to_raw_value};
+use serde_json::{json, value::to_raw_value, Value};
 
 use super::*;
 
@@ -50,19 +50,23 @@ fn provided_discovery_exchanges_discovery_before_open_and_lists_native_echoes() 
         })
         .unwrap();
         let schema = json!({"type":"object","properties":{"text":{"type":"string"}}});
-        let mut echo = ToolDefinition {
+        let echo = ToolDefinition {
             description: "echo it".into(),
             input_schema: Some(to_raw_value(&schema).unwrap()),
             ..tool("echo")
         };
         let mut look = tool("look");
         look.input_schema = Some(to_raw_value(&json!({"type":"object"})).unwrap());
+        let mut supplied_look = tool("look");
+        if mode == "allow" {
+            supplied_look.input_schema = Some(to_raw_value(&Value::Null).unwrap());
+        }
         let tools = if mode == "empty" {
             Vec::new()
         } else {
-            vec![echo.clone(), tool("look")]
+            vec![echo.clone(), supplied_look]
         };
-        let session = block_on(adapter.open(request(tools)))
+        let session = block_on(adapter.open_staged(request(tools)))
             .unwrap_or_else(|err| panic!("{mode} open failed: {err}"));
         assert!(dir.join("discovered").is_file(), "{mode} discovery");
         let list = block_on(session.tool_lister().unwrap().tools(ToolsListRequest {
@@ -75,7 +79,6 @@ fn provided_discovery_exchanges_discovery_before_open_and_lists_native_echoes() 
         if mode == "empty" {
             assert!(list.tools.tools.is_empty());
         } else {
-            echo.input_schema = Some(to_raw_value(&schema).unwrap());
             assert_eq!(
                 serde_json::to_value(list.tools.tools).unwrap(),
                 json!([echo, look])
@@ -128,7 +131,7 @@ fn provided_discovery_refuses_unsatisfiable_definitions_before_spawn() {
         ),
     ];
     for (tools, name, source) in cases {
-        let result = block_on(adapter.open(request(tools)));
+        let result = block_on(adapter.open_staged(request(tools)));
         assert!(
             matches!(
                 result.err(),

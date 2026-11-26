@@ -75,7 +75,7 @@ else:
     rpc("ping", "p", result={})
     discovery("other", {"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     send({"type": "system", "subtype": "init", "session_id": args[binding_at + 1],
-          "tools": ["mcp__oap__echo", "mcp__oap__echo", "mcp__oap__look"],
+          "model": "mock-model", "tools": ["mcp__oap__echo", "mcp__oap__echo", "mcp__oap__look"],
           "mcp_servers": [{"name": "oap"}]})
 
 Path("discovered").touch()

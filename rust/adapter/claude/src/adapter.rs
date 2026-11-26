@@ -15,7 +15,7 @@ use oxap_protocol::{
 use oxap_protocol::{SessionState, SessionStatus};
 
 use crate::{
-    catalog::native_source,
+    catalog::{self, native_source},
     native::{apply_flag_settings_request, initialize_request, settings_flags, FlagSettings},
     provider::{configure_environment, Header, Provider},
     rpc::{Process, ProcessConfig},
@@ -188,11 +188,11 @@ impl Adapter {
     }
 
     pub fn admit(&self, request: &OpenRequest) -> Result<(), Error> {
+        refuse_unadvertised_tools(request, &[])?;
         self.admit_flags(request).map(|_| ())
     }
 
     fn admit_flags(&self, request: &OpenRequest) -> Result<FlagSettings<'static>, Error> {
-        refuse_unadvertised_tools(request, &[])?;
         refuse_unadvertised_tool_sources(request, &[])?;
         refuse_unadvertised_settings(request, &self.describe().capabilities)?;
         let flags = settings_flags(
@@ -289,14 +289,35 @@ impl AdapterContract for Adapter {
 
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {
         Box::pin(async move {
+            refuse_unadvertised_tools(&request, &[])?;
+            self.open_staged(request).await
+        })
+    }
+}
+
+impl Adapter {
+    fn open_staged(&self, mut request: OpenRequest) -> BoxFuture<'_, Box<dyn SessionContract>> {
+        Box::pin(async move {
+            catalog::admit(&mut request.tools, &request.participant.id)?;
             let flags = self.admit_flags(&request)?;
             if request.reopen {
                 return Err(reopen_refused(
                     "reopening requires native settings recovery",
                 ));
             }
-            let initialize = initialize_request(&[]).map_err(Error::harness)?;
             let mut launch = self.spawn_plan()?;
+            let server = (!request.tools.is_empty()).then(|| catalog::SDK_SERVER.to_owned());
+            if server.is_some() {
+                if matches!(self.config.tools, ToolPosture::Unrestricted) {
+                    launch.args.push("--allowedTools".into());
+                }
+                for tool in &request.tools {
+                    launch
+                        .args
+                        .push(format!("{}{}", catalog::SDK_PREFIX, tool.name));
+                }
+            }
+            let initialize = initialize_request(server.as_slice()).map_err(Error::harness)?;
             let id = native_uuid()?;
             launch.args.extend(["--session-id".into(), id.clone()]);
             let process = Process::start(
@@ -331,6 +352,7 @@ impl AdapterContract for Adapter {
                 self.config.expand_prompts,
                 self.config.journal_capacity,
                 self.runtime.clone(),
+                request.tools,
             )?;
             session.exchange("initialize exchange", initialize)?;
             if flags != FlagSettings::default() {
