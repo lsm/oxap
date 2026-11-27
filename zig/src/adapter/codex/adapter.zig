@@ -467,6 +467,7 @@ pub const Session = struct {
     compact_above: usize = default_compact_above,
     retained: usize = 0,
     context_updates: std.ArrayList(ContextUpdate) = .empty,
+    source_arena: std.heap.ArenaAllocator,
     sources: []oap_types.ToolSourceDescriptor,
 
     const ContextUpdate = struct {
@@ -540,7 +541,9 @@ pub const Session = struct {
         errdefer reducer_arena.deinit();
         const resume_thread_id: []const u8 = if (request.reopen) try reducer_arena.allocator().dupe(u8, request.native_session_id) else "";
         const settings = try codexSettings(arena, request, refusal);
-        const sources = try publicSources(reducer_arena.allocator(), request.private_tool_sources);
+        var source_arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer source_arena.deinit();
+        const sources = try publicSources(source_arena.allocator(), request.private_tool_sources);
         const argv = try std.mem.concat(arena, []const u8, &.{ config.args, try serverArgs(arena, config) });
         const transport = process.Transport.open(gpa, .{
             .executable = config.executable,
@@ -563,6 +566,7 @@ pub const Session = struct {
             .participant = participant,
             .reducer_arena = reducer_arena,
             .transport = transport,
+            .source_arena = source_arena,
             .sources = sources,
             .reducer = session.Reducer.init(reducer_arena, .{
                 .session_id = id,
@@ -668,6 +672,7 @@ pub const Session = struct {
         self.transport.deinit();
         self.reducer_arena.deinit();
         gpa.destroy(self.reducer_arena);
+        self.source_arena.deinit();
         gpa.free(self.id);
         gpa.free(self.participant);
         gpa.destroy(self);
@@ -1555,6 +1560,50 @@ test "a reopen resumes the bound thread and reports the model it resumed under" 
     const reopened = try opened.state(probe.arena.allocator(), &refusal);
     try testing.expect(reopened.recovered);
     try testing.expectEqualStrings("gpt-resumed", reopened.current_model_id.?);
+}
+
+test "state serializes the renewed source after the first turn of a reopened session" {
+    var probe: Probe = undefined;
+    try probe.init(fake_resume_prelude ++
+        \\take; printf '{"id":1,"result":{"thread":{"id":"native-thread"},"model":"gpt-resumed","modelProvider":"openai","cwd":"/work","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite"}}}\n'
+        \\
+    ++ fake_text_turn ++ fake_idle);
+    defer probe.deinit();
+    const arena = probe.arena.allocator();
+    var refusal = contract.Refusal{};
+    var sources_at_open = [_]contract.ConfiguredSource{.{ .id = "tools", .kind = "remote", .endpoint = "https://original.example" }};
+    var request = contract.OpenRequest{ .session_id = "s1", .participant = "user", .private_tool_sources = &sources_at_open };
+    const original = try probe.openWith(request, &refusal);
+    var seen = std.ArrayList(contract.Event).empty;
+    _ = try probe.submit("before close", &refusal);
+    _ = try probe.pumpUntil("run.completed", &seen);
+    request.native_session_id = try arena.dupe(u8, original.nativeId());
+    try original.close();
+    probe.handle = null;
+
+    request.reopen = true;
+    sources_at_open[0].endpoint = "https://renewed.example";
+    sources_at_open[0].display_name = "Renewed tools";
+    const reopened = try probe.openWith(request, &refusal);
+    const live = Session.cast(reopened.ptr);
+    live.compact_above = 0;
+    _ = try probe.submit("after reopen", &refusal);
+    _ = try probe.pumpUntil("run.completed", &seen);
+    _ = try reopened.pump(0);
+
+    const state_response = try reopened.state(arena, &refusal);
+    const line = try oap_envelope.serializeEnvelope(.{
+        .id = "state",
+        .in_reply_to = "read",
+        .session_id = "s1",
+        .payload = .{ .session_state_response = state_response },
+    }, arena);
+    const payload = (try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{})).object.get("payload").?.object;
+    const sources = payload.get("sources").?.array.items;
+    try testing.expectEqual(@as(usize, 1), sources.len);
+    try testing.expectEqualStrings("tools", sources[0].object.get("id").?.string);
+    try testing.expectEqualStrings("Renewed tools", sources[0].object.get("display_name").?.string);
+    try testing.expectEqualStrings("https://renewed.example", sources[0].object.get("endpoint").?.string);
 }
 
 fn reopenedLevel(comptime effort: []const u8, requested: ?[]const u8) !?[]const u8 {
