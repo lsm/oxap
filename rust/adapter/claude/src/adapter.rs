@@ -296,6 +296,10 @@ impl AdapterContract for Adapter {
         })
     }
 
+    fn native_linker(&self) -> Option<&dyn oxap_adapter::NativeLinker> {
+        Some(self)
+    }
+
     fn native_lister(&self) -> Option<&dyn NativeLister> {
         Some(self)
     }
