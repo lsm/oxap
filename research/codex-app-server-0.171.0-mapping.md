@@ -125,3 +125,36 @@ model input boundary, so OAP reports `boundary: "unknown"`. When the run
 settles first, it drops pending steer requests with `run_terminated` before
 the terminal envelope. An unknown or finished target receives
 `invalid_steer_target` before the adapter sends guidance.
+
+## MCP tool-call approval
+
+Before an MCP tool call that needs approval, Codex 0.171.0 sends
+`mcpServer/elicitation/request` in `form` mode with
+`_meta.codex_approval_kind: "mcp_tool_call"`, the server name, `_meta.tool_name`
+and, when it offers remembering, `_meta.persist` (`"session"`, `"always"` or
+both). The feature `tool_call_mcp_elicitation` is stable and on by default, and
+the request carries no item id. It follows the `item/started` of the
+`mcpToolCall` it gates (`codex-rs/core/src/mcp_tool_call.rs` at
+`ccf9be8cc458`).
+
+The Zig adapter maps it to `action.permission.requested` on the one open
+`mcpToolCall` in that thread and turn whose server and tool match, offering
+`accept`, `decline`, and `acceptForSession` when `persist` offers `session`.
+It does not offer `cancel`: Codex reads an elicitation `cancel` as
+`ReviewDecision::Abort`, which only skips that call with "user cancelled MCP
+tool call" and lets the turn go on, while OAP's `cancel` means the run is
+cancelled. It answers Codex with `{action, content: null, _meta}`, where
+`acceptForSession` is `accept` with `_meta.persist: "session"`. Codex's
+`always` is not offered: Codex turns it into
+`ApprovedMcpPolicyAmendment`, a lasting approval beyond this session. A request with no turn, or one matching no open call or
+more than one, is answered `-32602`. Any other elicitation is still answered
+`-32601`. Before this mapping, the refusal made Codex report
+`user rejected MCP tool call`.
+
+`.claude/skills/verify/scripts/codex-mcp-tool-approval.py` checks this with
+the pinned CLI, a local Responses fixture and a local MCP server. The model
+calls the tool twice in each session. `accept` is asked both times,
+`acceptForSession` is asked once and both calls reach the server with
+`tools/call`, and `decline` is asked both times and reaches no call.
+Go and Rust do not map it yet, so the descriptor's `action.permissions` reason
+is unchanged until all three do.

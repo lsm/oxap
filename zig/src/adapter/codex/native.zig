@@ -19,6 +19,7 @@ pub const method_reasoning_delta = "item/reasoning/summaryTextDelta";
 pub const method_command_approval = "item/commandExecution/requestApproval";
 pub const method_file_approval = "item/fileChange/requestApproval";
 pub const method_user_input = "item/tool/requestUserInput";
+pub const method_mcp_elicitation = "mcpServer/elicitation/request";
 pub const method_token_usage = "thread/tokenUsage/updated";
 
 pub const turn_completed = "completed";
@@ -448,6 +449,19 @@ pub fn turnInterruptParams(arena: std.mem.Allocator, thread_id: []const u8, turn
 pub fn approvalResponse(arena: std.mem.Allocator, decision: []const u8) !std.json.Value {
     var result = object();
     try putText(arena, &result, "decision", decision);
+    return .{ .object = result };
+}
+
+pub fn elicitationResponse(arena: std.mem.Allocator, decision: []const u8) !std.json.Value {
+    var result = object();
+    const session = std.mem.eql(u8, decision, "acceptForSession");
+    try putText(arena, &result, "action", if (session) "accept" else decision);
+    try result.put(arena, "content", .null);
+    if (session) {
+        var meta = object();
+        try putText(arena, &meta, "persist", "session");
+        try result.put(arena, "_meta", .{ .object = meta });
+    } else try result.put(arena, "_meta", .null);
     return .{ .object = result };
 }
 

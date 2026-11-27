@@ -56,6 +56,22 @@ python3 .claude/skills/verify/scripts/codex-trusted-tool-approval.py zig/zig-out
 A local Responses fixture asks each session's model to call its one MCP tool.
 Expect the session whose capability file carries `"tool_approval":
 "approve"` to reach the MCP server with `tools/call`, and the session without
-it to reach no `tools/call`. A file with any other value must refuse the open.
-Repeat with `--approval-policy never`. No canary may appear in the hub output,
+it to reach no `tools/call`. Under `on-request` the approved session publishes
+no `action.permission.requested` and the other publishes one, which the script
+declines. A file with any other value must refuse the open. Repeat with
+`--approval-policy never`, where neither session is asked. No canary may appear in the hub output,
 bindings or Codex home.
+
+Run the MCP tool approval journey with the same pinned Codex CLI:
+
+```sh
+python3 .claude/skills/verify/scripts/codex-mcp-tool-approval.py zig/zig-out/bin/oxap \
+  --codex "$(command -v codex)"
+```
+
+The model calls its MCP tool twice in each of three sessions, and every
+`action.permission.requested` offers `accept`, `acceptForSession` and
+`decline`, never `cancel`. Under `accept`, both calls are asked and reach the
+MCP server. Under `acceptForSession`, only the first is asked and both reach
+it. Under `decline`, both are asked and neither reaches it. Each run
+completes. No canary may appear in the hub output or bindings.

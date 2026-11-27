@@ -8,6 +8,7 @@ import runpy
 import secrets
 import tempfile
 import threading
+import time
 
 CREATE = runpy.run_path(str(Path(__file__).with_name("codex-session-tool-sources.py")))
 HUB = CREATE["HUB"]
@@ -76,6 +77,32 @@ class Responses(CREATE["FixtureServer"]):
         self.wfile.write(data)
 
 
+def settle(hub, session, revision):
+    answered = set()
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        for frame in list(hub.seen):
+            event = frame.get("envelope", {})
+            if event.get("session_id") != session:
+                continue
+            if event.get("type") in {"run.completed", "run.failed", "run.cancelled"}:
+                return
+            if event.get("type") != "action.permission.requested" or event["payload"]["interaction_id"] in answered:
+                continue
+            asked = event["payload"]
+            answered.add(asked["interaction_id"])
+            resolution = HUB["envelope"]("action.permission.resolve.request", {
+                "session_id": session, "run_id": asked["run_id"], "interaction_id": asked["interaction_id"],
+                "requested_by": asked["requested_by"], "responded_by": asked["responded_by"],
+                "choice_id": "decline", "granted": False})
+            resolution.update(run_id=asked["run_id"], capability_revision=revision)
+            assert hub.call("resolve", session_id=session, request=resolution).get("ok"), f"resolve {session} failed"
+        frame = hub.lines.get(timeout=1)
+        if frame is not None:
+            hub.seen.append(frame)
+    raise AssertionError(f"{session} did not settle")
+
+
 def verify(binary, codex, root, server, policy):
     grants = root / "grants"
     grants.mkdir(mode=0o700)
@@ -110,6 +137,7 @@ def verify(binary, codex, root, server, policy):
                       "--session-tool-sources", str(grants), "--session-history", str(root / "bindings.jsonl"),
                       "--no-save-oapx-sessions"], root, "hub")
     try:
+        revision = hub.call("capabilities", adapter="codex")["result"]["capability_revision"]
         invalid = grant("invalid", "prompt")
         reply = hub.call("open", adapter="codex", request=HUB["envelope"]("session.open.request", {
             "session_id": "invalid", "tool_sources": [{"id": "tools", "kind": "remote", "credential_ref": invalid}]}))
@@ -125,14 +153,16 @@ def verify(binary, codex, root, server, policy):
                 "session_id": session, "delivery": "auto",
                 "messages": [{"role": "user", "content": f"fixture for session {session}"}]})
             assert hub.call("submit", session_id=session, request=request)["ok"]
-            CREATE["wait_terminal"](hub, session)
+            settle(hub, session, revision)
         calls = {label: sorted(method for seen, method in server.mcp_methods if seen == label and method == "tools/call")
                  for label in ("approved", "plain")}
         outputs = {label: [item.get("output") for item in items] for label, items in server.tool_outputs.items()}
         print(f"approval_policy={policy} MCP tools/call by session={calls}")
         print(f"tool outputs the model saw={json.dumps(outputs)[:600]}")
-        permission_requests = [frame for frame in hub.seen if frame.get("envelope", {}).get("type") == "action.permission.requested"]
-        print(f"permission requests published={len(permission_requests)}")
+        asked = {label: sum(1 for frame in hub.seen if frame.get("envelope", {}).get("type") == "action.permission.requested"
+                            and frame["envelope"].get("session_id") == label) for label in ("approved", "plain")}
+        print(f"permission requests by session={asked}")
+        assert asked == {"approved": 0, "plain": 1 if policy == "on-request" else 0}, "approval was asked of the wrong session"
         assert calls == {"approved": ["tools/call"], "plain": []}, "approval did not gate exactly the unapproved source"
         assert "approved tool ran" in json.dumps(outputs["approved"]), "the approved call's result did not reach the model"
         hub.stop()
