@@ -43,11 +43,11 @@ spending the valid grant, even if the registry now has a source with the same
 ID. A fresh grant must resume the same rollout with its prior turn and the
 rotated tool. After an idle park, the next turn must use the same rotated
 tool without another grant. Then close and reopen the session within the same
-hub with a renewed grant. The first turn after reopen sends a large prompt to exercise reducer
-arena compaction. Read session state and require the renewed public source
-descriptor. Expect four completed turns in total, one rollout and zero bearer
-or reference hits in the published frames, bindings, hub diagnostics or Codex
-home. Both model and MCP traffic use loopback fixtures.
+hub with a renewed grant. The first turn after reopen sends a large prompt to
+exercise reducer arena compaction. Read session state and require the renewed
+public source descriptor. Expect four completed turns in total, one rollout
+and zero bearer or reference hits in the published frames, bindings, hub
+diagnostics or Codex home. Both model and MCP traffic use loopback fixtures.
 
 Run the tool-approval journey with the same pinned Codex CLI:
 

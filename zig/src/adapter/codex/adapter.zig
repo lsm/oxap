@@ -467,6 +467,7 @@ pub const Session = struct {
     compact_above: usize = default_compact_above,
     retained: usize = 0,
     context_updates: std.ArrayList(ContextUpdate) = .empty,
+    source_arena: std.heap.ArenaAllocator,
     sources: []oap_types.ToolSourceDescriptor,
 
     const ContextUpdate = struct {
@@ -540,7 +541,9 @@ pub const Session = struct {
         errdefer reducer_arena.deinit();
         const resume_thread_id: []const u8 = if (request.reopen) try reducer_arena.allocator().dupe(u8, request.native_session_id) else "";
         const settings = try codexSettings(arena, request, refusal);
-        const sources = try publicSources(reducer_arena.allocator(), request.private_tool_sources);
+        var source_arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer source_arena.deinit();
+        const sources = try publicSources(source_arena.allocator(), request.private_tool_sources);
         const argv = try std.mem.concat(arena, []const u8, &.{ config.args, try serverArgs(arena, config) });
         const transport = process.Transport.open(gpa, .{
             .executable = config.executable,
@@ -563,6 +566,7 @@ pub const Session = struct {
             .participant = participant,
             .reducer_arena = reducer_arena,
             .transport = transport,
+            .source_arena = source_arena,
             .sources = sources,
             .reducer = session.Reducer.init(reducer_arena, .{
                 .session_id = id,
@@ -668,6 +672,7 @@ pub const Session = struct {
         self.transport.deinit();
         self.reducer_arena.deinit();
         gpa.destroy(self.reducer_arena);
+        self.source_arena.deinit();
         gpa.free(self.id);
         gpa.free(self.participant);
         gpa.destroy(self);
