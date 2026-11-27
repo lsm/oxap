@@ -17,6 +17,17 @@ The npm artifacts and extracted files have SHA-256 values:
 
 The old SDK package's recorded digest was reproduced before comparing declarations. The new SDK adds optional initialization, result and system fields and an `external-event` origin subtype. An isolated Linux process check using the 2.1.330 release binary and the candidate Go endpoint initialized OAP and opened a session without credentials. It did not execute a prompt; model execution and the new wire variants remain unverified.
 
+## Bound conversation reopen
+
+The Rust adapter replays the pinned `session-reopen` exchange. It supplies
+the host's native session UUID to `--resume`, initializes the child, applies
+any opening flags, and reads `get_settings`. Open reports the applied model
+and recognized effort, plus the effective compaction policy. The reopened
+conversation starts idle with an empty adapter journal. A bad binding
+refuses before launch. Native load refusal, an invalid settings response,
+or a different reported native identity prevents open from returning a
+session.
+
 ## Rust port divergence
 
 When a result reports queued work and a local child is still open, Go can

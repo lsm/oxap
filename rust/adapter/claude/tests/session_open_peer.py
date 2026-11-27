@@ -17,8 +17,15 @@ if mode == "provider":
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in os.environ
     assert os.environ["ANTHROPIC_CUSTOM_HEADERS"] == "X-Host: first\nX-Trace: two words\nx-trace: third"
 arguments = sys.argv[1:]
-binding = arguments[arguments.index("--session-id") + 1]
-assert uuid.UUID(binding).version == 4
+reopen = mode.startswith("reopen-")
+if reopen:
+    assert "--session-id" not in arguments and arguments.count("--resume") == 1
+    binding = arguments[-1]
+    case = json.loads(Path(os.environ["FIXTURE"]).with_name("case.json").read_text())
+    assert arguments[-2:] == ["--resume", case["identity_map"]["native_session_id"]]
+else:
+    binding = arguments[arguments.index("--session-id") + 1]
+    assert uuid.UUID(binding).version == 4
 Path("binding").write_text(binding)
 frames = [json.loads(line) for line in Path(os.environ["FIXTURE"]).read_text().splitlines()]
 
@@ -38,6 +45,38 @@ def exchange(expected, reply, refuse=False, observation=None, close_stdin=False)
     if observation:
         print(json.dumps(observation), flush=True)
     print(json.dumps(reply), flush=True)
+
+
+if reopen:
+    exchange(frames[0]["raw"], frames[1]["raw"], mode == "reopen-load-refused")
+    if mode != "reopen-load-refused":
+        if mode == "reopen-off":
+            exchange(
+                {"type": "control_request", "request": {
+                    "subtype": "apply_flag_settings", "settings": {"effortLevel": "max"},
+                }},
+                {"type": "control_response", "response": {"subtype": "success", "response": {}}},
+            )
+        reply = frames[3]["raw"]
+        settings = reply["response"]["response"]
+        observation = None
+        if mode == "reopen-off":
+            settings["applied"]["effort"] = "high"
+            settings["effective"] = {"autoCompactEnabled": False, "autoCompactWindow": 120000}
+        if mode == "reopen-tokens":
+            settings["applied"]["effort"] = "unrecognized"
+            settings["effective"] = {"autoCompactWindow": 120000}
+        if mode == "reopen-malformed":
+            settings["effective"] = []
+        if mode == "reopen-no-model":
+            settings["applied"].pop("model")
+        if mode == "reopen-wrong-binding":
+            observation = {"type": "system", "subtype": "init", "session_id": str(uuid.uuid4()),
+                           "model": "wrong-conversation", "tools": []}
+        exchange(frames[2]["raw"], reply, mode == "reopen-settings-refused", observation)
+    assert not sys.stdin.readline(), "extra native input after reopen"
+    Path("eof").touch()
+    sys.exit(0)
 
 
 init = next(frame["raw"] for frame in frames if isinstance(frame["raw"], dict)

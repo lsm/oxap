@@ -30,11 +30,12 @@ use oxap_protocol::{
     RunStatusUpdatedPayload, SessionSettingsUpdateRequest, SessionSettingsUpdateResponse,
     ToolChoice, UserInputRequestedPayload, UserInputResolvedPayload, FEATURE_TOOL_SELECTION,
 };
+use oxap_protocol::{CompactionKind, CompactionPolicy, ReasoningLevel, RecoveryMetadata};
 use serde::Deserialize;
 use serde_json::value::{to_raw_value, RawValue};
 
 use crate::{
-    adapter::{native_uuid, pin, Adapter, ENDPOINT_ID},
+    adapter::{native_uuid, pin, reopen_refused, Adapter, ENDPOINT_ID},
     catalog::{self, Catalog},
     native::{self, ControlRequest, Observation},
     rpc::{
@@ -1364,14 +1365,41 @@ impl OpenedSession {
         Ok(session)
     }
 
-    pub(crate) fn exchange(&self, name: &str, body: String) -> Result<(), Error> {
+    pub(crate) fn ready(
+        &self,
+        initialize: String,
+        flags: &native::FlagSettings<'_>,
+        reopened_id: Option<&str>,
+    ) -> Result<(), Error> {
+        if let Err(error) = self.exchange("initialize exchange", initialize) {
+            return Err(if reopened_id.is_some() {
+                reopen_refused(&format!(
+                    "Claude Code could not load the bound conversation: {error}"
+                ))
+            } else {
+                error
+            });
+        }
+        if *flags != native::FlagSettings::default() {
+            let settings = native::apply_flag_settings_request(flags).map_err(Error::harness)?;
+            self.exchange("apply_flag_settings", settings)?;
+        }
+        if let Some(id) = reopened_id {
+            self.recover_settings(id)?;
+        }
+        Ok(())
+    }
+
+    fn call(&self, name: &str, body: String) -> Result<Option<Vec<u8>>, Error> {
         let deadline = Some(Instant::now() + RPC_TIMEOUT);
-        let result = self
-            .process
+        self.process
             .client
             .call(body.as_bytes(), deadline)
-            .map_err(|error| Error::harness(format!("claude adapter: {name} failed: {error}")))?;
-        if let Some(body) = result {
+            .map_err(|error| Error::harness(format!("claude adapter: {name} failed: {error}")))
+    }
+
+    fn exchange(&self, name: &str, body: String) -> Result<(), Error> {
+        if let Some(body) = self.call(name, body)? {
             native::source::decode_object::<Option<serde::de::IgnoredAny>>(
                 &String::from_utf8_lossy(&body),
             )
@@ -1381,6 +1409,59 @@ impl OpenedSession {
                 ))
             })?;
         }
+        Ok(())
+    }
+
+    fn recover_settings(&self, id: &str) -> Result<(), Error> {
+        let request = native::get_settings_request().map_err(Error::harness)?;
+        let response = self.call("get_settings after resume", request)?;
+        let settings =
+            native::decode_settings(response.as_deref().unwrap_or(b"null")).map_err(|error| {
+                Error::harness(format!(
+                    "claude adapter: get_settings after resume: decode control response: {error}"
+                ))
+            })?;
+        if settings.applied.model.is_empty() {
+            return Err(Error::harness(
+                "claude adapter: get_settings returned no applied model",
+            ));
+        }
+        let level = match settings.applied.effort.as_str() {
+            "low" => ReasoningLevel::LOW,
+            "medium" => ReasoningLevel::MEDIUM,
+            "high" => ReasoningLevel::HIGH,
+            "xhigh" => ReasoningLevel::XHIGH,
+            "max" => ReasoningLevel::MAX,
+            _ => ReasoningLevel::default(),
+        };
+        let mut policy = CompactionPolicy {
+            kind: CompactionKind::AUTO,
+            ..CompactionPolicy::default()
+        };
+        if settings.effective.auto_compact_enabled == Some(false) {
+            policy.kind = CompactionKind::OFF;
+        } else if let Some(tokens) = settings
+            .effective
+            .auto_compact_window
+            .filter(|window| *window > 0)
+        {
+            policy.kind = CompactionKind::TOKENS;
+            policy.tokens = tokens;
+        }
+        let mut state = self.state.lock().unwrap();
+        if native_binding(&state.session).as_deref() != Some(id) {
+            return Err(Error::harness(
+                "claude adapter: resume selected a different session",
+            ));
+        }
+        state.session.current_model_id = settings.applied.model;
+        state.session.reasoning_level = level;
+        state.session.compaction_policy = Some(policy);
+        state.session.recovery = Some(RecoveryMetadata {
+            recovered: true,
+            reason: "Claude Code restored the conversation; model, effort and compaction settings belong to the loader, not the stored session".into(),
+            ..RecoveryMetadata::default()
+        });
         Ok(())
     }
 
@@ -1548,6 +1629,10 @@ pub(crate) fn bind(state: &mut SessionState, id: &str) {
     );
 }
 
+fn native_binding(state: &SessionState) -> Option<String> {
+    serde_json::from_str(state.metadata.get("claude_native_session_id")?.get()).ok()
+}
+
 impl Session for OpenedSession {
     fn state(&self) -> BoxFuture<'_, SessionState> {
         Box::pin(async {
@@ -1560,9 +1645,7 @@ impl Session for OpenedSession {
     }
 
     fn native_session_id(&self) -> Option<String> {
-        let state = self.state.lock().unwrap();
-        let metadata = &state.session.metadata;
-        serde_json::from_str(metadata.get("claude_native_session_id")?.get()).ok()
+        native_binding(&self.state.lock().unwrap().session)
     }
 
     fn close(&self) -> BoxFuture<'_, ()> {
