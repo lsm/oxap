@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.46] - 2026-11-27
+
+### Added
+
+- A Codex session tool source can be marked trusted in its capability file with `"tool_approval": "approve"`; Codex then runs that source's MCP tools without asking for approval, while other sources still need approval. ([#2029](https://github.com/lsm/oxap/pull/2029))
+- The Rust Claude adapter lists a workspace's local conversations, shows which have a live owner, resolves their titles and Desktop links, and reopens a bound conversation with the model, effort and compaction settings it recovers. ([#2026](https://github.com/lsm/oxap/pull/2026), [#2027](https://github.com/lsm/oxap/pull/2027), [#2028](https://github.com/lsm/oxap/pull/2028))
+- The staged Rust Claude adapter projects provided-tool calls as interactions owned by the session opener and returns the opener's resolutions to the SDK MCP server in either arrival order. ([#2024](https://github.com/lsm/oxap/pull/2024), [#2025](https://github.com/lsm/oxap/pull/2025))
+
 ## [0.1.0-alpha.45] - 2026-11-26
 
 ### Added
