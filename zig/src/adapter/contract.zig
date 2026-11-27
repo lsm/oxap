@@ -128,6 +128,7 @@ pub const ConfiguredSource = struct {
     args: []const []const u8 = &.{},
     environment: []const []const u8 = &.{},
     headers: []const std.http.Header = &.{},
+    approve_tools: bool = false,
 };
 
 pub const OpenRequest = struct {

@@ -631,6 +631,17 @@ private adapter pipe. Release verification checks the harness's home, including
 its rollout and configuration files, for persisted header values or references.
 Any hit blocks release.
 
+The file may also carry `"tool_approval": "approve"`, and no other value.
+It approves every tool of that one source at the harness, so the harness
+asks no one before calling them. The issuer sets it only for a server that
+authorizes each call itself, such as an integration's own operations server
+that checks the caller bound to the bearer. Like the headers, it is
+adapter-private: it never enters a public descriptor, session state or a
+binding, and the wire has no way to ask for it. The Codex adapter writes it as
+that server's `default_tools_approval_mode`, which Codex checks before it
+would raise an approval request. A source without it keeps the harness's own
+approval behaviour.
+
 Create and explicit reopen resolve fresh files. Idle wake reuses the resolved
 adapter-private attachment under
 [Decision 0040](0040-a-session-reopens-through-its-own-binding.md#a-reopen-restores-the-bound-tool-sources).
