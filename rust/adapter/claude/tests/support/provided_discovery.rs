@@ -172,8 +172,8 @@ fn provided_lifecycle_projects_and_cancels_only_permitted_calls() {
     use futures::StreamExt;
     use oxap_adapter::{testkit::RunTrace, SubmitRequest};
     use oxap_protocol::{
-        ActionCallPayload, Message, MessageContent, MessageRole, MessageSubmitRequest, RunStatus,
-        RunStatusUpdatedPayload,
+        ActionCallPayload, Message, MessageContent, MessageRole, MessageSubmitRequest,
+        RequestedDeliveryMode, RunStatus, RunStatusUpdatedPayload,
     };
 
     for mode in ["native-result", "sweep", "denied"] {
@@ -202,6 +202,7 @@ fn provided_lifecycle_projects_and_cancels_only_permitted_calls() {
         let session = block_on(adapter.open_staged(open.clone())).expect(mode);
         let submit = MessageSubmitRequest {
             session_id: open.session_id.clone(),
+            delivery: RequestedDeliveryMode::AUTO,
             messages: vec![Message {
                 role: MessageRole::USER,
                 content: MessageContent::from_text("go"),
