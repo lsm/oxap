@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const compat = @import("compat");
 const contract = @import("contract");
+const binding = @import("binding.zig");
 
 const Grant = struct {
     session_id: []const u8,
@@ -39,7 +40,7 @@ fn ownedByOperator(handle: std.Io.File.Handle) bool {
     return std.c.fstat(handle, &stat) == 0 and stat.uid == std.c.geteuid();
 }
 
-fn refuse(refusal: *contract.Refusal, id: []const u8) contract.Failure {
+pub fn refuse(refusal: *contract.Refusal, id: []const u8) contract.Failure {
     refusal.* = .{ .feature = contract.feature_tool_sources_attach, .reason = contract.reason_unsatisfiable, .source = id };
     return error.UnsupportedFeature;
 }
@@ -61,6 +62,11 @@ fn validReference(reference: []const u8) bool {
 
 fn equal(left: []const u8, right: []const u8) bool {
     return std.mem.eql(u8, left, right);
+}
+
+fn contains(ids: []const []const u8, id: []const u8) bool {
+    for (ids) |candidate| if (equal(candidate, id)) return true;
+    return false;
 }
 
 fn validSource(source: contract.ConfiguredSource) bool {
@@ -133,6 +139,14 @@ pub const Prepared = struct {
     pub fn claim(self: Prepared, refusal: *contract.Refusal) contract.Failure!void {
         try claimGrants(compat.fs.defaultIo(), self.dir, self.claims, refusal);
     }
+
+    pub fn bindingSources(self: Prepared, allocator: std.mem.Allocator) !binding.Sources {
+        const ids = try allocator.alloc([]const u8, self.sources.len);
+        for (ids, self.sources) |*id, source| id.* = try allocator.dupe(u8, source.id);
+        const credential_ids = try allocator.alloc([]const u8, self.claims.len);
+        for (credential_ids, self.claims) |*id, grant| id.* = try allocator.dupe(u8, grant.source_id);
+        return .{ .ids = ids, .credential_ids = credential_ids };
+    }
 };
 
 pub fn prepare(
@@ -140,7 +154,7 @@ pub fn prepare(
     dir: std.Io.Dir,
     registry: []const contract.ConfiguredSource,
     session_id: []const u8,
-    reopen: bool,
+    bound: ?binding.Sources,
     raw: []const u8,
     refusal: *contract.Refusal,
 ) contract.Failure!Prepared {
@@ -152,11 +166,15 @@ pub fn prepare(
     var claims: std.ArrayList(Claim) = .empty;
     for (list, 0..) |entry, index| {
         const id = text(entry, "id");
-        if (id.len == 0 or !equal(text(entry, "kind"), "remote") or reopen) return refuse(refusal, id);
+        if (id.len == 0 or !equal(text(entry, "kind"), "remote")) return refuse(refusal, id);
         for (sources[0..index]) |previous| {
             if (equal(previous.id, id)) return refuse(refusal, id);
         }
-        if (entry.object.contains("credential_ref")) {
+        const uses_credential = entry.object.contains("credential_ref");
+        if (bound) |record| {
+            if (!contains(record.ids, id) or uses_credential != contains(record.credential_ids, id)) return refuse(refusal, id);
+        }
+        if (uses_credential) {
             const reference = text(entry, "credential_ref");
             if (entry.object.count() != 3 or session_id.len == 0 or !validReference(reference)) return refuse(refusal, id);
             sources[index] = readGrant(arena, dir, reference, session_id, id) catch |err| {
@@ -174,6 +192,11 @@ pub fn prepare(
             } else return refuse(refusal, id);
         }
     }
+    if (bound) |record| for (record.ids) |id| {
+        for (sources) |source| {
+            if (equal(source.id, id)) break;
+        } else return refuse(refusal, id);
+    };
     return .{ .dir = dir, .sources = sources, .claims = claims.items };
 }
 

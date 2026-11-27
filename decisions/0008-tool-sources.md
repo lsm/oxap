@@ -576,9 +576,8 @@ The schema, protocol types, validator, fixtures and client types carry the
 member. This rule supersedes the
 [agent-service trust model](../drafts/agent-service.md#the-trust-model) and
 [tool sources on the wire](../drafts/agent-service.md#tool-sources-on-the-wire)
-for capability-backed stdio attachments. The hub consumes the reference
-during the create it authorizes. The binding and reopen rules below remain
-staged.
+for capability-backed stdio attachments. The Zig hub consumes the reference
+during the create or explicit reopen it authorizes.
 
 `credential_ref` is attachment-only and follows the same publication rule as
 other attachment-only fields. `headers` belongs exclusively to the

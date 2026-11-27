@@ -377,7 +377,7 @@ pub fn threadResumeParams(arena: std.mem.Allocator, thread_id: []const u8, host:
     try putNonEmpty(arena, &params, "cwd", host.cwd);
     try putNonEmpty(arena, &params, "approvalPolicy", host.approval_policy);
     try putNonEmpty(arena, &params, "sandbox", host.sandbox);
-    try host.settings.put(arena, &params, null);
+    try host.settings.put(arena, &params, host.mcp_servers);
     return .{ .object = params };
 }
 

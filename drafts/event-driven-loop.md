@@ -417,7 +417,8 @@ is admitted.
 time. A parked `backoff` run therefore leaves one entry in its reactor's deadline
 queue, and that entry loads it when the retry is due.
 
-A session with a live MCP server does not park, at least at first. A live job
+A session with a live MCP server parks only if the hub can restore its bound
+source on wake. A live job
 stops blocking a park once the job table leaves the session, as
 [Parking and 100,000 agents](#parking-and-100000-agents) says.
 
@@ -428,7 +429,7 @@ home, and run parking extends it rather than restating it:
 
 | Level | What it does | Condition |
 |---|---|---|
-| Session (#1615) | Stops an idle session's harness and keeps the session in Hub memory | No active run, no pending interaction, no live tool source or job. A third-party adapter parks only if it declares it can report live background work. For `oapx`, a job in the Hub's table does not count |
+| Session (#1615) | Stops an idle session's harness and keeps the session in Hub memory | No active run, no pending interaction, no tool source that cannot be restored, and no live job. A third-party adapter parks only if it declares it can report live background work. For `oapx`, a job in the Hub's table does not count |
 | Run (stage 7) | Saves a run to disk and frees it, on the new loop | The run is in `idle`, `gate`, `backoff` or a model or tool queue, and no tool source is live. A job in the table does not count |
 
 A subscriber blocks neither level. Both use one resident summary, so `state` can

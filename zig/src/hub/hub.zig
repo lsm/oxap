@@ -145,6 +145,8 @@ const Bound = struct {
     reasoning_level: []const u8 = "",
     compaction_policy: []const u8 = "",
     adopted: bool = false,
+    sources: binding.Sources = .{},
+    source_arena: ?std.heap.ArenaAllocator = null,
 
     fn deinit(self: *Bound, allocator: std.mem.Allocator) void {
         allocator.free(self.session_id);
@@ -155,6 +157,7 @@ const Bound = struct {
         allocator.free(self.directory);
         allocator.free(self.reasoning_level);
         allocator.free(self.compaction_policy);
+        if (self.source_arena) |*arena| arena.deinit();
         self.* = undefined;
     }
 };
@@ -486,9 +489,10 @@ const OpenedWith = struct {
     participant: []const u8,
     metadata_json: ?[]const u8,
     tools_json: ?[]const u8,
+    private_tool_sources: []const contract.ConfiguredSource,
     allow_degraded_features: []const []const u8,
 
-    fn init(allocator: std.mem.Allocator, request: OpenRequest) !OpenedWith {
+    fn init(allocator: std.mem.Allocator, request: OpenRequest, sources: []const contract.ConfiguredSource) !OpenedWith {
         var arena = std.heap.ArenaAllocator.init(allocator);
         errdefer arena.deinit();
         const keep = arena.allocator();
@@ -497,7 +501,22 @@ const OpenedWith = struct {
         const participant = try keep.dupe(u8, request.participant);
         const metadata_json = if (request.metadata) |value| try std.json.Stringify.valueAlloc(keep, value, .{}) else null;
         const tools_json = if (request.tools_json) |value| try keep.dupe(u8, value) else null;
-        return .{ .arena = arena, .participant = participant, .metadata_json = metadata_json, .tools_json = tools_json, .allow_degraded_features = features };
+        const private_tool_sources = try keep.alloc(contract.ConfiguredSource, sources.len);
+        for (sources, private_tool_sources) |source, *copy| {
+            const headers = try keep.alloc(std.http.Header, source.headers.len);
+            for (source.headers, headers) |header, *kept| {
+                const name = try keep.dupe(u8, header.name);
+                const value = try keep.dupe(u8, header.value);
+                kept.* = .{ .name = name, .value = value };
+            }
+            const id = try keep.dupe(u8, source.id);
+            const kind = try keep.dupe(u8, source.kind);
+            const display_name = try keep.dupe(u8, source.display_name);
+            const protocol = try keep.dupe(u8, source.protocol);
+            const endpoint = try keep.dupe(u8, source.endpoint);
+            copy.* = .{ .id = id, .kind = kind, .display_name = display_name, .protocol = protocol, .endpoint = endpoint, .headers = headers };
+        }
+        return .{ .arena = arena, .participant = participant, .metadata_json = metadata_json, .tools_json = tools_json, .private_tool_sources = private_tool_sources, .allow_degraded_features = features };
     }
 };
 
@@ -987,24 +1006,17 @@ pub const Hub = struct {
         }
         try contract.refuseUnadvertisedOpenElections(descriptor, &request.payload(), &refused.reason);
         var adapter_request = request.contractRequest("", "", false);
-        var prepared: ?session_tool_sources.Prepared = null;
-        if (descriptor.private_tool_sources) {
-            adapter_request.tool_sources_json = null;
-            if (request.tool_sources_json) |raw| {
-                const dir = self.session_tool_source_dir orelse return error.UnresolvableAttachment;
-                const attachments = try session_tool_sources.prepare(arena, dir, self.tool_sources, request.session_id, request.reopen, raw, &refused.reason);
-                adapter_request.private_tool_sources = attachments.sources;
-                prepared = attachments;
-            }
-        } else {
+        if (!descriptor.private_tool_sources) {
             try contract.refuseCredentialReferences(arena, request.tool_sources_json, &refused.reason);
+            try registered.adapter.admit(arena, adapter_request, &refused.reason);
         }
-        try registered.adapter.admit(arena, adapter_request, &refused.reason);
-        if (request.session_id.len > 0 and self.findSession(request.session_id) != null) return error.SessionExists;
+        const session_exists = request.session_id.len > 0 and self.findSession(request.session_id) != null;
+        if (session_exists and !descriptor.private_tool_sources) return error.SessionExists;
         var native_session_id: []const u8 = "";
         var bound_model_id: []const u8 = "";
         var adopted_native = false;
         var directory = request.directory;
+        var bound_sources: binding.Sources = .{};
         if (request.reopen and request.adopt_native_id.len > 0) {
             native_session_id = request.adopt_native_id;
             adopted_native = true;
@@ -1013,6 +1025,7 @@ pub const Hub = struct {
                 if (!std.mem.eql(u8, record.adapter_name, adapter_name)) return error.UnknownSession;
                 native_session_id = try arena.dupe(u8, record.native_id);
                 bound_model_id = record.model;
+                bound_sources = record.sources;
                 adopted_native = record.adopted;
                 if (request.directory.len > 0 and !std.mem.eql(u8, request.directory, record.directory)) return error.DirectoryMismatch;
                 directory = try arena.dupe(u8, record.directory);
@@ -1028,11 +1041,34 @@ pub const Hub = struct {
                 if (!std.mem.eql(u8, stored.record.adapter, adapter_name)) return error.UnknownSession;
                 native_session_id = stored.record.native_session_id;
                 bound_model_id = stored.record.model;
+                bound_sources = .{ .ids = stored.record.tool_source_ids, .credential_ids = stored.record.credential_tool_source_ids };
                 adopted_native = stored.record.adopted;
                 if (request.directory.len > 0 and !std.mem.eql(u8, request.directory, stored.record.directory)) return error.DirectoryMismatch;
                 directory = stored.record.directory;
             }
         }
+        var prepared: ?session_tool_sources.Prepared = null;
+        if (descriptor.private_tool_sources) {
+            adapter_request.tool_sources_json = null;
+            if (request.tool_sources_json != null or bound_sources.ids.len > 0) {
+                const dir = self.session_tool_source_dir orelse return error.UnresolvableAttachment;
+                const attachments = try session_tool_sources.prepare(
+                    arena,
+                    dir,
+                    self.tool_sources,
+                    request.session_id,
+                    if (request.reopen) bound_sources else null,
+                    request.tool_sources_json orelse "[]",
+                    &refused.reason,
+                );
+                adapter_request.private_tool_sources = attachments.sources;
+                prepared = attachments;
+            }
+            try registered.adapter.admit(arena, adapter_request, &refused.reason);
+        } else if (bound_sources.credential_ids.len > 0) {
+            return session_tool_sources.refuse(&refused.reason, bound_sources.credential_ids[0]);
+        }
+        if (session_exists) return error.SessionExists;
         const placed = try self.placedIn(registered, directory);
         if (request.reopen and directory.len > 0 and !std.mem.eql(u8, directory, placed.directory)) return error.DirectoryMismatch;
         adapter_request.native_session_id = native_session_id;
@@ -1051,12 +1087,18 @@ pub const Hub = struct {
         record.adopted = adopted_native;
         var kept = false;
         errdefer if (!kept) record.deinit(self.allocator);
+        if (prepared) |attachments| {
+            if (attachments.sources.len > 0) {
+                record.source_arena = std.heap.ArenaAllocator.init(self.allocator);
+                record.sources = try attachments.bindingSources(record.source_arena.?.allocator());
+            }
+        }
         const entry = try self.adopt(adapter_name, session, @intCast(self.clock() / std.time.ns_per_ms), registered.journal_capacity orelse self.journal_capacity);
         adopted = true;
         errdefer self.removeSession(entry);
         if (placed.directory.len > 0) entry.directory = try self.allocator.dupe(u8, placed.directory);
         entry.reopenable = reopenable(descriptor, request);
-        if (entry.reopenable) entry.opened = try OpenedWith.init(self.allocator, request);
+        if (entry.reopenable) entry.opened = try OpenedWith.init(self.allocator, request, adapter_request.private_tool_sources);
         self.keepBound(record);
         kept = true;
         self.recordBinding(if (request.reopen) .reopened else .opened, entry.session_id, opened_state.updated_at_ms orelse @intCast(self.clock() / std.time.ns_per_ms));
@@ -1071,7 +1113,7 @@ pub const Hub = struct {
     }
 
     fn reopenable(descriptor: contract.Descriptor, request: OpenRequest) bool {
-        if (contract.carriesEntries(request.tool_sources_json)) return false;
+        if (!descriptor.private_tool_sources and contract.carriesEntries(request.tool_sources_json)) return false;
         return descriptor.level(contract.feature_open_reopen) != .unavailable;
     }
 
@@ -1143,6 +1185,7 @@ pub const Hub = struct {
             .metadata = metadata,
             .allow_degraded_features = opened.allow_degraded_features,
             .tools_json = opened.tools_json,
+            .private_tool_sources = opened.private_tool_sources,
             .reopen = true,
             .native_session_id = record.native_id,
             .bound_model_id = record.model,
@@ -2388,6 +2431,8 @@ pub const Hub = struct {
             .model = bound.model,
             .reasoning_level = bound.reasoning_level,
             .compaction_policy = policy,
+            .tool_source_ids = bound.sources.ids,
+            .credential_tool_source_ids = bound.sources.credential_ids,
             .adopted = bound.adopted,
         } }) catch {};
     }
@@ -4140,6 +4185,23 @@ test "a session that cannot report live work never parks" {
     try testing.expect(!session.holdsNoLiveWork());
 }
 
+test "holding resolved tool sources releases its arena if an allocation fails" {
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn keepSources(allocator: std.mem.Allocator) !void {
+            const sources: []const contract.ConfiguredSource = &.{.{
+                .id = "tools",
+                .kind = "remote",
+                .protocol = "mcp",
+                .endpoint = "http://localhost/mcp",
+                .headers = &.{.{ .name = "X-Fixture", .value = "fixture" }},
+            }};
+            var opened = try OpenedWith.init(allocator, .{ .participant = "user" }, sources);
+            defer opened.arena.deinit();
+            try testing.expectEqualStrings("fixture", opened.private_tool_sources[0].headers[0].value);
+        }
+    }.keepSources, .{});
+}
+
 test "a wake reopens with the tools and metadata the session opened with" {
     var flaky = Flaky{ .allocator = testing.allocator, .fail_drain = false };
     flaky.keep = std.heap.ArenaAllocator.init(testing.allocator);
@@ -4155,7 +4217,7 @@ test "a wake reopens with the tools and metadata the session opened with" {
     _ = try hub.open(arena, "flaky", .{ .session_id = "kept" });
     const entry = hub.findSession("kept").?;
     entry.reopenable = true;
-    entry.opened = try OpenedWith.init(testing.allocator, .{ .participant = "user", .metadata = metadata, .tools_json = "[{\"name\":\"t\"}]" });
+    entry.opened = try OpenedWith.init(testing.allocator, .{ .participant = "user", .metadata = metadata, .tools_json = "[{\"name\":\"t\"}]" }, &.{});
     try testing.expect(try hub.park(arena, "kept"));
 
     flaky.saw_metadata = null;
@@ -4180,7 +4242,7 @@ test "a wake reopens with the settings the session had when it parked, not those
     _ = try hub.open(arena, "flaky", .{ .session_id = "changed" });
     const entry = hub.findSession("changed").?;
     entry.reopenable = true;
-    entry.opened = try OpenedWith.init(testing.allocator, .{ .participant = "user" });
+    entry.opened = try OpenedWith.init(testing.allocator, .{ .participant = "user" }, &.{});
     flaky.reasoning = "high";
     flaky.policy = "{\"mode\":\"auto\"}";
     try testing.expect(try hub.park(arena, "changed"));

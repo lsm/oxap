@@ -481,17 +481,19 @@ pub const Session = struct {
         try self.handshake(arena, refusal);
         self.reducer.openWithSources(try mcpServers(arena, request.private_tool_sources)) catch |err| return lift(err);
         try self.flush();
-        switch (try self.awaitSettled(arena, native.method_thread_start, refusal)) {
+        const method = if (request.reopen) native.method_thread_resume else native.method_thread_start;
+        switch (try self.awaitSettled(arena, method, refusal)) {
             .opened => return self,
             .refused => |refused| {
                 if (request.reopen) {
-                    refusal.* = .{ .feature = contract.feature_open_reopen, .reason = contract.reason_unsatisfiable, .detail = try describe(arena, refused) };
+                    const detail = if (self.sources.len > 0) "the Codex app-server refused thread/resume with attached tool sources" else try describe(arena, refused);
+                    refusal.* = .{ .feature = contract.feature_open_reopen, .reason = contract.reason_unsatisfiable, .detail = detail };
                     return error.UnsupportedFeature;
                 }
                 if (self.sources.len > 0) return refusal.fail(error.BackendFailed, "the Codex app-server refused thread/start with attached tool sources");
                 return refusal.fail(error.BackendFailed, try describe(arena, refused));
             },
-            else => return refusal.fail(error.BackendFailed, "the codex app-server answered thread/start with an unrelated settlement"),
+            else => return refusal.fail(error.BackendFailed, "the Codex app-server answered the thread open with an unrelated settlement"),
         }
     }
 
