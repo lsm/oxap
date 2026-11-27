@@ -82,6 +82,7 @@ struct Interrupt {
 
 struct PendingTurn {
     uuid: String,
+    message_id: MessageId,
     model: String,
     corroborated: Option<oneshot::Sender<()>>,
     buffered: Vec<TurnFrame>,
@@ -1061,7 +1062,7 @@ impl SessionData {
     fn start(&mut self, runtime: &Runtime) -> Admission {
         let turn = self.pending.take().ok_or(Error::SessionClosed)?;
         let session_id = self.session.session_id.clone();
-        let message_id: MessageId = runtime.new_id("message").into();
+        let message_id = turn.message_id;
         let run_id: RunId = runtime.new_id("run").into();
         let now = runtime.now_ms();
         let mut start = Envelope::new(
@@ -1080,13 +1081,14 @@ impl SessionData {
         start.session_id = Some(session_id.clone());
         start.run_id = Some(run_id.clone());
         start.sequence = Some(1);
-        start.timestamp_ms = Some(now);
+        let timestamp = runtime.now_ms();
+        start.timestamp_ms = Some(timestamp);
         start.capability_revision = Some(pin().capability_revision.clone());
         let stream = self.journal.follow(run_id.as_str(), 0);
         self.journal.append(start, false);
         self.session.status = SessionStatus::RUNNING;
         self.session.transcript_cursor = "1".into();
-        self.session.updated_at_ms = now;
+        self.session.updated_at_ms = timestamp;
         self.session.active_run_id = Some(run_id.clone());
         self.session.active_runs = vec![ActiveRun {
             run_id: run_id.clone(),
@@ -1475,17 +1477,20 @@ impl OpenedSession {
                 ..Default::default()
             }))
         })?;
-        let uuid = format!("turn-{}", native_uuid()?);
-        native::validate_turn_uuid(&uuid).map_err(Error::harness)?;
-        let frame =
-            native::new_user_turn(&uuid, &text, !self.expand_prompts).map_err(Error::harness)?;
         let (signal, corroborated) = oneshot::channel();
-        {
+        let (uuid, frame) = {
             let _operation = self.operation.lock().unwrap();
             let mut state = self.state.lock().unwrap();
             state.require_idle(&request.session_id)?;
+            let turn_id = self.runtime.new_id("turn");
+            let suffix = turn_id.strip_prefix("turn-").unwrap_or(&turn_id);
+            let uuid = format!("turn-{}-{suffix}", native_uuid()?);
+            native::validate_turn_uuid(&uuid).map_err(Error::harness)?;
+            let frame = native::new_user_turn(&uuid, &text, !self.expand_prompts)
+                .map_err(Error::harness)?;
             state.pending = Some(PendingTurn {
                 uuid: uuid.clone(),
+                message_id: self.runtime.new_id("message").into(),
                 model: state.session.current_model_id.clone(),
                 corroborated: Some(signal),
                 buffered: Vec::new(),
@@ -1494,7 +1499,8 @@ impl OpenedSession {
                     ..Default::default()
                 },
             });
-        }
+            (uuid, frame)
+        };
 
         let _abandon = AbandonPending {
             state: &self.state,
