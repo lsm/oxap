@@ -147,6 +147,12 @@ struct RunToolPolicy {
 }
 
 impl RunToolPolicy {
+    fn excludes(&self, name: &str) -> bool {
+        self.choice
+            .as_ref()
+            .is_some_and(|choice| !choice.permits(name, &[], false))
+    }
+
     fn deny(
         &mut self,
         control: &IncomingControl,
@@ -154,11 +160,7 @@ impl RunToolPolicy {
         native_id: &str,
         encode: impl FnOnce(&str) -> Result<String, serde_json::Error>,
     ) -> bool {
-        if self
-            .choice
-            .as_ref()
-            .is_none_or(|choice| choice.permits(name, &[], false))
-        {
+        if !self.excludes(name) {
             return false;
         }
         let reason = format!("{name} is excluded by this run's tool_choice");
@@ -175,7 +177,29 @@ impl RunToolPolicy {
 struct ObservedTool {
     native_id: String,
     payload: ActionCallPayload,
-    started: Option<EnvelopeId>,
+    progress: ToolProgress,
+}
+
+enum ToolProgress {
+    Native(Option<EnvelopeId>),
+    Provided { pending: bool },
+}
+
+impl ObservedTool {
+    fn cancel_provided(&mut self, runtime: &Runtime) -> Option<Envelope> {
+        let ToolProgress::Provided { pending } = &mut self.progress else {
+            return None;
+        };
+        if !std::mem::take(pending) {
+            return None;
+        }
+        Some(tool_event(
+            EnvelopeType::ACTION_CALL_CANCELLED,
+            &self.payload,
+            None,
+            runtime,
+        ))
+    }
 }
 
 struct PermissionGate {
@@ -321,7 +345,7 @@ impl SessionData {
                 let denied = policy.is_some_and(|policy| {
                     policy.deny(
                         &control,
-                        &input.tool_name,
+                        self.catalog.policy_name(&input.tool_name),
                         &input.tool_use_id,
                         native::deny_tool,
                     )
@@ -375,12 +399,12 @@ impl SessionData {
         let ControlRequest::CanUseTool(ask) = &control.value else {
             unreachable!()
         };
-        if turn
-            .policy
-            .deny(&control, &ask.tool_name, &ask.tool_use_id, |reason| {
-                native::permission_deny(reason, false)
-            })
-        {
+        if turn.policy.deny(
+            &control,
+            self.catalog.policy_name(&ask.tool_name),
+            &ask.tool_use_id,
+            |reason| native::permission_deny(reason, false),
+        ) {
             return;
         }
         let tool_call_id = self
@@ -426,7 +450,7 @@ impl SessionData {
             request_id: event.id.clone(),
         });
         self.append_event(event, false, runtime);
-        self.permission_status(runtime);
+        self.interaction_status(runtime);
     }
 
     fn resolve_gate(
@@ -505,12 +529,22 @@ impl SessionData {
         let gate = self.active.as_mut().unwrap().gates.remove(index);
         let event = gate.resolved(answers, runtime);
         self.append_event(event, false, runtime);
-        self.permission_status(runtime);
+        self.interaction_status(runtime);
     }
 
-    fn permission_status(&mut self, runtime: &Runtime) {
-        let gates = &self.active.as_ref().unwrap().gates;
-        let pending = gates.last().map(|gate| gate.payload.interaction_id.clone());
+    fn interaction_status(&mut self, runtime: &Runtime) {
+        let turn = self.active.as_ref().unwrap();
+        let pending = turn
+            .tools
+            .iter()
+            .rev()
+            .find(|tool| matches!(tool.progress, ToolProgress::Provided { pending: true }))
+            .and_then(|tool| tool.payload.interaction_id.clone())
+            .or_else(|| {
+                turn.gates
+                    .last()
+                    .map(|gate| gate.payload.interaction_id.clone())
+            });
         let run = &mut self.session.active_runs[0];
         run.status = if pending.is_some() {
             RunStatus::WAITING_FOR_INPUT
@@ -731,6 +765,7 @@ impl SessionData {
         let turn = self.active.as_mut().unwrap();
         self.tool_calls
             .insert(block.id.clone(), (turn.run_id.clone(), turn.tools.len()));
+        let provided = self.catalog.provided_tool(&block.name);
         let mut payload = ActionCallPayload {
             session_id: self.session.session_id.clone(),
             run_id: turn.run_id.clone(),
@@ -742,6 +777,28 @@ impl SessionData {
             arguments_json: Some(block.input.unwrap_or_else(|| to_raw_value(&()).unwrap())),
             ..Default::default()
         };
+        if let Some(provided) = provided {
+            let pending = !turn.policy.excludes(&provided.name);
+            payload.name.clone_from(&provided.name);
+            payload.source.clone_from(&provided.source);
+            payload.execution_owner = provided.execution_owner.clone();
+            payload.responded_by = Some(provided.execution_owner.clone());
+            let requested = pending.then(|| {
+                payload.interaction_id = Some(runtime.new_id("interaction").into());
+                tool_event(EnvelopeType::ACTION_CALL_REQUESTED, &payload, None, runtime)
+            });
+            payload.arguments_json = None;
+            turn.tools.push(ObservedTool {
+                native_id: block.id,
+                payload,
+                progress: ToolProgress::Provided { pending },
+            });
+            if let Some(event) = requested {
+                self.append_event(event, false, runtime);
+                self.interaction_status(runtime);
+            }
+            return Ok(());
+        }
         let requested = tool_event(EnvelopeType::ACTION_CALL_REQUESTED, &payload, None, runtime);
         payload.arguments_json = None;
         let started = tool_event(
@@ -753,7 +810,7 @@ impl SessionData {
         turn.tools.push(ObservedTool {
             native_id: block.id,
             payload,
-            started: Some(started.id.clone()),
+            progress: ToolProgress::Native(Some(started.id.clone())),
         });
         self.append_event(requested, false, runtime);
         self.append_event(started, false, runtime);
@@ -773,8 +830,15 @@ impl SessionData {
             return Ok(());
         }
         let tool = &mut turn.tools[*index];
-        let started = tool.started.take().ok_or("unmatched tool completion")?;
         let denied = turn.policy.denied.remove(&block.tool_use_id);
+        let ToolProgress::Native(started) = &mut tool.progress else {
+            if let Some(event) = tool.cancel_provided(runtime) {
+                self.append_event(event, false, runtime);
+                self.interaction_status(runtime);
+            }
+            return Ok(());
+        };
+        let started = started.take().ok_or("unmatched tool completion")?;
         let mut payload = tool.payload.clone();
         let kind = if block.is_error == Some(true) {
             let message = block
@@ -842,8 +906,10 @@ impl SessionData {
             let turn = self.active.as_mut().unwrap();
             let run_id = turn.run_id.clone();
             let denied = std::mem::take(&mut turn.policy.denied);
-            for tool in std::mem::take(&mut turn.tools) {
-                if let Some(started) = tool.started {
+            for mut tool in std::mem::take(&mut turn.tools) {
+                if let Some(event) = tool.cancel_provided(runtime) {
+                    self.append_event(event, false, runtime);
+                } else if let ToolProgress::Native(Some(started)) = tool.progress {
                     let mut payload = tool.payload;
                     let kind = if denied.contains(&tool.native_id) {
                         payload.error = Some(ProtocolError {

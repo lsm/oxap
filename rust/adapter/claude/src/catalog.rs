@@ -32,6 +32,16 @@ pub(crate) struct Catalog {
 }
 
 impl Catalog {
+    pub(crate) fn provided_tool(&self, native_name: &str) -> Option<&ToolDefinition> {
+        let name = native_name.strip_prefix(SDK_PREFIX)?;
+        self.provided.iter().find(|tool| tool.name == name)
+    }
+
+    pub(crate) fn policy_name<'a>(&'a self, native_name: &'a str) -> &'a str {
+        self.provided_tool(native_name)
+            .map_or(native_name, |tool| tool.name.as_str())
+    }
+
     pub(crate) fn attribution_for(&self, name: &str) -> &str {
         self.attribution.get(name).map_or("", String::as_str)
     }

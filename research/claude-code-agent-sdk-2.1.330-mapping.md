@@ -50,3 +50,9 @@ settles as an observed `run.failed` with the native abort reason.
 Rust returns the terminal status for a repeated cancellation of a cancelled
 run and a typed terminal error for a completed or failed run. Go returns run
 not found for these terminal runs.
+
+The staged Rust SDK MCP path projects a matching native tool use under the
+provided name and identifies the opener as both responder and owner. An
+early native result or run terminal cancels an unresolved call. The native
+hook and permission gate check tool choice against the provided name. Public
+session open continues to refuse tool provisioning, as in Go.
