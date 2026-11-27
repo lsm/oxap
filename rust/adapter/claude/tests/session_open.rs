@@ -12,7 +12,7 @@ use std::{
 use futures::{executor::block_on, FutureExt, StreamExt};
 use oxap_adapter::{
     testkit::RunTrace, Adapter as _, Error, InteractionResolution, OpenRequest, ReplayGap,
-    ResumeRequest, SubmitRequest,
+    ResumeRequest, SubmitRequest, CONTROL_UNSATISFIABLE,
 };
 use oxap_adapter_claude::{adapter::pin, Adapter, AuthMode, Config, Header, Provider, ToolPosture};
 use oxap_protocol::{
@@ -20,8 +20,8 @@ use oxap_protocol::{
     MessageContent, MessageRole, MessageSubmitRequest, ReasoningLevel, RequestedDeliveryMode,
     SessionSettingsUpdateRequest, ToolsListRequest, UserInputRequestedPayload,
     UserInputResolveRequest, FEATURE_DELIVERY_BTW, FEATURE_DELIVERY_QUEUE, FEATURE_DELIVERY_STEER,
-    FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION, FEATURE_STRUCTURED_OUTPUT, FEATURE_TOOLS_LIST,
-    FEATURE_TOOL_SELECTION,
+    FEATURE_INSTRUCTIONS, FEATURE_MODEL_SELECTION, FEATURE_OPEN_REOPEN, FEATURE_STRUCTURED_OUTPUT,
+    FEATURE_TOOLS_LIST, FEATURE_TOOL_SELECTION,
 };
 use serde_json::{json, Value};
 
@@ -39,6 +39,7 @@ fn fixture_config(mode: &str) -> (Config, tempfile::TempDir, Vec<Value>) {
         .join("../../..")
         .join(&pin().corpus);
     let corpus = corpus.join(match mode {
+        mode if mode.starts_with("reopen-") => "session-reopen/native.jsonl",
         "catalog" => "tools-catalog-sources/native.jsonl",
         "run-streaming" | "run-buffered" => "streaming-provenance/native.jsonl",
         "run-settlement" => "settlement-statuses/native.jsonl",
@@ -150,6 +151,131 @@ fn opens_and_closes_the_corpus_gateway() {
         open_fixture(mode);
     }
     println!("4/4 Claude startup cases passed");
+}
+
+fn reopen_case() -> (String, Value) {
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .join(&pin().corpus)
+        .join("session-reopen");
+    let case: Value =
+        serde_json::from_str(&fs::read_to_string(corpus.join("case.json")).unwrap()).unwrap();
+    let expected =
+        serde_json::from_str(&fs::read_to_string(corpus.join("expected-oap.json")).unwrap())
+            .unwrap();
+    (
+        case["identity_map"]["native_session_id"]
+            .as_str()
+            .unwrap()
+            .into(),
+        expected,
+    )
+}
+
+fn reopen_request(binding: String) -> OpenRequest {
+    OpenRequest {
+        session_id: "recovered-session".into(),
+        reopen: true,
+        native_session_id: binding,
+        ..Default::default()
+    }
+}
+
+#[test]
+fn claude_reopen_restores_the_bound_conversation_and_loader_settings() {
+    let (id, expected) = reopen_case();
+    for (mode, level, kind, tokens) in [
+        ("reopen-corpus", "", "auto", 0),
+        ("reopen-off", "high", "off", 0),
+        ("reopen-tokens", "", "tokens", 120_000),
+    ] {
+        let (adapter, directory, _) = fixture(mode);
+        let mut request = reopen_request(id.clone());
+        if mode == "reopen-off" {
+            request.reasoning_level = ReasoningLevel::MAX;
+        }
+        let session = block_on(adapter.open(request)).unwrap();
+        let state = block_on(session.state()).unwrap();
+        assert_eq!(state.session_id.as_str(), "recovered-session");
+        assert_eq!(state.status.as_str(), "idle");
+        assert!(state.active_runs.is_empty());
+        assert!(state.active_run_id.is_none());
+        assert_eq!(state.current_model_id, expected["current_model_id"]);
+        assert_eq!(state.reasoning_level.as_str(), level);
+        assert_eq!(
+            serde_json::to_value(state.recovery).unwrap(),
+            expected["recovery"]
+        );
+        let compaction = state.compaction_policy.unwrap();
+        assert_eq!(compaction.kind.as_str(), kind);
+        assert_eq!(compaction.tokens, tokens);
+        assert_eq!(session.native_session_id().as_deref(), Some(id.as_str()));
+        assert_eq!(
+            state.metadata["claude_native_session_id"].get(),
+            json!(id).to_string()
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("binding")).unwrap(),
+            id
+        );
+        assert!(matches!(
+            block_on(session.resume(ResumeRequest {
+                run_id: "prior-run".into(),
+                ..Default::default()
+            })),
+            Err(Error::RunNotFound)
+        ));
+        block_on(session.close()).unwrap();
+        assert!(directory.path().join("eof").is_file());
+        println!("PASS {mode}: bound conversation, idle settings, empty replay, and EOF");
+    }
+}
+
+fn assert_unsatisfiable_reopen(error: Error) {
+    let Error::UnsupportedControl(refusal) = error else {
+        panic!("expected a typed reopen refusal, got {error}");
+    };
+    assert_eq!(refusal.feature, FEATURE_OPEN_REOPEN);
+    assert_eq!(refusal.reason, CONTROL_UNSATISFIABLE);
+}
+
+#[test]
+fn claude_reopen_refuses_bad_bindings_and_native_load_errors() {
+    let (id, _) = reopen_case();
+    for binding in ["", "bad-binding"] {
+        let (adapter, directory, _) = fixture("reopen-corpus");
+        let request = reopen_request(binding.into());
+        assert_unsatisfiable_reopen(block_on(adapter.open(request)).err().unwrap());
+        assert!(!directory.path().join("binding").exists());
+    }
+    let (adapter, directory, _) = fixture("reopen-load-refused");
+    let error = block_on(adapter.open(reopen_request(id))).err().unwrap();
+    assert!(error.to_string().contains("fixture refusal"), "{error}");
+    assert_unsatisfiable_reopen(error);
+    assert!(directory.path().join("eof").is_file());
+    println!("PASS missing and invalid bindings refused before spawn, and native refusal closed the child");
+}
+
+#[test]
+fn claude_reopen_rejects_settings_failures_and_wrong_native_binding() {
+    let (id, _) = reopen_case();
+    for (mode, diagnostic) in [
+        ("reopen-settings-refused", "fixture refusal"),
+        ("reopen-malformed", "decode control response"),
+        ("reopen-no-model", "no applied model"),
+        (
+            "reopen-wrong-binding",
+            "resume selected a different session",
+        ),
+    ] {
+        let (adapter, directory, _) = fixture(mode);
+        let error = block_on(adapter.open(reopen_request(id.clone())))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains(diagnostic), "{mode}: {error}");
+        assert!(directory.path().join("eof").is_file());
+        println!("PASS {mode}: no recovered session and child observed EOF");
+    }
 }
 
 #[test]
