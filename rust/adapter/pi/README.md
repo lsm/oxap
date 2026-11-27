@@ -39,3 +39,9 @@ case-insensitively, and a repeated key keeps its last value. It closes by releas
 child at the shutdown timeout. A start given a deadline aborts and reaps the
 child when no state arrives by then, as Go's does when the caller's context
 ends.
+
+`adapter::Adapter` holds Go's descriptor, the refusals Go's `New` makes before
+any process starts, the launch arguments with `--no-extensions` appended, and
+the refusals Go's `Open` makes before it starts one. Opening a session is a
+later slice. Go's `Config.Factory` and `ProcessFactory` test seams have no
+twin yet, so an executable is always required.
