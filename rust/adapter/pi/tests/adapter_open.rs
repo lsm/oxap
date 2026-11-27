@@ -161,3 +161,24 @@ fn open_refuses_a_missing_participant_provided_tools_and_a_threshold_policy_as_g
         );
     }
 }
+
+#[test]
+fn open_refuses_an_unusable_reopen_binding_before_a_process_starts() {
+    let adapter = PiAdapter::new(config()).unwrap();
+    let error = futures::executor::block_on(adapter.open(OpenRequest {
+        participant: user(),
+        reopen: true,
+        native_session_id: r#"{"sessionId":"bound-session","sessionFile":"session.jsonl"}"#
+            .into(),
+        ..OpenRequest::default()
+    }))
+    .err()
+    .expect("an unusable binding must be refused");
+    match error {
+        Error::UnsupportedControl(control) => {
+            assert_eq!(control.feature, "session.open.reopen");
+            assert_eq!(control.reason, "unsatisfiable");
+        }
+        other => panic!("refusal={other}"),
+    }
+}
