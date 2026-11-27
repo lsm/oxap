@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.47] - 2026-11-27
+
+### Fixed
+
+- The Zig hub no longer aborts while saving session state on the first turn after a Codex session with tool sources is reopened, for example after archive and unarchive. ([#2038](https://github.com/lsm/oxap/pull/2038))
+
+### Changed
+
+- CI replays every case in the current and retained Claude corpora through the Rust Claude adapter. ([#2035](https://github.com/lsm/oxap/pull/2035))
+- The alpha.46 notes now list the Zig and Go Codex MCP approval and the Rust Claude transcript reads that shipped in it. ([#2034](https://github.com/lsm/oxap/pull/2034), [#2036](https://github.com/lsm/oxap/pull/2036), [#2037](https://github.com/lsm/oxap/pull/2037))
+
 ## [0.1.0-alpha.46] - 2026-11-27
 
 ### Added

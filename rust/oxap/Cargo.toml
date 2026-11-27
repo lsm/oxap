@@ -1,6 +1,6 @@
 [package]
 name = "oxap"
-version = "0.1.0-alpha.46"
+version = "0.1.0-alpha.47"
 edition = "2021"
 rust-version = "1.82"
 description = "OXAP for Rust: the oxap-sdk client for the oxap runtime, under the project's own name"
@@ -15,7 +15,7 @@ default = []
 download = ["oxap-sdk/download"]
 
 [dependencies]
-oxap-sdk = { version = "=0.1.0-alpha.46", path = "../sdk" }
+oxap-sdk = { version = "=0.1.0-alpha.47", path = "../sdk" }
 
 [lints.rust]
 unsafe_code = "forbid"
