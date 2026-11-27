@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use oxap_adapter::runtime::Runtime;
+use oxap_adapter::NativeLinker;
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
     Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, NativeListRequest,
@@ -296,8 +297,20 @@ impl AdapterContract for Adapter {
         })
     }
 
+    fn native_linker(&self) -> Option<&dyn NativeLinker> {
+        Some(self)
+    }
+
     fn native_lister(&self) -> Option<&dyn NativeLister> {
         Some(self)
+    }
+}
+
+impl NativeLinker for Adapter {
+    fn native_link(&self, native_id: &str) -> String {
+        native_list::claude_home()
+            .map(|home| native_list::link(&home, native_id))
+            .unwrap_or_default()
     }
 }
 

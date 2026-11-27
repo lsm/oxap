@@ -36,8 +36,12 @@ configured working directory supplies the workspace when the request omits
 it. A bounded read of the local session registry marks transcripts running
 when their recorded process still exists. Adoption checks the registry again
 before launch, including live sessions whose transcripts are absent or fall
-outside the listing limit. Transcript titles and desktop records remain
-unprojected.
+outside the listing limit. On macOS, local Desktop records hide archived
+sessions from the listing and supply titles and `claude://` links when
+available. The standalone linker also resolves archived Desktop sessions.
+Otherwise, titles come from the latest usable custom title in a bounded
+transcript window or the first usable user line from the head. User-line
+titles have a 120-byte UTF-8-safe limit.
 
 ## Rust port divergence
 
