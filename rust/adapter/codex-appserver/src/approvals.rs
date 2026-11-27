@@ -11,8 +11,9 @@ use serde_json::value::RawValue;
 use crate::adapter::ENDPOINT_ID;
 use crate::caller::Caller;
 use crate::native::{
-    ApprovalResponse, CommandApprovalParams, FileApprovalParams, METHOD_COMMAND_APPROVAL,
-    METHOD_FILE_APPROVAL,
+    ApprovalResponse, CommandApprovalParams, FileApprovalParams, McpElicitationParams,
+    McpElicitationResponse, McpElicitationResponseMeta, METHOD_COMMAND_APPROVAL,
+    METHOD_FILE_APPROVAL, METHOD_MCP_ELICITATION,
 };
 use crate::rpc::IncomingRequest;
 use crate::session::{Inner, Interaction, Shared};
@@ -33,6 +34,34 @@ fn decision(choice: &str, available: &[String]) -> Option<(bool, InteractionOutc
         "decline" => Some((false, InteractionOutcome::REJECTED)),
         "cancel" => Some((false, InteractionOutcome::CANCELLED)),
         _ => None,
+    }
+}
+
+fn offers_session(persist: Option<&RawValue>) -> bool {
+    let Some(persist) = persist else {
+        return false;
+    };
+    if let Ok(single) = serde_json::from_str::<String>(persist.get()) {
+        return single == "session";
+    }
+    serde_json::from_str::<Vec<String>>(persist.get())
+        .is_ok_and(|list| list.iter().any(|entry| entry == "session"))
+}
+
+fn elicitation_response(choice: &str) -> McpElicitationResponse {
+    if choice == "acceptForSession" {
+        return McpElicitationResponse {
+            action: "accept".into(),
+            content: None,
+            meta: Some(McpElicitationResponseMeta {
+                persist: "session".into(),
+            }),
+        };
+    }
+    McpElicitationResponse {
+        action: choice.into(),
+        content: None,
+        meta: None,
     }
 }
 
@@ -142,6 +171,7 @@ impl Shared {
                 request: request.clone(),
                 resolved: false,
                 choices: scope.decisions,
+                elicitation: false,
                 questions: None,
                 order,
             },
@@ -160,6 +190,92 @@ impl Shared {
             }
             .into(),
             description: scope.reason,
+            choices,
+            arguments_json: Some(item.arguments),
+        };
+        self.emit_call(
+            &mut inner,
+            &id,
+            EnvelopeType::ACTION_PERMISSION_REQUESTED,
+            &payload,
+            &item.tool_call,
+        );
+    }
+
+    pub(crate) fn tool_approval(&self, request: &Arc<IncomingRequest>) {
+        let params = request.params.as_deref().map_or("null", RawValue::get);
+        let params: McpElicitationParams = decode(params.as_bytes()).unwrap_or_default();
+        if params.mode != "form" || params.meta.codex_approval_kind != "mcp_tool_call" {
+            let data = serde_json::value::to_raw_value(
+                &serde_json::json!({"method": METHOD_MCP_ELICITATION}),
+            )
+            .ok();
+            let _ = request.respond_error_with(-32601, "unsupported Codex server request", data);
+            return;
+        }
+        let refuse = |message: &str| {
+            let _ = request.respond_error(-32602, message);
+        };
+        if params.thread_id != self.thread_id || params.turn_id.is_empty() {
+            return refuse("invalid approval request scope");
+        }
+        let mut inner = self.lock();
+        let Some(id) = self
+            .run_for(&inner, &params.thread_id, &params.turn_id)
+            .filter(|id| !inner.runs[id].terminal)
+        else {
+            return refuse("approval request does not target the active run");
+        };
+        let name = format!("mcp.{}.{}", params.server_name, params.meta.tool_name);
+        let mut open = inner
+            .items
+            .values()
+            .filter(|item| item.run == id && !item.terminal && item.name == name);
+        let Some(item) = open.next().cloned() else {
+            return refuse("approval request does not target an active action");
+        };
+        if open.next().is_some() {
+            return refuse("approval request does not target one active action");
+        }
+        let mut decisions = vec!["accept".to_owned()];
+        if offers_session(params.meta.persist.as_deref()) {
+            decisions.push("acceptForSession".to_owned());
+        }
+        decisions.extend(["decline".to_owned(), "cancel".to_owned()]);
+        let interaction = InteractionId::from(self.runtime.new_id("interaction"));
+        let order = inner.next_order;
+        inner.next_order += 1;
+        let choices = DECISIONS
+            .iter()
+            .filter(|(choice, _)| decisions.iter().any(|offered| offered == choice))
+            .map(|(choice, label)| PermissionChoice {
+                id: (*choice).into(),
+                label: (*label).into(),
+                ..PermissionChoice::default()
+            })
+            .collect();
+        inner.interactions.insert(
+            interaction.clone(),
+            Interaction {
+                run: id.clone(),
+                tool_call: item.tool_call.clone(),
+                request: request.clone(),
+                resolved: false,
+                choices: decisions,
+                elicitation: true,
+                questions: None,
+                order,
+            },
+        );
+        let payload = PermissionRequestedPayload {
+            interaction_id: interaction,
+            requested_by: ENDPOINT_ID.into(),
+            responded_by: self.participant.clone(),
+            session_id: inner.state.session_id.clone(),
+            run_id: id.clone(),
+            tool_call_id: Some(item.tool_call.clone()),
+            title: "Allow Codex MCP tool call".into(),
+            description: params.message,
             choices,
             arguments_json: Some(item.arguments),
         };
@@ -219,9 +335,13 @@ impl Shared {
             .filter(|(granted, _)| *granted == request.granted)
             .ok_or(Error::InvalidResolution)?;
         let (answer, tool_call) = (interaction.request.clone(), interaction.tool_call.clone());
+        let elicitation = interaction.elicitation;
         drop(inner);
         caller
             .call(&self.client, || {
+                if elicitation {
+                    return answer.respond(&elicitation_response(&request.choice_id));
+                }
                 answer.respond(&ApprovalResponse {
                     decision: request.choice_id.clone(),
                 })

@@ -153,7 +153,7 @@ fn fake() -> Arc<Fake> {
 #[test]
 fn each_approval_scenario_round_trips_as_go_does() {
     let scenarios: Vec<Scenario> = serde_json::from_str(include_str!("go_approvals.json")).unwrap();
-    assert_eq!(scenarios.len(), 8);
+    assert_eq!(scenarios.len(), 10);
     for scenario in scenarios {
         let fake = fake();
         let (adapter, session) = opened(&fake);

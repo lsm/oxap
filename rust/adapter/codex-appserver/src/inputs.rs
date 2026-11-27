@@ -118,6 +118,7 @@ impl Shared {
                 request: request.clone(),
                 resolved: false,
                 choices: Vec::new(),
+                elicitation: false,
                 questions: Some(questions.clone()),
                 order,
             },
