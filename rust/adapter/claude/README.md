@@ -97,6 +97,11 @@ publishes the source attribution for subsequent calls. Until a scoped
 response serves an observed catalog, only built-in attribution is available.
 An unscoped list exposes only the built-in source.
 
+The staged provisioning path hosts the provided definitions in the `oap` SDK
+MCP server and pre-allows their qualified names for Claude Code. The
+session catalog attributes an echoed name to the declared opener and source.
+The public provision capability stays gated until tool calls can be resolved.
+
 Top-level native tool uses emit requested and started events with a shared
 OAP call ID. Tool results complete or fail that call, and unfinished calls
 are cancelled in request order before the run settles. Results from an

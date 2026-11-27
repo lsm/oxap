@@ -31,7 +31,7 @@ use serde_json::value::{to_raw_value, RawValue};
 
 use crate::{
     adapter::{native_uuid, pin, Adapter, ENDPOINT_ID},
-    catalog::Catalog,
+    catalog::{self, Catalog},
     native::{self, ControlRequest, Observation},
     rpc::{
         ClientError, Inbound, IncomingControl, ObservationMessage, Process, DEFAULT_QUEUE_CAPACITY,
@@ -349,6 +349,17 @@ impl SessionData {
                     return;
                 }
             }
+            ControlRequest::McpMessage(request)
+                if request.server_name == catalog::SDK_SERVER
+                    && !self.catalog.provided.is_empty() =>
+            {
+                let _ = match catalog::discover(&self.catalog.provided, &request.message) {
+                    Ok(body) => control.respond(body.as_deref(), deadline),
+                    Err(error) => control.respond_error(&error.to_string(), deadline),
+                };
+                return;
+            }
+            ControlRequest::McpMessage(_) => "claude adapter: no such SDK MCP server",
             _ => "claude adapter: no owned run",
         };
         let _ = control.respond_error(rejection, deadline);
@@ -1170,10 +1181,13 @@ impl OpenedSession {
         expand_prompts: bool,
         journal_capacity: usize,
         runtime: Runtime,
+        provided: Vec<oxap_protocol::ToolDefinition>,
     ) -> Result<Self, Error> {
+        let mut catalog = Catalog::default();
+        catalog.provided = provided;
         let state = Arc::new(Mutex::new(SessionData {
             session: state,
-            catalog: Catalog::default(),
+            catalog,
             journal: Journal::new(journal_capacity),
             pending: None,
             active: None,
