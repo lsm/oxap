@@ -19,4 +19,4 @@ position. Both launch postures and the empty provision case must reach EOF on
 close.
 
 Invalid definitions must return a typed refusal before spawning. Public open
-must keep the same capability gate as Go until call resolution is available.
+must keep the same capability gate as Go while provisioning is staged.

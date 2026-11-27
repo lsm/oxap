@@ -55,4 +55,8 @@ The staged Rust SDK MCP path projects a matching native tool use under the
 provided name and identifies the opener as both responder and owner. An
 early native result or run terminal cancels an unresolved call. The native
 hook and permission gate check tool choice against the provided name. Public
-session open continues to refuse tool provisioning, as in Go.
+session open continues to refuse tool provisioning, as in Go. In the staged
+path the opener may acknowledge and then settle a call, or settle it in one
+step. The SDK MCP request and the opener's result can arrive in either order.
+A run or native tool result that cancels a pending call releases any held
+MCP request with an error. A late resolution returns the settlement ID.

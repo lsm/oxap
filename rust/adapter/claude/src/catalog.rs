@@ -221,11 +221,11 @@ pub(crate) fn admit(tools: &mut [ToolDefinition], opener: &ParticipantId) -> Res
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
-struct Message {
+pub(crate) struct Message {
     #[serde(deserialize_with = "source::raw")]
-    id: Raw,
-    method: String,
-    params: serde_json::Value,
+    pub(crate) id: Raw,
+    pub(crate) method: String,
+    pub(crate) params: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -237,9 +237,7 @@ struct ListedTool<'a> {
     input_schema: &'a Raw,
 }
 
-pub(crate) fn discover(tools: &[ToolDefinition], request: &Raw) -> Result<Raw, Error> {
-    let message = request.as_deref().map_or("null", RawValue::get);
-    let message = source::decode_object::<Message>(message).unwrap_or_default();
+pub(crate) fn discover(tools: &[ToolDefinition], message: Message) -> Result<Raw, Error> {
     let Some(id) = message.id else {
         return Ok(None);
     };
@@ -270,7 +268,7 @@ pub(crate) fn discover(tools: &[ToolDefinition], request: &Raw) -> Result<Raw, E
 
 const METHOD_NOT_FOUND: &str = r#"{"code":-32601,"message":"method not found"}"#;
 
-fn reply(id: &RawValue, key: &str, payload: &str) -> Result<Raw, Error> {
+pub(crate) fn reply(id: &RawValue, key: &str, payload: &str) -> Result<Raw, Error> {
     let body = format!(r#"{{"mcp_response":{{"jsonrpc":"2.0","id":{id},"{key}":{payload}}}}}"#);
     RawValue::from_string(body)
         .map(Some)

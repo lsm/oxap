@@ -164,7 +164,7 @@ fn provided_discovery_public_open_still_requires_the_capability() {
         Some(Error::UnsupportedControl(refusal))
             if refusal.feature == FEATURE_TOOLS_PROVIDE && refusal.reason == CONTROL_UNADVERTISED
     ));
-    println!("PASS public session open rejects provision until call resolution is supported");
+    println!("PASS public session open rejects provision while provisioning is staged");
 }
 
 #[test]
