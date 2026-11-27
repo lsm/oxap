@@ -71,7 +71,8 @@ if reopen:
         if mode == "reopen-no-model":
             settings["applied"].pop("model")
         if mode == "reopen-wrong-binding":
-            observation = {"type": "system", "subtype": "init", "session_id": str(uuid.uuid4())}
+            observation = {"type": "system", "subtype": "init", "session_id": str(uuid.uuid4()),
+                           "model": "wrong-conversation", "tools": []}
         exchange(frames[2]["raw"], reply, mode == "reopen-settings-refused", observation)
     assert not sys.stdin.readline(), "extra native input after reopen"
     Path("eof").touch()

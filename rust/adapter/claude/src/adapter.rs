@@ -16,7 +16,7 @@ use oxap_protocol::{SessionState, SessionStatus};
 
 use crate::{
     catalog::{self, native_source, SDK_PREFIX},
-    native::{apply_flag_settings_request, initialize_request, settings_flags, FlagSettings},
+    native::{initialize_request, settings_flags, FlagSettings},
     provider::{configure_environment, Header, Provider},
     rpc::{Process, ProcessConfig},
     session::{bind, OpenedSession},
@@ -300,11 +300,6 @@ impl Adapter {
         Box::pin(async move {
             catalog::admit(&mut request.tools, &request.participant.id)?;
             let flags = self.admit_flags(&request)?;
-            if request.reopen {
-                return Err(reopen_refused(
-                    "reopening requires native settings recovery",
-                ));
-            }
             let mut launch = self.spawn_plan()?;
             let server = (!request.tools.is_empty()).then(|| catalog::SDK_SERVER.to_owned());
             if server.is_some() {
@@ -316,8 +311,12 @@ impl Adapter {
                 }
             }
             let initialize = initialize_request(server.as_slice()).map_err(Error::harness)?;
-            let id = native_uuid()?;
-            launch.args.extend(["--session-id".into(), id.clone()]);
+            let (selector, id) = if request.reopen {
+                ("--resume", request.native_session_id)
+            } else {
+                ("--session-id", native_uuid()?)
+            };
+            launch.args.extend([selector.into(), id.clone()]);
             let process = Process::start(
                 &ProcessConfig {
                     path: launch.path,
@@ -352,10 +351,10 @@ impl Adapter {
                 self.runtime.clone(),
                 request.tools,
             )?;
-            session.exchange("initialize exchange", initialize)?;
-            if flags != FlagSettings::default() {
-                let settings = apply_flag_settings_request(&flags).map_err(Error::harness)?;
-                session.exchange("apply_flag_settings", settings)?;
+            let reopened_id = request.reopen.then_some(id.as_str());
+            if let Err(error) = session.ready(initialize, &flags, reopened_id) {
+                let _ = session.close().await;
+                return Err(error);
             }
             Ok(Box::new(session) as Box<dyn SessionContract>)
         })
@@ -371,7 +370,7 @@ pub(crate) fn native_uuid() -> Result<String, Error> {
     Ok(format!("{a:02x}{b:02x}{c:02x}{d:02x}-{e:02x}{f:02x}-{g:02x}{h:02x}-{i:02x}{j:02x}-{k:02x}{l:02x}{m:02x}{n:02x}{o:02x}{p:02x}"))
 }
 
-fn reopen_refused(detail: &str) -> Error {
+pub(crate) fn reopen_refused(detail: &str) -> Error {
     Error::UnsupportedControl(Box::new(UnsupportedControl {
         feature: FEATURE_OPEN_REOPEN.to_owned(),
         reason: CONTROL_UNSATISFIABLE,
