@@ -2302,5 +2302,615 @@
       }
     ],
     "resolutions": []
+  },
+  {
+    "name": "an_mcp_tool_approval_round_trips_for_the_session",
+    "steps": [
+      {
+        "notify": {
+          "method": "turn/started",
+          "params": {
+            "threadId": "native-thread",
+            "turn": {
+              "id": "native-turn",
+              "status": "inProgress"
+            }
+          }
+        }
+      },
+      {
+        "notify": {
+          "method": "item/started",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "item": {
+              "type": "mcpToolCall",
+              "id": "m1",
+              "server": "tools",
+              "tool": "lookup",
+              "status": "inProgress",
+              "arguments": {
+                "q": "x"
+              }
+            }
+          }
+        }
+      },
+      {
+        "request": {
+          "id": 1,
+          "method": "mcpServer/elicitation/request",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "serverName": "tools",
+            "environmentId": null,
+            "mode": "form",
+            "message": "Allow lookup?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {}
+            },
+            "_meta": {
+              "codex_approval_kind": "mcp_tool_call",
+              "tool_name": "lookup",
+              "persist": [
+                "session",
+                "always"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "await": 4
+      },
+      {
+        "resolve": {
+          "run_id": "run-02",
+          "responded_by": "user",
+          "permission": {
+            "interaction_id": "",
+            "requested_by": "codex.app-server",
+            "responded_by": "user",
+            "session_id": "session-1",
+            "run_id": "run-02",
+            "choice_id": "acceptForSession",
+            "granted": true
+          }
+        }
+      },
+      {
+        "notify": {
+          "method": "item/completed",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "item": {
+              "type": "mcpToolCall",
+              "id": "m1",
+              "server": "tools",
+              "tool": "lookup",
+              "status": "completed",
+              "arguments": {
+                "q": "x"
+              },
+              "result": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "ok"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "notify": {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "native-thread",
+            "turn": {
+              "id": "native-turn",
+              "status": "completed"
+            }
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 4
+        },
+        "sequence": 1,
+        "timestamp_ms": 5,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.call.requested",
+        "id": "event-07",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "requested_by": "codex.app-server",
+          "execution_owner": "codex.app-server",
+          "name": "mcp.tools.lookup",
+          "arguments_json": {
+            "q": "x"
+          }
+        },
+        "sequence": 2,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.call.started",
+        "id": "event-08",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "requested_by": "codex.app-server",
+          "execution_owner": "codex.app-server",
+          "name": "mcp.tools.lookup",
+          "arguments_json": {
+            "q": "x"
+          }
+        },
+        "sequence": 3,
+        "timestamp_ms": 7,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.permission.requested",
+        "id": "event-10",
+        "payload": {
+          "interaction_id": "interaction-09",
+          "requested_by": "codex.app-server",
+          "responded_by": "user",
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "title": "Allow Codex MCP tool call",
+          "description": "Allow lookup?",
+          "choices": [
+            {
+              "id": "accept",
+              "label": "Approve once"
+            },
+            {
+              "id": "acceptForSession",
+              "label": "Approve for session"
+            },
+            {
+              "id": "decline",
+              "label": "Deny"
+            }
+          ],
+          "arguments_json": {
+            "q": "x"
+          }
+        },
+        "sequence": 4,
+        "timestamp_ms": 8,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.permission.resolved",
+        "id": "event-11",
+        "payload": {
+          "interaction_id": "interaction-09",
+          "requested_by": "codex.app-server",
+          "responded_by": "user",
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "outcome": "resolved",
+          "choice_id": "acceptForSession",
+          "granted": true
+        },
+        "sequence": 5,
+        "timestamp_ms": 9,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.call.completed",
+        "id": "event-12",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "requested_by": "codex.app-server",
+          "execution_owner": "codex.app-server",
+          "name": "mcp.tools.lookup",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "ok"
+              }
+            ]
+          }
+        },
+        "sequence": 6,
+        "timestamp_ms": 10,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-13",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 7,
+        "timestamp_ms": 11,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      }
+    ],
+    "answers": [
+      {
+        "error": null,
+        "id": 1,
+        "result": {
+          "action": "accept",
+          "content": null,
+          "_meta": {
+            "persist": "session"
+          }
+        }
+      }
+    ],
+    "resolutions": [
+      "ok"
+    ]
+  },
+  {
+    "name": "an_elicitation_that_is_no_tool_approval_or_names_no_open_call_is_refused",
+    "steps": [
+      {
+        "notify": {
+          "method": "turn/started",
+          "params": {
+            "threadId": "native-thread",
+            "turn": {
+              "id": "native-turn",
+              "status": "inProgress"
+            }
+          }
+        }
+      },
+      {
+        "notify": {
+          "method": "item/started",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "item": {
+              "type": "mcpToolCall",
+              "id": "m1",
+              "server": "tools",
+              "tool": "lookup",
+              "status": "inProgress",
+              "arguments": {
+                "q": "x"
+              }
+            }
+          }
+        }
+      },
+      {
+        "await": 3
+      },
+      {
+        "request": {
+          "id": 1,
+          "method": "mcpServer/elicitation/request",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "serverName": "tools",
+            "environmentId": null,
+            "mode": "url",
+            "message": "Allow lookup?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {}
+            },
+            "_meta": null
+          }
+        }
+      },
+      {
+        "request": {
+          "id": 2,
+          "method": "mcpServer/elicitation/request",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "serverName": "tools",
+            "environmentId": null,
+            "mode": "form",
+            "message": "Allow lookup?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {}
+            },
+            "_meta": {
+              "codex_approval_kind": "mcp_tool_call",
+              "tool_name": "other"
+            }
+          }
+        }
+      },
+      {
+        "request": {
+          "id": 3,
+          "method": "mcpServer/elicitation/request",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": null,
+            "serverName": "tools",
+            "environmentId": null,
+            "mode": "form",
+            "message": "Allow lookup?",
+            "requestedSchema": {
+              "type": "object",
+              "properties": {}
+            },
+            "_meta": {
+              "codex_approval_kind": "mcp_tool_call",
+              "tool_name": "lookup"
+            }
+          }
+        }
+      },
+      {
+        "notify": {
+          "method": "item/completed",
+          "params": {
+            "threadId": "native-thread",
+            "turnId": "native-turn",
+            "item": {
+              "type": "mcpToolCall",
+              "id": "m1",
+              "server": "tools",
+              "tool": "lookup",
+              "status": "completed",
+              "arguments": {
+                "q": "x"
+              },
+              "result": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "ok"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        "notify": {
+          "method": "turn/completed",
+          "params": {
+            "threadId": "native-thread",
+            "turn": {
+              "id": "native-turn",
+              "status": "completed"
+            }
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.started",
+        "id": "event-05",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "status": "running",
+          "model_id": "glm-test",
+          "started_at_ms": 4
+        },
+        "sequence": 1,
+        "timestamp_ms": 5,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.call.requested",
+        "id": "event-07",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "requested_by": "codex.app-server",
+          "execution_owner": "codex.app-server",
+          "name": "mcp.tools.lookup",
+          "arguments_json": {
+            "q": "x"
+          }
+        },
+        "sequence": 2,
+        "timestamp_ms": 6,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.call.started",
+        "id": "event-08",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "requested_by": "codex.app-server",
+          "execution_owner": "codex.app-server",
+          "name": "mcp.tools.lookup",
+          "arguments_json": {
+            "q": "x"
+          }
+        },
+        "sequence": 3,
+        "timestamp_ms": 7,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "action.call.completed",
+        "id": "event-09",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "tool_call_id": "tool-call-06",
+          "requested_by": "codex.app-server",
+          "execution_owner": "codex.app-server",
+          "name": "mcp.tools.lookup",
+          "result": {
+            "content": [
+              {
+                "type": "text",
+                "text": "ok"
+              }
+            ]
+          }
+        },
+        "sequence": 4,
+        "timestamp_ms": 8,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "tool_call_id": "tool-call-06",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      },
+      {
+        "protocol": "open-agent-protocol",
+        "version": "0.1",
+        "profile": "open-agent-protocol.agent-control-core",
+        "type": "run.completed",
+        "id": "event-10",
+        "payload": {
+          "session_id": "session-1",
+          "run_id": "run-02",
+          "final_response": {
+            "id": "message-03",
+            "role": "assistant",
+            "content": ""
+          },
+          "stop_reason": "end_turn"
+        },
+        "sequence": 5,
+        "timestamp_ms": 9,
+        "session_id": "session-1",
+        "run_id": "run-02",
+        "capability_revision": "codex-appserver-0.171.0-oap-v1"
+      }
+    ],
+    "answers": [
+      {
+        "error": {
+          "code": -32601,
+          "data": {
+            "method": "mcpServer/elicitation/request"
+          },
+          "message": "unsupported Codex server request"
+        },
+        "id": 1,
+        "result": null
+      },
+      {
+        "error": {
+          "code": -32602,
+          "message": "approval request does not target an active action"
+        },
+        "id": 2,
+        "result": null
+      },
+      {
+        "error": {
+          "code": -32602,
+          "message": "invalid approval request scope"
+        },
+        "id": 3,
+        "result": null
+      }
+    ],
+    "resolutions": []
   }
 ]

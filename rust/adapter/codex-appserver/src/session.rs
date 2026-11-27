@@ -61,6 +61,7 @@ pub(crate) struct Interaction {
     pub(crate) request: Arc<IncomingRequest>,
     pub(crate) resolved: bool,
     pub(crate) choices: Vec<String>,
+    pub(crate) elicitation: bool,
     pub(crate) questions: Option<Vec<InputQuestion>>,
     pub(crate) order: u64,
 }
