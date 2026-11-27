@@ -4,7 +4,8 @@ use oxap_adapter::{Error, CONTROL_UNSATISFIABLE};
 use oxap_adapter_pi::reopen::{read_binding, SessionBinding};
 use oxap_protocol::FEATURE_OPEN_REOPEN;
 
-const HEADER: &str = "{\"type\":\"session\",\"id\":\"bound-session\",\"version\":3,\"cwd\":\"/workspace\"}\n";
+const HEADER: &str =
+    "{\"type\":\"session\",\"id\":\"bound-session\",\"version\":3,\"cwd\":\"/workspace\"}\n";
 
 fn binding_text(file: &Path) -> String {
     serde_json::json!({"sessionId": "bound-session", "sessionFile": file}).to_string()
@@ -31,7 +32,9 @@ fn assert_refused(outcome: Result<SessionBinding, Error>) {
         Err(Error::UnsupportedControl(control)) => {
             assert_eq!(control.feature, FEATURE_OPEN_REOPEN);
             assert_eq!(control.reason, CONTROL_UNSATISFIABLE);
-            assert!(control.detail.starts_with("Pi could not load its binding: "));
+            assert!(control
+                .detail
+                .starts_with("Pi could not load its binding: "));
         }
         other => panic!("binding must be refused as an unsatisfiable reopen: {other:?}"),
     }
@@ -106,14 +109,34 @@ fn keys_match_case_insensitively_and_unknown_header_members_are_ignored() {
         r#"{"SessionId":"bound-session","SESSIONFILE":"{file}"}"#,
         Some(HEADER.as_bytes()),
     ));
-    assert_bound(bound(br#"{"TYPE":"session","Id":"bound-session","extra":[1]}"#));
+    assert_bound(bound(
+        br#"{"TYPE":"session","Id":"bound-session","extra":[1]}"#,
+    ));
+}
+
+#[test]
+fn each_invalid_header_byte_reads_as_one_replacement_character() {
+    let header = b"{\"type\":\"session\",\"id\":\"\xe2\x82\"}";
+    assert!(read(
+        "{\"sessionId\":\"\u{FFFD}\u{FFFD}\",\"sessionFile\":\"{file}\"}",
+        Some(header),
+    )
+    .is_ok());
+    assert_refused(read(
+        "{\"sessionId\":\"\u{FFFD}\",\"sessionFile\":\"{file}\"}",
+        Some(header),
+    ));
 }
 
 #[test]
 fn the_header_is_the_first_line_with_or_without_a_terminator() {
-    assert_bound(bound(b"{\"type\":\"session\",\"id\":\"bound-session\"}\r\n"));
+    assert_bound(bound(
+        b"{\"type\":\"session\",\"id\":\"bound-session\"}\r\n",
+    ));
     assert_bound(bound(b"{\"type\":\"session\",\"id\":\"bound-session\"}"));
-    assert_bound(bound(b"{\"type\":\"session\",\"id\":\"bound-session\"}\nnot json\n"));
+    assert_bound(bound(
+        b"{\"type\":\"session\",\"id\":\"bound-session\"}\nnot json\n",
+    ));
 }
 
 #[test]
@@ -130,4 +153,5 @@ fn a_header_line_longer_than_sixty_four_kibibytes_is_refused() {
     assert_refused(bound(format!("{}\n", line((64 << 10) + 1)).as_bytes()));
     assert_refused(bound(line((64 << 10) + 1).as_bytes()));
     assert_refused(bound(format!("{}\r\n", line(64 << 10)).as_bytes()));
+    assert_refused(bound(format!("{}\r", line(64 << 10)).as_bytes()));
 }

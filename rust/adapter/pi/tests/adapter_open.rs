@@ -168,8 +168,7 @@ fn open_refuses_an_unusable_reopen_binding_before_a_process_starts() {
     let error = futures::executor::block_on(adapter.open(OpenRequest {
         participant: user(),
         reopen: true,
-        native_session_id: r#"{"sessionId":"bound-session","sessionFile":"session.jsonl"}"#
-            .into(),
+        native_session_id: r#"{"sessionId":"bound-session","sessionFile":"session.jsonl"}"#.into(),
         ..OpenRequest::default()
     }))
     .err()
