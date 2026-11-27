@@ -2516,10 +2516,6 @@
             {
               "id": "decline",
               "label": "Deny"
-            },
-            {
-              "id": "cancel",
-              "label": "Deny and cancel run"
             }
           ],
           "arguments_json": {

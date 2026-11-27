@@ -241,7 +241,7 @@ impl Shared {
         if offers_session(params.meta.persist.as_deref()) {
             decisions.push("acceptForSession".to_owned());
         }
-        decisions.extend(["decline".to_owned(), "cancel".to_owned()]);
+        decisions.push("decline".to_owned());
         let interaction = InteractionId::from(self.runtime.new_id("interaction"));
         let order = inner.next_order;
         inner.next_order += 1;
