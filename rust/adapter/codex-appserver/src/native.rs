@@ -20,6 +20,7 @@ pub const METHOD_REASONING_DELTA: &str = "item/reasoning/summaryTextDelta";
 pub const METHOD_COMMAND_APPROVAL: &str = "item/commandExecution/requestApproval";
 pub const METHOD_FILE_APPROVAL: &str = "item/fileChange/requestApproval";
 pub const METHOD_USER_INPUT: &str = "item/tool/requestUserInput";
+pub const METHOD_MCP_ELICITATION: &str = "mcpServer/elicitation/request";
 pub const METHOD_TOKEN_USAGE: &str = "thread/tokenUsage/updated";
 
 pub const TURN_COMPLETED: &str = "completed";
@@ -338,6 +339,45 @@ pub struct ApprovalResponse {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
+pub struct McpElicitationParams {
+    #[serde(default, rename = "threadId", deserialize_with = "zero")]
+    pub thread_id: String,
+    #[serde(default, rename = "turnId", deserialize_with = "zero")]
+    pub turn_id: String,
+    #[serde(default, rename = "serverName", deserialize_with = "zero")]
+    pub server_name: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub mode: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub message: String,
+    #[serde(default, rename = "_meta", deserialize_with = "structure")]
+    pub meta: McpElicitationMeta,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct McpElicitationMeta {
+    #[serde(default, deserialize_with = "zero")]
+    pub codex_approval_kind: String,
+    #[serde(default, deserialize_with = "zero")]
+    pub tool_name: String,
+    #[serde(default, deserialize_with = "raw")]
+    pub persist: Raw,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct McpElicitationResponse {
+    pub action: String,
+    pub content: Option<()>,
+    #[serde(rename = "_meta")]
+    pub meta: Option<McpElicitationResponseMeta>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct McpElicitationResponseMeta {
+    pub persist: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
 pub struct UserInputRequestParams {
     #[serde(default, rename = "threadId", deserialize_with = "zero")]
     pub thread_id: String,
@@ -398,6 +438,10 @@ impl oxap_adapter::gojson::Decode for ItemNotification {}
 impl oxap_adapter::gojson::Decode for CommandApprovalParams {}
 
 impl oxap_adapter::gojson::Decode for FileApprovalParams {}
+
+impl oxap_adapter::gojson::Decode for McpElicitationParams {}
+
+impl oxap_adapter::gojson::Decode for McpElicitationMeta {}
 
 impl oxap_adapter::gojson::Decode for UserInputRequestParams {}
 

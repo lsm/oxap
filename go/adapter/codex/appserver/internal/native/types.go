@@ -16,6 +16,7 @@ const (
 	MethodCommandApproval = "item/commandExecution/requestApproval"
 	MethodFileApproval    = "item/fileChange/requestApproval"
 	MethodUserInput       = "item/tool/requestUserInput"
+	MethodMcpElicitation  = "mcpServer/elicitation/request"
 	MethodTokenUsage      = "thread/tokenUsage/updated"
 )
 
@@ -254,6 +255,31 @@ const (
 
 type ApprovalResponse struct {
 	Decision ApprovalDecision `json:"decision"`
+}
+
+type McpElicitationRequestParams struct {
+	ThreadID   string              `json:"threadId"`
+	TurnID     *string             `json:"turnId"`
+	ServerName string              `json:"serverName"`
+	Mode       string              `json:"mode"`
+	Message    string              `json:"message"`
+	Meta       *McpElicitationMeta `json:"_meta"`
+}
+
+type McpElicitationMeta struct {
+	ApprovalKind string          `json:"codex_approval_kind"`
+	ToolName     string          `json:"tool_name"`
+	Persist      json.RawMessage `json:"persist"`
+}
+
+type McpElicitationResponse struct {
+	Action  string                      `json:"action"`
+	Content any                         `json:"content"`
+	Meta    *McpElicitationResponseMeta `json:"_meta"`
+}
+
+type McpElicitationResponseMeta struct {
+	Persist string `json:"persist"`
 }
 
 type UserInputRequestParams struct {

@@ -75,6 +75,21 @@ receivers or agent states. OAP tool call IDs are generated separately.
 The credential-free stdio hub replay covers these projections on all three
 adapters.
 
+## MCP tool-call approval in Rust
+
+The Rust adapter maps Codex's `mcpServer/elicitation/request` for an MCP tool
+call (`form` mode, `_meta.codex_approval_kind: "mcp_tool_call"`) to
+`action.permission.requested` on the one open action of the active run named
+`mcp.<server>.<tool>`. It offers `accept`, `decline`, and
+`acceptForSession` when `_meta.persist` offers `session`, and answers with
+`{action, content: null, _meta}`, sending `acceptForSession` as `accept` with
+`_meta.persist: "session"`. It offers neither `cancel`, which Codex reads as
+skipping only that call, nor `always`, a lasting approval beyond the session.
+A request for another thread, with no turn, or matching no open call or more
+than one, is answered `-32602`; any other elicitation `-32601`. The two scenarios at the
+end of `rust/adapter/codex-appserver/tests/go_approvals.json` are generated
+from the Go adapter, so both trees answer the same frames alike.
+
 ## Live context usage in Zig
 
 `thread/tokenUsage/updated` reports the latest call's
@@ -85,6 +100,19 @@ Codex recomputes usage before completing the item, so completion keeps fresh
 usage. The notification has no effective compaction threshold. Codex can clamp
 the configured limit and can count a different portion of context against it,
 so this adapter leaves the marker absent.
+
+## MCP tool-call approval in Go
+
+The Go adapter maps Codex's `mcpServer/elicitation/request` for an MCP tool
+call (`form` mode, `_meta.codex_approval_kind: "mcp_tool_call"`) to
+`action.permission.requested` on the one started, open action of the active
+run named `mcp.<server>.<tool>`. It offers `accept`, `decline`, and
+`acceptForSession` when `_meta.persist` offers `session`, and answers with
+`{action, content: null, _meta}`, sending `acceptForSession` as `accept` with
+`_meta.persist: "session"`. It offers neither `cancel`, which Codex reads as
+skipping only that call, nor `always`, a lasting approval beyond the session.
+A request for another thread, with no turn, or matching no open call or more
+than one, is answered `-32602`; any other elicitation `-32601`.
 
 ## Live turn steering in Zig
 

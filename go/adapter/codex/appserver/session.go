@@ -102,6 +102,7 @@ type interactionBinding struct {
 	questions         []protocol.InputQuestion
 	optionLabels      map[string]map[string]string
 	permissionChoices map[string]bool
+	elicitation       bool
 	order             uint64
 }
 
@@ -362,7 +363,11 @@ func (session *session) Resolve(ctx context.Context, resolution adapter.Interact
 		if !valid || request.Granted != granted {
 			return adapter.ErrInvalidResolution
 		}
-		if err := binding.request.Respond(ctx, native.ApprovalResponse{Decision: native.ApprovalDecision(request.ChoiceID)}); err != nil {
+		var response any = native.ApprovalResponse{Decision: native.ApprovalDecision(request.ChoiceID)}
+		if binding.elicitation {
+			response = elicitationResponse(request.ChoiceID)
+		}
+		if err := binding.request.Respond(ctx, response); err != nil {
 			return err
 		}
 		session.mu.Lock()
@@ -635,6 +640,8 @@ func (session *session) handleRequest(request *rpc.IncomingRequest) {
 			session.mu.Unlock()
 			_ = request.RespondError(context.Background(), -32603, "failed to expose approval request", nil)
 		}
+	case native.MethodMcpElicitation:
+		session.requestToolApproval(request)
 	case native.MethodUserInput:
 		var params native.UserInputRequestParams
 		if json.Unmarshal(request.Params, &params) != nil || params.ThreadID != session.threadID || params.TurnID == "" || len(params.Questions) == 0 {
@@ -696,6 +703,80 @@ func (session *session) handleRequest(request *rpc.IncomingRequest) {
 	default:
 		_ = request.RespondError(context.Background(), -32601, "unsupported Codex server request", map[string]string{"method": request.Method})
 	}
+}
+
+func (session *session) requestToolApproval(request *rpc.IncomingRequest) {
+	var params native.McpElicitationRequestParams
+	if json.Unmarshal(request.Params, &params) != nil || params.Mode != "form" || params.Meta == nil || params.Meta.ApprovalKind != "mcp_tool_call" {
+		_ = request.RespondError(context.Background(), -32601, "unsupported Codex server request", map[string]string{"method": request.Method})
+		return
+	}
+	if params.ThreadID != session.threadID || params.TurnID == nil || *params.TurnID == "" {
+		_ = request.RespondError(context.Background(), -32602, "invalid approval request scope", nil)
+		return
+	}
+	run := session.runFor(params.ThreadID, *params.TurnID)
+	if run == nil || !session.prepareEvent(run) {
+		_ = request.RespondError(context.Background(), -32602, "approval request does not target the active run", nil)
+		return
+	}
+	name := "mcp." + params.ServerName + "." + params.Meta.ToolName
+	session.mu.Lock()
+	var item itemBinding
+	found := false
+	for _, candidate := range session.items {
+		if candidate.runID != run.id || !candidate.started || candidate.terminal || candidate.name != name {
+			continue
+		}
+		if found {
+			session.mu.Unlock()
+			_ = request.RespondError(context.Background(), -32602, "approval request does not target one active action", nil)
+			return
+		}
+		item, found = candidate, true
+	}
+	if !found {
+		session.mu.Unlock()
+		_ = request.RespondError(context.Background(), -32602, "approval request does not target an active action", nil)
+		return
+	}
+	decisions := map[string]bool{"accept": true, "decline": true, "acceptForSession": offersSession(params.Meta.Persist)}
+	interactionID := protocol.InteractionID(session.ids.NewID("interaction"))
+	binding := &interactionBinding{kind: permissionInteraction, runID: run.id, toolCallID: item.toolCallID, requestedBy: endpointID, respondedBy: session.participant, request: request, permissionChoices: decisions, elicitation: true, order: session.nextOrder}
+	session.nextOrder++
+	session.interactions[interactionID] = binding
+	session.mu.Unlock()
+	payload := protocol.PermissionRequestedPayload{InteractionID: interactionID, RequestedBy: binding.requestedBy, RespondedBy: binding.respondedBy, SessionID: session.state.SessionID, RunID: run.id, ToolCallID: binding.toolCallID, Title: "Allow Codex MCP tool call", Description: params.Message, Choices: permissionChoices(decisions), ArgumentsJSON: item.arguments}
+	if err := session.emit(run, protocol.TypeActionPermissionRequested, payload, false); err != nil {
+		session.mu.Lock()
+		delete(session.interactions, interactionID)
+		session.mu.Unlock()
+		_ = request.RespondError(context.Background(), -32603, "failed to expose approval request", nil)
+	}
+}
+
+func offersSession(raw json.RawMessage) bool {
+	var single string
+	if json.Unmarshal(raw, &single) == nil {
+		return single == "session"
+	}
+	var list []string
+	if json.Unmarshal(raw, &list) != nil {
+		return false
+	}
+	for _, entry := range list {
+		if entry == "session" {
+			return true
+		}
+	}
+	return false
+}
+
+func elicitationResponse(choice string) native.McpElicitationResponse {
+	if choice == "acceptForSession" {
+		return native.McpElicitationResponse{Action: "accept", Meta: &native.McpElicitationResponseMeta{Persist: "session"}}
+	}
+	return native.McpElicitationResponse{Action: choice}
 }
 
 func approvalScope(method string, raw json.RawMessage) (threadID, turnID, itemID, reason string, decisions map[string]bool, err error) {
