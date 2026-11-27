@@ -384,7 +384,7 @@ if mode in {"submit-text", "submit-parts", "submit-abandon"} or mode.startswith(
     raw = sys.stdin.readline()
     frame = json.loads(raw)
     assert frame["uuid"].startswith("turn-")
-    assert uuid.UUID(frame["uuid"].removeprefix("turn-")).version == 4
+    assert uuid.UUID(frame["uuid"].removeprefix("turn-").rsplit("-", 1)[0]).version == 4
     expected = frames[2]["raw"]
     expected["uuid"] = frame["uuid"]
     if mode == "submit-parts":

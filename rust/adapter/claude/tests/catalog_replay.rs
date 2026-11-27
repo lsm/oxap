@@ -1,7 +1,7 @@
 #![cfg(unix)]
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::{
@@ -9,7 +9,10 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::Path,
-    sync::{mpsc, Arc},
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        mpsc, Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -17,18 +20,21 @@ use std::{
 use futures::executor::block_on;
 use oxap_adapter::{
     gojson::go_marshal,
-    testkit::{drain, next},
+    runtime::Runtime,
+    testkit::{drain, next, RunTrace},
     Adapter as _, Error, EventStream, InteractionResolution, OpenRequest, ResumeRequest, Session,
     SubmitRequest,
 };
 use oxap_adapter_claude::{adapter::pin, Adapter, Config, ToolPosture};
 use oxap_protocol::{
-    Envelope, InputAnswer, MessageSubmitRequest, ToolsListRequest, UserInputRequestedPayload,
-    UserInputResolveRequest, FEATURE_TOOLS_LIST,
+    Envelope, InputAnswer, MessageSubmitRequest, MessageSubmitResponse, RunCancelResponse,
+    ToolsListRequest, UserInputRequestedPayload, UserInputResolveRequest, FEATURE_TOOLS_LIST,
 };
 use serde_json::{json, Value};
 
 const LIMIT: Duration = Duration::from_secs(5);
+type Submission = Result<(MessageSubmitResponse, EventStream), Error>;
+type Cancellation = Result<RunCancelResponse, Error>;
 
 fn read(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
@@ -40,6 +46,7 @@ fn bytes(mut value: Value) -> String {
             event.as_object_mut().unwrap().remove("timestamp_ms");
         }
     }
+    value.sort_all_objects();
     go_marshal(&value.to_string())
 }
 
@@ -73,15 +80,19 @@ impl Peer {
     fn compare_write(&mut self, expected: &Value, pending: &mut VecDeque<Value>) -> Value {
         self.command(json!(["read"]));
         let mut actual = self.response();
-        if expected["request_id"] == "@request" {
+        if expected["type"] == "control_request" {
             let id = actual["request_id"].clone();
             assert!(!id.as_str().unwrap().is_empty());
             pending.push_back(id);
-            actual["request_id"] = json!("@request");
+            actual["request_id"] = expected["request_id"].clone();
         }
         let uuid = actual["uuid"].clone();
         if expected["type"] == "user" {
             assert!(!uuid.as_str().unwrap().is_empty());
+            assert_eq!(
+                uuid.as_str().unwrap().rsplit('-').next(),
+                expected["uuid"].as_str().unwrap().rsplit('-').next()
+            );
             actual["uuid"] = expected["uuid"].clone();
         }
         assert_eq!(bytes(actual), bytes(expected.clone()), "native write");
@@ -90,12 +101,12 @@ impl Peer {
 }
 
 struct Run {
-    id: oxap_protocol::RunId,
+    admission: MessageSubmitResponse,
     stream: EventStream,
     events: Vec<Envelope>,
 }
 
-fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
+fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value, historical: bool) {
     let fixture_home = tempfile::tempdir_in("/tmp").unwrap();
     let root = fixture_home.path();
     let peer = root.join("peer");
@@ -103,6 +114,8 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
     fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
     let listener = UnixListener::bind(root.join("wire")).unwrap();
     listener.set_nonblocking(true).unwrap();
+    let clock = AtomicI64::new(0);
+    let ids = AtomicI64::new(0);
     let adapter = Adapter::new(Config {
         executable: Some(peer.display().to_string()),
         model: Some("claude-test".into()),
@@ -116,11 +129,16 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
         tools: ToolPosture::Unrestricted,
         ..Default::default()
     })
-    .unwrap();
+    .unwrap()
+    .with_runtime(Runtime::new(
+        move || clock.fetch_add(1, Ordering::Relaxed) + 1,
+        move |kind| format!("{kind}-{}", ids.fetch_add(1, Ordering::Relaxed) + 1),
+    ));
     let native_id = definition["identity_map"]["native_session_id"]
         .as_str()
         .unwrap_or_default();
-    let reopened = expected.is_object();
+    let reopened = !native_id.is_empty();
+    let descriptor = block_on(adapter.probe()).unwrap();
     let request = OpenRequest {
         session_id: "session".into(),
         participant: serde_json::from_value(json!({"id":"user"})).unwrap(),
@@ -132,6 +150,7 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
         },
         ..Default::default()
     };
+    let opened = request.clone();
     let mut opening = Some(async_call(move || block_on(adapter.open(request))));
     let deadline = Instant::now() + LIMIT;
     let socket = loop {
@@ -145,8 +164,10 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
             Err(error) => panic!("peer connect: {error}"),
         }
     };
+    socket.set_nonblocking(false).unwrap();
     socket.set_read_timeout(Some(LIMIT)).unwrap();
     socket.set_write_timeout(Some(LIMIT)).unwrap();
+    let mut session: Option<Arc<dyn Session>> = None;
     let mut peer = Peer(BufReader::new(socket));
     let argv = peer.response();
     let binding = argv.as_array().unwrap().last().unwrap().as_str().unwrap();
@@ -158,13 +179,12 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
         );
     }
     let mut requests = VecDeque::new();
-    let mut session: Option<Arc<dyn Session>> = None;
-    let mut submission: Option<
-        mpsc::Receiver<Result<(oxap_protocol::MessageSubmitResponse, EventStream), Error>>,
-    > = None;
+    let mut submission: Option<mpsc::Receiver<Submission>> = None;
+    let mut submitted = None;
     let mut running = None;
-    let mut cancellation: Option<mpsc::Receiver<Result<oxap_protocol::RunCancelResponse, Error>>> =
-        None;
+    let mut cancellation: Option<mpsc::Receiver<Cancellation>> = None;
+    let mut cancelled = false;
+    let mut catalog = None;
     let mut delivered: Vec<Envelope> = Vec::new();
     let mut last_run: Vec<Envelope> = Vec::new();
     let mut turns = Vec::new();
@@ -182,10 +202,9 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
             && running.is_none()
         {
             if let Some(submitted) = submission.take() {
-                let (admission, stream): (oxap_protocol::MessageSubmitResponse, _) =
-                    complete(submitted).unwrap();
+                let (admission, stream) = complete(submitted).unwrap();
                 running = Some(Run {
-                    id: admission.run_id.unwrap(),
+                    admission,
                     stream,
                     events: vec![],
                 });
@@ -199,7 +218,7 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                 raw["response"]["request_id"] = requests.pop_front().unwrap();
                 peer.command(json!(["write", raw.to_string()]));
                 if let Some(cancelled) = cancellation.take() {
-                    let receipt: oxap_protocol::RunCancelResponse = complete(cancelled).unwrap();
+                    let receipt = complete(cancelled).unwrap();
                     assert!(receipt.accepted);
                 }
             }
@@ -209,6 +228,7 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                 let request: MessageSubmitRequest = serde_json::from_value(json!({
                     "session_id": "session", "delivery": "auto", "messages": [raw["message"].clone()]
                 })).unwrap();
+                submitted = Some(request.clone());
                 submission = Some(async_call(move || {
                     block_on(session.submit(SubmitRequest {
                         request,
@@ -219,9 +239,6 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                 turns.push((raw["uuid"].clone(), uuid));
             }
             "observe" => {
-                if raw["session_id"] == native_id {
-                    raw["session_id"] = json!(binding);
-                }
                 for key in [
                     "uuid",
                     "user_message_uuid",
@@ -252,30 +269,38 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                 peer.command(json!(["write", raw.as_str().unwrap()]));
             }
             "drain" => {
-                if let Some(run) = running.as_mut() {
-                    run.events.push(next(&mut run.stream, LIMIT));
-                    if matches!(
-                        definition["id"].as_str(),
-                        Some("process-exit" | "malformed-stdout" | "queued-continuation")
-                    ) {
-                        run.events.push(next(&mut run.stream, LIMIT));
-                    }
-                }
+                peer.command(json!([
+                    "write",
+                    json!({
+                        "type": "control_request",
+                        "request_id": "replay-barrier",
+                        "request": {"subtype": "barrier"}
+                    })
+                    .to_string()
+                ]));
+                peer.command(json!(["read"]));
+                assert_eq!(peer.response()["response"]["request_id"], "replay-barrier");
             }
             "wait-run" => {
                 let mut run = running.take().unwrap();
                 run.events.extend(drain(&mut run.stream, LIMIT));
                 last_run = run.events;
                 delivered.extend(last_run.iter().cloned());
+                let mut trace = RunTrace::new(run.admission, descriptor.clone(), last_run.clone());
+                trace.opened = Some(opened.clone());
+                trace.submitted = submitted.take();
+                trace.catalog = catalog.clone();
+                trace.cancelled = std::mem::take(&mut cancelled);
+                trace.assert_valid();
             }
             "oap-control" => {
                 let session = session.as_ref().unwrap();
                 match control {
                     "resolve" => {
                         let run = running.as_mut().unwrap();
-                        let interaction_id = loop {
+                        let request = loop {
                             let event = next(&mut run.stream, LIMIT);
-                            let request = (event.envelope_type.as_str() == "user_input.requested")
+                            let request = (event.envelope_type.as_str() == "user.input.requested")
                                 .then(|| {
                                     serde_json::from_str::<UserInputRequestedPayload>(
                                         event.payload.as_ref().unwrap().get(),
@@ -284,13 +309,14 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                                 });
                             run.events.push(event);
                             if let Some(request) = request {
-                                break request.interaction_id;
+                                break request;
                             }
                         };
                         block_on(session.resolve(InteractionResolution {
                             input: Some(UserInputResolveRequest {
                                 session_id: "session".into(),
-                                interaction_id,
+                                interaction_id: request.interaction_id,
+                                responded_by: request.responded_by,
                                 answers: vec![InputAnswer {
                                     question_id: "decision".into(),
                                     selected_option_ids: vec![
@@ -306,7 +332,8 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                     }
                     "cancel" => {
                         let session = session.clone();
-                        let id = running.as_ref().unwrap().id.clone();
+                        let id = running.as_ref().unwrap().admission.run_id.clone().unwrap();
+                        cancelled = true;
                         cancellation = Some(async_call(move || block_on(session.cancel(id))));
                         peer.compare_write(&json!({"type":"control_request","request_id":"@request","request":{"subtype":"interrupt"}}), &mut requests);
                     }
@@ -321,11 +348,14 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
                         request
                             .allow_degraded_features
                             .push(FEATURE_TOOLS_LIST.into());
-                        let got = block_on(tools.tools(request)).unwrap().tools;
+                        let got = block_on(tools.tools(request.clone())).unwrap();
                         assert_eq!(
-                            bytes(serde_json::to_value(got).unwrap()),
+                            bytes(serde_json::to_value(&got.tools).unwrap()),
                             bytes(raw["catalog"].clone())
                         );
+                        if got.tools.session_id.is_some() {
+                            catalog = Some((request, got));
+                        }
                     }
                     "assert-state" => assert_eq!(
                         block_on(session.state()).unwrap().status.as_str(),
@@ -363,10 +393,22 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
     assert!(
         submission.is_none() && running.is_none() && cancellation.is_none() && requests.is_empty()
     );
-    let session = session.unwrap_or_else(|| Arc::from(complete(opening.take().unwrap()).unwrap()));
-    if reopened {
+    let session =
+        session.get_or_insert_with(|| Arc::from(complete(opening.take().unwrap()).unwrap()));
+    if !exited {
+        peer.command(json!(["end"]));
+    }
+    let state = if reopened {
+        Some(block_on(session.state()).unwrap())
+    } else {
+        None
+    };
+    block_on(session.close()).unwrap();
+    if !exited {
+        assert_eq!(peer.response(), "eof", "extra native output");
+    }
+    if let Some(state) = state {
         assert_eq!(session.native_session_id().as_deref(), Some(native_id));
-        let state = block_on(session.state()).unwrap();
         assert_eq!(state.status.as_str(), "idle");
         assert!(state.active_runs.is_empty());
         let state = serde_json::to_value(state).unwrap();
@@ -379,8 +421,10 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
             bytes(expected)
         );
     } else {
-        for event in expected.as_array_mut().unwrap() {
-            event["capability_revision"] = json!(pin().capability_revision);
+        if historical {
+            for event in expected.as_array_mut().unwrap() {
+                event["capability_revision"] = json!(pin().capability_revision);
+            }
         }
         let actual = serde_json::to_value(delivered).unwrap();
         assert_eq!(
@@ -403,36 +447,34 @@ fn replay(path: &Path, definition: &Value, native: &Path, mut expected: Value) {
             );
         }
     }
-    if !exited {
-        peer.command(json!(["end"]));
-    }
-    block_on(session.close()).unwrap();
-    if !exited {
-        assert_eq!(peer.response(), "eof", "extra native output");
-    }
 }
 
 #[test]
 fn catalog_cases_match_the_shared_trace() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let catalog = read(&root.join("harnesses/claude-code.json"));
+    let catalog = oxap_harness::Catalog::embedded()
+        .harness("claude-code")
+        .unwrap();
+    let mut replayed_versions = HashSet::new();
     let mut total = 0;
     let mut failed = Vec::new();
-    for version in catalog["versions"].as_array().unwrap() {
-        let label = version["label"].as_str().unwrap();
-        let dir = match version["corpus"].as_str() {
-            Some(dir) => root.join(dir),
-            None => root
-                .join("fixtures/adapters")
-                .join(format!("claude-code-{label}")),
+    for version in &catalog.versions {
+        let label = version.label.as_str();
+        let dir = if version.corpus.is_empty() {
+            root.join("fixtures/adapters")
+                .join(format!("claude-code-{label}"))
+        } else {
+            root.join(&version.corpus)
         };
-        if version["corpus"].is_null() && !dir.exists() {
+        if version.corpus.is_empty() && label != pin().corpus_from && !dir.exists() {
             continue;
         }
+        assert!(replayed_versions.insert(label));
         let manifest = read(&dir.join("manifest.json"));
         assert_eq!(manifest["tag"], label);
         let cases = manifest["cases"].as_array().unwrap();
         assert!(!cases.is_empty());
+        let mut ids = HashSet::new();
         for case in cases {
             let path = dir.join(case["path"].as_str().unwrap());
             let definition = read(&path.join("case.json"));
@@ -440,7 +482,14 @@ fn catalog_cases_match_the_shared_trace() {
             let native = path.join(definition["native"].as_str().unwrap());
             let expected = read(&path.join(definition["expected_oap"].as_str().unwrap()));
             let id = case["id"].as_str().unwrap();
-            if std::panic::catch_unwind(|| replay(&path, &definition, &native, expected)).is_ok() {
+            assert!(ids.insert(id), "duplicate case {label}/{id}");
+            let historical = label != pin().label;
+            println!("REPLAY {label}/{id}");
+            if std::panic::catch_unwind(|| {
+                replay(&path, &definition, &native, expected, historical)
+            })
+            .is_ok()
+            {
                 println!("PASS {label}/{id}");
             } else {
                 failed.push(format!("{label}/{id}"));
@@ -448,7 +497,11 @@ fn catalog_cases_match_the_shared_trace() {
             total += 1;
         }
     }
-    assert!(total > 0);
+    assert!(replayed_versions.contains(pin().label.as_str()));
+    assert!(
+        replayed_versions.len() >= 3,
+        "current corpus and two retained corpora are required"
+    );
     println!(
         "{}/{} Claude corpus cases passed",
         total - failed.len(),

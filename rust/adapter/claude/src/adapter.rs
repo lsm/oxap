@@ -152,6 +152,11 @@ impl Adapter {
         })
     }
 
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     pub fn spawn_plan(&self) -> Result<SpawnPlan, Error> {
         let Some(path) = self.config.executable.clone() else {
             return Err(Error::Harness(
