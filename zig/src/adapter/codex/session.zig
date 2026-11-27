@@ -1506,7 +1506,7 @@ pub const Reducer = struct {
         }
         const item = found orelse return self.respondError(id, -32602, "approval request does not target an active action", null);
         var decisions: Decisions = @splat(false);
-        for ([_][]const u8{ "accept", "decline", "cancel" }) |offered| decisions[decisionIndex(offered).?] = true;
+        for ([_][]const u8{ "accept", "decline" }) |offered| decisions[decisionIndex(offered).?] = true;
         if (native.pointer(value, &.{ "_meta", "persist" })) |persist| {
             const session = switch (persist) {
                 .string => |text| std.mem.eql(u8, text, "session"),
@@ -2184,8 +2184,9 @@ test "an MCP tool approval elicitation becomes a permission on its open tool cal
     try testing.expectEqualStrings("Allow Codex MCP tool call", requested.get("title").?.string);
     try testing.expectEqualStrings("Allow lookup?", requested.get("description").?.string);
     const choices = requested.get("choices").?.array.items;
-    try testing.expectEqual(@as(usize, 4), choices.len);
+    try testing.expectEqual(@as(usize, 3), choices.len);
     try testing.expectEqualStrings("acceptForSession", choices[1].object.get("id").?.string);
+    try testing.expectEqualStrings("decline", choices[2].object.get("id").?.string);
     const permission = PermissionResolve{ .interaction_id = reducer.pendingInteraction().?, .requested_by = endpoint_id, .responded_by = "user", .session_id = "session-1", .run_id = "run-02", .choice_id = "acceptForSession", .granted = true };
     try reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = permission });
     try testing.expectEqualStrings("{\"id\":11,\"result\":{\"action\":\"accept\",\"content\":null,\"_meta\":{\"persist\":\"session\"}}}", lastWrite(&reducer));
@@ -2206,8 +2207,11 @@ test "an MCP approval without a session offer omits it, and one that is no tool 
     try testing.expect(reducer.pendingInteraction() == null);
     try feed(&reducer, "{\"id\":15,\"method\":\"mcpServer/elicitation/request\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"serverName\":\"tools\",\"mode\":\"form\",\"message\":\"m\",\"requestedSchema\":{},\"_meta\":{\"codex_approval_kind\":\"mcp_tool_call\",\"tool_name\":\"lookup\"}}}");
     const choices = lastPayload(&reducer).get("choices").?.array.items;
-    try testing.expectEqual(@as(usize, 3), choices.len);
-    const permission = PermissionResolve{ .interaction_id = reducer.pendingInteraction().?, .requested_by = endpoint_id, .responded_by = "user", .session_id = "session-1", .run_id = "run-02", .choice_id = "decline", .granted = false };
+    try testing.expectEqual(@as(usize, 2), choices.len);
+    var cancel = PermissionResolve{ .interaction_id = reducer.pendingInteraction().?, .requested_by = endpoint_id, .responded_by = "user", .session_id = "session-1", .run_id = "run-02", .choice_id = "cancel", .granted = false };
+    try testing.expectError(Error.InvalidResolution, reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = cancel }));
+    cancel.choice_id = "decline";
+    const permission = cancel;
     try reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = permission });
     try testing.expectEqualStrings("{\"id\":15,\"result\":{\"action\":\"decline\",\"content\":null,\"_meta\":null}}", lastWrite(&reducer));
 }

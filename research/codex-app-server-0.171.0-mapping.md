@@ -111,8 +111,11 @@ the request carries no item id. It follows the `item/started` of the
 
 The Zig adapter maps it to `action.permission.requested` on the one open
 `mcpToolCall` in that thread and turn whose server and tool match, offering
-`accept`, `decline`, `cancel`, and `acceptForSession` when `persist` offers
-`session`. It answers Codex with `{action, content: null, _meta}`, where
+`accept`, `decline`, and `acceptForSession` when `persist` offers `session`.
+It does not offer `cancel`: Codex reads an elicitation `cancel` as
+`ReviewDecision::Abort`, which only skips that call with "user cancelled MCP
+tool call" and lets the turn go on, while OAP's `cancel` means the run is
+cancelled. It answers Codex with `{action, content: null, _meta}`, where
 `acceptForSession` is `accept` with `_meta.persist: "session"`. Codex's
 `always` is not offered: Codex turns it into
 `ApprovedMcpPolicyAmendment`, a lasting approval beyond this session. A request with no turn, or one matching no open call or
@@ -121,7 +124,9 @@ more than one, is answered `-32602`. Any other elicitation is still answered
 `user rejected MCP tool call`.
 
 `.claude/skills/verify/scripts/codex-mcp-tool-approval.py` checks this with
-the pinned CLI, a local Responses fixture and a local MCP server: `accept` and
-`acceptForSession` reach the server with `tools/call`, and `decline` does not.
+the pinned CLI, a local Responses fixture and a local MCP server. The model
+calls the tool twice in each session. `accept` is asked both times,
+`acceptForSession` is asked once and both calls reach the server with
+`tools/call`, and `decline` is asked both times and reaches no call.
 Go and Rust do not map it yet, so the descriptor's `action.permissions` reason
 is unchanged until all three do.

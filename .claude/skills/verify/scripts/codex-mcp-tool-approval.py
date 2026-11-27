@@ -13,6 +13,7 @@ import time
 CREATE = runpy.run_path(str(Path(__file__).with_name("codex-session-tool-sources.py")))
 HUB = CREATE["HUB"]
 REPLY = "Fixture tool call settled"
+CALLS = 2
 
 
 def named(value, suffix):
@@ -31,7 +32,7 @@ class Responses(CREATE["FixtureServer"]):
         if self.path != "/model/responses":
             label = self.path.removeprefix("/")
             if body.get("method") == "tools/call" and self.headers.get("Authorization") == self.server.routes.get(label):
-                self.server.mcp_methods.add((label, "tools/call"))
+                self.server.mcp_calls[label] = self.server.mcp_calls.get(label, 0) + 1
                 return self.reply(200, {"jsonrpc": "2.0", "id": body["id"],
                                         "result": {"content": [{"type": "text", "text": f"{label} tool ran"}]}})
             data = json.dumps(body).encode()
@@ -43,8 +44,8 @@ class Responses(CREATE["FixtureServer"]):
         index = len(self.server.model_requests)
         self.server.model_requests.append(label)
         outputs = [item for item in body.get("input", []) if item.get("type") == "function_call_output"]
-        if outputs:
-            self.server.tool_outputs[label] = outputs
+        self.server.tool_outputs[label] = outputs
+        if len(outputs) >= CALLS:
             item = {"type": "message", "id": f"msg_{index}", "role": "assistant", "status": "completed",
                     "content": [{"type": "output_text", "text": REPLY, "annotations": []}]}
         else:
@@ -111,11 +112,11 @@ def verify(binary, codex, root, server):
     hub = HUB["Hub"]([str(binary), "serve", "--stdio", f"--config={config}",
                       "--session-tool-sources", str(grants), "--session-history", str(root / "bindings.jsonl"),
                       "--no-save-oapx-sessions"], root, "hub")
-    seen = {}
     try:
         revision = hub.call("capabilities", adapter="codex")["result"]["capability_revision"]
-        for session, choice, granted in (("allowed", "accept", True), ("remembered", "acceptForSession", True),
-                                         ("denied", "decline", False)):
+        expected = {"allowed": ("accept", True, CALLS), "remembered": ("acceptForSession", True, 1),
+                    "denied": ("decline", False, CALLS)}
+        for session, (choice, granted, asks) in expected.items():
             reply = hub.call("open", adapter="codex", request=HUB["envelope"]("session.open.request", {
                 "session_id": session, "tool_sources": [{"id": "tools", "kind": "remote", "credential_ref": grant(session)}]}))
             assert reply.get("ok"), f"open {session} failed: {reply.get('error')}"
@@ -124,28 +125,45 @@ def verify(binary, codex, root, server):
                 "session_id": session, "delivery": "auto",
                 "messages": [{"role": "user", "content": f"fixture for session {session}"}]})
             assert hub.call("submit", session_id=session, request=request)["ok"]
-            asked = wait_for(hub, session, "action.permission.requested")["payload"]
-            offered = [entry["id"] for entry in asked["choices"]]
-            assert choice in offered, f"{session} was not offered {choice}: {offered}"
-            resolution = HUB["envelope"]("action.permission.resolve.request", {
-                "session_id": session, "run_id": asked["run_id"], "interaction_id": asked["interaction_id"],
-                "requested_by": asked["requested_by"], "responded_by": asked["responded_by"],
-                "choice_id": choice, "granted": granted})
-            resolution.update(run_id=asked["run_id"], capability_revision=revision)
-            answer = hub.call("resolve", session_id=session, request=resolution)
-            assert answer.get("ok"), f"resolve {session} failed: {answer.get('error')}"
-            CREATE["wait_terminal"](hub, session)
-            resolved = wait_for(hub, session, "action.permission.resolved")["payload"]
+            answered, outcomes, terminal = set(), [], None
+            deadline = time.monotonic() + 60
+            while terminal is None and time.monotonic() < deadline:
+                for frame in list(hub.seen):
+                    event = frame.get("envelope", {})
+                    if event.get("session_id") != session:
+                        continue
+                    if event.get("type") in {"run.completed", "run.failed", "run.cancelled"}:
+                        terminal = event["type"]
+                    if event.get("type") == "action.permission.resolved":
+                        outcomes.append(event["payload"]["interaction_id"])
+                    if event.get("type") != "action.permission.requested" or event["payload"]["interaction_id"] in answered:
+                        continue
+                    asked = event["payload"]
+                    offered = [entry["id"] for entry in asked["choices"]]
+                    assert offered == ["accept", "acceptForSession", "decline"], f"{session} offered {offered}"
+                    answered.add(asked["interaction_id"])
+                    resolution = HUB["envelope"]("action.permission.resolve.request", {
+                        "session_id": session, "run_id": asked["run_id"], "interaction_id": asked["interaction_id"],
+                        "requested_by": asked["requested_by"], "responded_by": asked["responded_by"],
+                        "choice_id": choice, "granted": granted})
+                    resolution.update(run_id=asked["run_id"], capability_revision=revision)
+                    answer = hub.call("resolve", session_id=session, request=resolution)
+                    assert answer.get("ok"), f"resolve {session} failed: {answer.get('error')}"
+                if terminal is None:
+                    frame = hub.lines.get(timeout=1)
+                    if frame is not None:
+                        hub.seen.append(frame)
+            calls = server.mcp_calls.get(session, 0)
             output = json.dumps(server.tool_outputs.get(session, []))
-            called = (session, "tools/call") in server.mcp_methods
-            seen[session] = (offered, resolved["outcome"], called)
-            print(f"{session}: offered={offered} choice={choice} outcome={resolved['outcome']} tools/call={called} model saw={output[:200]}")
-            assert called == granted, f"{session}: the MCP call reached the server={called}, expected {granted}"
-            assert (f"{session} tool ran" in output) == granted
+            print(f"{session}: choice={choice} permission requests={len(answered)} resolved={len(set(outcomes))} tools/call={calls} terminal={terminal}")
+            assert terminal == "run.completed", f"{session} settled {terminal}"
+            assert len(answered) == asks, f"{session}: {len(answered)} permission requests, expected {asks}"
+            assert calls == (CALLS if granted else 0), f"{session}: {calls} calls reached the server"
+            assert output.count(f"{session} tool ran") == (CALLS if granted else 0)
         hub.stop()
         published = [json.dumps(hub.seen), (root / "hub-stderr.txt").read_text(), (root / "bindings.jsonl").read_text()]
         assert not any(canary in data for data in published for canary in canaries), "published credential material"
-        print(f"hub exit=0, permission requests resolved=3, calls reached on grant=2, calls reached on decline=0, canary hits=0")
+        print("hub exit=0, accept asks every call, acceptForSession asks once for two calls, decline reaches no call, canary hits=0")
     finally:
         hub.cleanup()
 
@@ -162,6 +180,7 @@ if __name__ == "__main__":
         server.model_requests = []
         server.tool_outputs = {}
         server.mcp_methods = set()
+        server.mcp_calls = {}
         threading.Thread(target=server.serve_forever, daemon=True).start()
         stack.callback(server.shutdown)
         verify(args.binary.resolve(), args.codex.resolve(), Path(directory), server)

@@ -53,7 +53,9 @@ python3 .claude/skills/verify/scripts/codex-mcp-tool-approval.py zig/zig-out/bin
   --codex "$(command -v codex)"
 ```
 
-Expect each of three sessions to publish one `action.permission.requested`
-for its MCP tool call. `accept` and `acceptForSession` reach the MCP server with
-`tools/call` and the model sees the tool's result. `decline` reaches no
-`tools/call`. No canary may appear in the hub output or bindings.
+The model calls its MCP tool twice in each of three sessions, and every
+`action.permission.requested` offers `accept`, `acceptForSession` and
+`decline`, never `cancel`. Under `accept`, both calls are asked and reach the
+MCP server. Under `acceptForSession`, only the first is asked and both reach
+it. Under `decline`, both are asked and neither reaches it. Each run
+completes. No canary may appear in the hub output or bindings.
