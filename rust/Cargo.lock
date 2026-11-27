@@ -1142,6 +1142,7 @@ dependencies = [
  "oxap-protocol",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
