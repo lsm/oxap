@@ -43,8 +43,14 @@ ends.
 `adapter::Adapter` holds Go's descriptor, the refusals Go's `New` makes before
 any process starts, the launch arguments with `--no-extensions` appended, and
 Go's `Open` refusals of provided tools and tool sources, a missing participant,
-an unadvertised setting and a compaction policy Pi cannot run. Go's `Open` also
-refuses an unusable reopen binding before it starts a process; reading that
-binding, and opening a session, are later slices, so a reopen is refused as not
-implemented yet. Go's `Config.Factory` and `ProcessFactory` test seams have no
+an unadvertised setting, a compaction policy Pi cannot run, and a reopen
+binding it cannot load. Opening a session is a later slice. Go's `Config.Factory` and `ProcessFactory` test seams have no
 twin yet, so an executable is always required.
+
+`reopen::read_binding` is Go's `readBinding`: the binding's two members match
+case-insensitively and nothing else may appear; the bound file must be a
+regular file whose first line, at most 64 KiB with or without a terminator, is
+the `session` header carrying the bound id. Header members match
+case-insensitively, the last of a key wins, and unknown members are ignored.
+Each invalid UTF-8 byte in the header reads as U+FFFD, as in Go. Every refusal
+is an unsatisfiable `session.open.reopen`.

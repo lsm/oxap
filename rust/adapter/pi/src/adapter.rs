@@ -14,6 +14,7 @@ use oxap_protocol::{
 };
 
 use crate::process::ProcessConfig;
+use crate::reopen::read_binding;
 
 const ENDPOINT_ID: &str = "pi.rpc";
 const DEFAULT_JOURNAL_CAPACITY: usize = 256;
@@ -85,20 +86,21 @@ impl Adapter {
             return Err(Error::InvalidParticipant);
         }
         refuse_unadvertised_settings(request, &self.describe().capabilities)?;
-        match &request.compaction_policy {
-            Some(policy)
-                if policy.kind != CompactionKind::AUTO && policy.kind != CompactionKind::OFF =>
-            {
-                Err(Error::UnsupportedControl(Box::new(UnsupportedControl {
+        if let Some(policy) = &request.compaction_policy {
+            if policy.kind != CompactionKind::AUTO && policy.kind != CompactionKind::OFF {
+                return Err(Error::UnsupportedControl(Box::new(UnsupportedControl {
                     feature: FEATURE_COMPACTION_POLICY.to_owned(),
                     reason: CONTROL_UNSATISFIABLE,
                     field: "compaction_policy".to_owned(),
                     detail: "Pi switches its own compaction on or off; its threshold lives in a settings file".to_owned(),
                     ..UnsupportedControl::default()
-                })))
+                })));
             }
-            _ => Ok(()),
         }
+        if request.reopen {
+            read_binding(&request.native_session_id)?;
+        }
+        Ok(())
     }
 
     pub fn describe(&self) -> Descriptor {

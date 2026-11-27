@@ -349,7 +349,7 @@ pub fn decode_state(data: &str) -> Result<SessionState, String> {
     serde_json::from_str(&known).map_err(|failure| failure.to_string())
 }
 
-struct Members(Vec<(String, Box<RawValue>)>);
+pub(crate) struct Members(pub(crate) Vec<(String, Box<RawValue>)>);
 
 impl<'de> Deserialize<'de> for Members {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
