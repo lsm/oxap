@@ -2,9 +2,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, DirEntry, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use oxap_adapter::NativeListing;
+use oxap_adapter::{NativeLinker, NativeListing};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -45,10 +46,8 @@ pub(crate) fn list(home: &Path, directory: &str, limit: usize) -> Vec<NativeList
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let native_id = file_stem(&entry, ".jsonl")?;
-            if desktop
-                .get(&native_id)
-                .is_some_and(|record| record.archived)
-            {
+            let record = desktop.get(&native_id);
+            if record.is_some_and(|record| record.archived) {
                 return None;
             }
             let updated_at_ms = entry
@@ -61,7 +60,8 @@ pub(crate) fn list(home: &Path, directory: &str, limit: usize) -> Vec<NativeList
                 directory: directory.into(),
                 updated_at_ms,
                 running,
-                ..NativeListing::default()
+                title: record.map(|row| row.title.clone()).unwrap_or_default(),
+                link: record.map(|row| row.link.clone()).unwrap_or_default(),
             })
         })
         .collect();
@@ -72,13 +72,9 @@ pub(crate) fn list(home: &Path, directory: &str, limit: usize) -> Vec<NativeList
     });
     listings.truncate(limit);
     for row in &mut listings {
-        if let Some(record) = desktop.get(&row.native_id) {
-            row.title = record.title.clone();
-            row.link = app_link(&record.local_id);
-        }
         if row.title.is_empty() {
-            row.title = transcript_title(&project.join(format!("{}.jsonl", row.native_id)))
-                .unwrap_or_default();
+            let path = project.join(format!("{}.jsonl", row.native_id));
+            row.title = transcript_title(&path).unwrap_or_default();
         }
     }
     listings
@@ -103,14 +99,17 @@ fn live_session(entry: DirEntry) -> Option<String> {
     if !entry.file_name().to_str()?.ends_with(".json") || !entry.file_type().ok()?.is_file() {
         return None;
     }
-    let data = read_limited(&entry.path(), REGISTRY_RECORD_BYTES)?;
+    let mut data = Vec::new();
+    File::open(entry.path())
+        .ok()?
+        .take(REGISTRY_RECORD_BYTES + 1)
+        .read_to_end(&mut data)
+        .ok()?;
+    if data.len() as u64 > REGISTRY_RECORD_BYTES {
+        return None;
+    }
     let record: RegistryRecord = serde_json::from_slice(&data).ok()?;
     (record.pid > 0 && process_exists(record.pid)).then_some(record.session_id)
-}
-
-fn read_limited(path: &Path, limit: u64) -> Option<Vec<u8>> {
-    let data = read_window(&mut File::open(path).ok()?, limit + 1)?;
-    (data.len() as u64 <= limit).then_some(data)
 }
 
 fn read_window(file: &mut File, bytes: u64) -> Option<Vec<u8>> {
@@ -122,31 +121,51 @@ fn read_window(file: &mut File, bytes: u64) -> Option<Vec<u8>> {
 struct DesktopRecord {
     title: String,
     archived: bool,
-    local_id: String,
+    link: String,
 }
 
-pub(crate) fn link(home: &Path, native_id: &str) -> String {
-    desktop_records(home)
-        .get(native_id)
-        .map_or_else(String::new, |record| app_link(&record.local_id))
+struct LinkCache {
+    home: PathBuf,
+    loaded: Instant,
+    records: HashMap<String, DesktopRecord>,
 }
 
-fn app_link(local_id: &str) -> String {
-    match local_id {
-        "" => String::new(),
-        id => format!("claude://claude.ai/epitaxy/{id}"),
+static LINKS: Mutex<Option<LinkCache>> = Mutex::new(None);
+
+impl NativeLinker for crate::Adapter {
+    fn native_link(&self, native_id: &str) -> String {
+        let Some(home) = claude_home().filter(|_| cfg!(target_os = "macos")) else {
+            return String::new();
+        };
+        let mut cache = LINKS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.take_if(|cached| {
+            cached.home != home || cached.loaded.elapsed() >= Duration::from_secs(10)
+        });
+        let cached = cache.get_or_insert_with(|| {
+            let records = desktop_records(&home);
+            let loaded = Instant::now();
+            LinkCache {
+                home,
+                loaded,
+                records,
+            }
+        });
+        cached
+            .records
+            .get(native_id)
+            .map(|row| row.link.clone())
+            .unwrap_or_default()
     }
 }
 
 fn desktop_records(claude_home: &Path) -> HashMap<String, DesktopRecord> {
-    let mut records = HashMap::new();
     if !cfg!(target_os = "macos") {
-        return records;
+        return HashMap::new();
     }
-    let Some(home) = claude_home.parent() else {
-        return records;
-    };
-    let root = home.join("Library/Application Support/Claude/claude-code-sessions");
+    let root =
+        claude_home.with_file_name("Library/Application Support/Claude/claude-code-sessions");
     let mut files: Vec<_> = directories(&root)
         .flat_map(|account| directories(&account))
         .flat_map(|workspace| fs::read_dir(workspace).into_iter().flatten().flatten())
@@ -154,24 +173,27 @@ fn desktop_records(claude_home: &Path) -> HashMap<String, DesktopRecord> {
         .map(|entry| entry.path())
         .collect();
     files.sort_unstable();
-    for path in files {
-        let Some(record) = read_limited(&path, DESKTOP_RECORD_BYTES)
-            .and_then(|data| serde_json::from_slice::<Value>(&data).ok())
-        else {
-            continue;
-        };
-        if let Some(id) = record["cliSessionId"].as_str() {
-            records.insert(
-                id.into(),
-                DesktopRecord {
-                    title: record["title"].as_str().unwrap_or_default().into(),
-                    archived: record["isArchived"].as_bool().unwrap_or_default(),
-                    local_id: record["sessionId"].as_str().unwrap_or_default().into(),
-                },
-            );
-        }
-    }
-    records
+    files
+        .into_iter()
+        .filter_map(|path| {
+            let data = read_window(&mut File::open(path).ok()?, DESKTOP_RECORD_BYTES + 1)?;
+            if data.len() as u64 > DESKTOP_RECORD_BYTES {
+                return None;
+            }
+            let record: Value = serde_json::from_slice(&data).ok()?;
+            let id = record["cliSessionId"].as_str()?.into();
+            let link = match record["sessionId"].as_str() {
+                Some(id) if !id.is_empty() => format!("claude://claude.ai/epitaxy/{id}"),
+                _ => String::new(),
+            };
+            let desktop = DesktopRecord {
+                title: record["title"].as_str().unwrap_or_default().into(),
+                archived: record["isArchived"].as_bool().unwrap_or_default(),
+                link,
+            };
+            Some((id, desktop))
+        })
+        .collect()
 }
 
 fn directories(path: &Path) -> impl Iterator<Item = PathBuf> {
