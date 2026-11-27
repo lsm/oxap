@@ -148,3 +148,205 @@ fn transcript(path: &Path, seconds: u64) {
         .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(seconds)))
         .unwrap();
 }
+
+#[test]
+fn claude_projects_native_session_metadata() {
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--ignored",
+            "--exact",
+            "observe_native_metadata",
+            "--nocapture",
+        ])
+        .env_clear()
+        .env("HOME", home.path())
+        .env("NODE_ENV", "test")
+        .output()
+        .unwrap();
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "metadata consumer: {}",
+        output.status
+    );
+}
+
+#[test]
+#[ignore]
+fn observe_native_metadata() {
+    assert_eq!(std::env::var("NODE_ENV").as_deref(), Ok("test"));
+    let home = std::env::var_os("HOME").unwrap();
+    let home = Path::new(&home);
+    assert!(fs::read_dir(home).unwrap().next().is_none());
+    let project = home.join(".claude/projects/-example-work---");
+    let desktop =
+        home.join("Library/Application Support/Claude/claude-code-sessions/account/workspace");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&desktop).unwrap();
+
+    let custom = |title: &str| json!({"type":"custom-title","customTitle":title});
+    let user = |text: &str| json!({"type":"user","message":{"content":text}});
+    let listed = [
+        ("desktop", format!("{}\n", custom("Transcript title"))),
+        ("archived", format!("{}\n", user("Archived transcript"))),
+        (
+            "short",
+            format!(
+                "{}\n{}\n{}\n",
+                custom("Earlier"),
+                custom("Latest"),
+                custom("New session")
+            ),
+        ),
+        (
+            "tail",
+            format!(
+                "{}\n{}\n{}\n",
+                user("Head fallback"),
+                "x".repeat(270_000),
+                custom("Tail title")
+            ),
+        ),
+        (
+            "head",
+            format!(
+                "{}\n{}\n{}\n",
+                user("Head fallback"),
+                custom("Outside the tail"),
+                "x".repeat(270_000)
+            ),
+        ),
+        (
+            "first",
+            format!(
+                "{}\n{}\n{}\n",
+                user("<command-name>/init</command-name>"),
+                user("<unclosed"),
+                json!({"type":"user","message":{"content":[{"type":"image"},{"type":"text","text":"<system-reminder>noise</system-reminder>\nfix the parser\nplease"}]}})
+            ),
+        ),
+        (
+            "utf8",
+            format!("{}\n", user(&format!("{}é!", "a".repeat(119)))),
+        ),
+        ("empty", "invalid JSON".into()),
+    ];
+    for (id, body) in listed {
+        fs::write(project.join(format!("{id}.jsonl")), body).unwrap();
+    }
+    fs::write(
+        desktop.join("a.json"),
+        json!({"cliSessionId":"desktop","sessionId":"old","title":"Old name"}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        desktop.join("z.json"),
+        json!({"cliSessionId":"desktop","sessionId":"local_desktop","title":"Desktop title"})
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        desktop.join("archived.json"),
+        json!({"cliSessionId":"archived","sessionId":"local_archived","isArchived":true})
+            .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        desktop.join("short.json"),
+        json!({"cliSessionId":"short","sessionId":"local_short","title":""}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        desktop.join("first.json"),
+        format!(
+            "{}{}",
+            json!({"cliSessionId":"first","title":"Oversized"}),
+            " ".repeat(4 * 1024 * 1024)
+        ),
+    )
+    .unwrap();
+    symlink(desktop.join("z.json"), desktop.join("zz.json")).unwrap();
+
+    let adapter = Adapter::new(Config {
+        tools: ToolPosture::Unrestricted,
+        ..Config::default()
+    })
+    .unwrap();
+    let rows = block_on(
+        adapter
+            .native_lister()
+            .unwrap()
+            .native_list(NativeListRequest {
+                directory: WORKSPACE.into(),
+                limit: 30,
+            }),
+    )
+    .unwrap();
+    let display = |id| {
+        let row = rows.iter().find(|row| row.native_id == id).unwrap();
+        (row.title.as_str(), row.link.as_str())
+    };
+    let observations: Vec<_> = rows
+        .iter()
+        .map(|row| (&row.native_id, &row.title, &row.link))
+        .collect();
+    println!(
+        "{} native rows (id, title, link) = {observations:?}",
+        rows.len()
+    );
+    assert_eq!(display("tail"), ("Tail title", ""));
+    assert_eq!(display("head"), ("Head fallback", ""));
+    assert_eq!(display("first"), ("fix the parser", ""));
+    assert_eq!(display("utf8"), ("a".repeat(119).as_str(), ""));
+    assert_eq!(display("empty"), ("", ""));
+    if cfg!(target_os = "macos") {
+        let link = "claude://claude.ai/epitaxy/local_desktop";
+        assert_eq!(rows.len(), 7);
+        assert_eq!(display("desktop"), ("Desktop title", link));
+        assert_eq!(
+            display("short"),
+            ("Latest", "claude://claude.ai/epitaxy/local_short")
+        );
+        assert!(!rows.iter().any(|row| row.native_id == "archived"));
+        let linker = adapter.native_linker().unwrap();
+        assert_eq!(linker.native_link("desktop"), link);
+        assert_eq!(
+            linker.native_link("archived"),
+            "claude://claude.ai/epitaxy/local_archived"
+        );
+        assert_eq!(linker.native_link("unknown"), "");
+        println!("standalone links resolve known desktop IDs, including archived sessions");
+        fs::write(
+            desktop.join("z.json"),
+            json!({"cliSessionId":"desktop","sessionId":"local_updated","title":"Updated title"})
+                .to_string(),
+        )
+        .unwrap();
+        let cached = linker.native_link("desktop");
+        println!("standalone link after Desktop record changed = {cached}");
+        assert_eq!(cached, link);
+        let fresh = block_on(
+            adapter
+                .native_lister()
+                .unwrap()
+                .native_list(NativeListRequest {
+                    directory: WORKSPACE.into(),
+                    limit: 30,
+                }),
+        )
+        .unwrap();
+        assert!(fresh.iter().any(|row| row.native_id == "desktop"
+            && row.link == "claude://claude.ai/epitaxy/local_updated"
+            && row.title == "Updated title"));
+        std::thread::sleep(Duration::from_secs(10));
+        let refreshed = linker.native_link("desktop");
+        println!("standalone link after cache expiry = {refreshed}");
+        assert_eq!(refreshed, "claude://claude.ai/epitaxy/local_updated");
+    } else {
+        assert_eq!(rows.len(), 8);
+        assert_eq!(display("desktop"), ("Transcript title", ""));
+        assert_eq!(display("short"), ("Latest", ""));
+    }
+}

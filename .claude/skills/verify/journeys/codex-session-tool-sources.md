@@ -46,6 +46,22 @@ tool without another grant. Require three completed model turns, one rollout
 and zero bearer or reference hits in the published frames, bindings, hub
 diagnostics or Codex home. Both model and MCP traffic use loopback fixtures.
 
+Run the tool-approval journey with the same pinned Codex CLI:
+
+```sh
+python3 .claude/skills/verify/scripts/codex-trusted-tool-approval.py zig/zig-out/bin/oxap \
+  --codex "$(command -v codex)" --approval-policy on-request
+```
+
+A local Responses fixture asks each session's model to call its one MCP tool.
+Expect the session whose capability file carries `"tool_approval":
+"approve"` to reach the MCP server with `tools/call`, and the session without
+it to reach no `tools/call`. Under `on-request` the approved session publishes
+no `action.permission.requested` and the other publishes one, which the script
+declines. A file with any other value must refuse the open. Repeat with
+`--approval-policy never`, where neither session is asked. No canary may appear in the hub output,
+bindings or Codex home.
+
 Run the MCP tool approval journey with the same pinned Codex CLI:
 
 ```sh
