@@ -45,3 +45,15 @@ rotated tool. After an idle park, the next turn must use the same rotated
 tool without another grant. Require three completed model turns, one rollout
 and zero bearer or reference hits in the published frames, bindings, hub
 diagnostics or Codex home. Both model and MCP traffic use loopback fixtures.
+
+Run the MCP tool approval journey with the same pinned Codex CLI:
+
+```sh
+python3 .claude/skills/verify/scripts/codex-mcp-tool-approval.py zig/zig-out/bin/oxap \
+  --codex "$(command -v codex)"
+```
+
+Expect each of three sessions to publish one `action.permission.requested`
+for its MCP tool call. `accept` and `acceptForSession` reach the MCP server with
+`tools/call` and the model sees the tool's result. `decline` reaches no
+`tools/call`. No canary may appear in the hub output or bindings.

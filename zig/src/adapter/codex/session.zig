@@ -231,6 +231,7 @@ const Interaction = struct {
     tool_call_id: []const u8,
     request: rpc.Id,
     resolved: bool = false,
+    elicitation: bool = false,
     decisions: Decisions = @as([standard_decisions.len]bool, @splat(false)),
     questions: []const Question = &.{},
 };
@@ -1456,27 +1457,67 @@ pub const Reducer = struct {
             const at = self.findItem(scope.item) orelse return self.respondError(id, -32602, "approval request does not target an active action", null);
             const item = self.items.items[at];
             if (!std.mem.eql(u8, item.run_id, run.id) or !item.started or item.terminal) return self.respondError(id, -32602, "approval request does not target an active action", null);
-            const interaction_id = try self.nextID("interaction");
-            const interaction = Interaction{ .id = interaction_id, .kind = .permission, .run_id = run.id, .tool_call_id = item.tool_call_id, .request = id, .decisions = scope.decisions };
-            try self.interactions.append(self.allocator(), interaction);
-            var choices = std.json.Array.init(self.allocator());
-            for (standard_decisions, 0..) |decision, position| {
-                if (!scope.decisions[position]) continue;
-                var choice = std.json.ObjectMap.empty;
-                try self.put(&choice, "id", str(decision.id));
-                try self.put(&choice, "label", str(decision.label));
-                try choices.append(.{ .object = choice });
-            }
-            var payload = try self.interactionPayload(interaction, index);
-            try self.putNonEmpty(&payload, "tool_call_id", item.tool_call_id);
-            try self.put(&payload, "title", str(if (std.mem.eql(u8, method, native.method_file_approval)) "Allow Codex file changes" else "Allow Codex action"));
-            try self.putNonEmpty(&payload, "description", scope.reason);
-            try self.put(&payload, "choices", .{ .array = choices });
-            try self.put(&payload, "arguments_json", item.arguments);
-            return self.emit(index, "action.permission.requested", payload, item.tool_call_id, false);
+            const title = if (std.mem.eql(u8, method, native.method_file_approval)) "Allow Codex file changes" else "Allow Codex action";
+            return self.requestPermission(id, index, item, scope.decisions, title, scope.reason, false);
         }
+        if (std.mem.eql(u8, method, native.method_mcp_elicitation)) return self.requestToolApproval(id, message.params);
         if (std.mem.eql(u8, method, native.method_user_input)) return self.requestInput(id, message.params);
         try self.respondError(id, -32601, "unsupported Codex server request", try native.methodData(self.allocator(), method));
+    }
+
+    fn requestPermission(self: *Reducer, id: rpc.Id, index: usize, item: Item, decisions: Decisions, title: []const u8, description: []const u8, elicitation: bool) !void {
+        const run = self.runs.items[index];
+        const interaction_id = try self.nextID("interaction");
+        const interaction = Interaction{ .id = interaction_id, .kind = .permission, .run_id = run.id, .tool_call_id = item.tool_call_id, .request = id, .elicitation = elicitation, .decisions = decisions };
+        try self.interactions.append(self.allocator(), interaction);
+        var choices = std.json.Array.init(self.allocator());
+        for (standard_decisions, 0..) |decision, position| {
+            if (!decisions[position]) continue;
+            var choice = std.json.ObjectMap.empty;
+            try self.put(&choice, "id", str(decision.id));
+            try self.put(&choice, "label", str(decision.label));
+            try choices.append(.{ .object = choice });
+        }
+        var payload = try self.interactionPayload(interaction, index);
+        try self.putNonEmpty(&payload, "tool_call_id", item.tool_call_id);
+        try self.put(&payload, "title", str(title));
+        try self.putNonEmpty(&payload, "description", description);
+        try self.put(&payload, "choices", .{ .array = choices });
+        try self.put(&payload, "arguments_json", item.arguments);
+        return self.emit(index, "action.permission.requested", payload, item.tool_call_id, false);
+    }
+
+    fn requestToolApproval(self: *Reducer, id: rpc.Id, params: ?std.json.Value) !void {
+        const value = params orelse std.json.Value.null;
+        if (!std.mem.eql(u8, native.text(value, &.{"mode"}), "form") or !std.mem.eql(u8, native.text(value, &.{ "_meta", "codex_approval_kind" }), "mcp_tool_call"))
+            return self.respondError(id, -32601, "unsupported Codex server request", try native.methodData(self.allocator(), native.method_mcp_elicitation));
+        const thread = native.text(value, &.{"threadId"});
+        const turn = native.text(value, &.{"turnId"});
+        if (!std.mem.eql(u8, thread, self.thread_id) or turn.len == 0) return self.respondError(id, -32602, "invalid approval request scope", null);
+        const index = self.runFor(thread, turn) orelse return self.respondError(id, -32602, "approval request does not target the active run", null);
+        const run = self.runs.items[index];
+        if (run.terminal) return self.respondError(id, -32602, "approval request does not target the active run", null);
+        const name = try std.fmt.allocPrint(self.allocator(), "mcp.{s}.{s}", .{ native.text(value, &.{"serverName"}), native.text(value, &.{ "_meta", "tool_name" }) });
+        var found: ?Item = null;
+        for (self.items.items) |item| {
+            if (!std.mem.eql(u8, item.run_id, run.id) or !item.started or item.terminal or !std.mem.eql(u8, item.name, name)) continue;
+            if (found != null) return self.respondError(id, -32602, "approval request does not target one active action", null);
+            found = item;
+        }
+        const item = found orelse return self.respondError(id, -32602, "approval request does not target an active action", null);
+        var decisions: Decisions = @splat(false);
+        for ([_][]const u8{ "accept", "decline", "cancel" }) |offered| decisions[decisionIndex(offered).?] = true;
+        if (native.pointer(value, &.{ "_meta", "persist" })) |persist| {
+            const session = switch (persist) {
+                .string => |text| std.mem.eql(u8, text, "session"),
+                .array => |list| for (list.items) |entry| {
+                    if (entry == .string and std.mem.eql(u8, entry.string, "session")) break true;
+                } else false,
+                else => false,
+            };
+            decisions[decisionIndex("acceptForSession").?] = session;
+        }
+        return self.requestPermission(id, index, item, decisions, "Allow Codex MCP tool call", native.text(value, &.{"message"}), true);
     }
 
     fn requestInput(self: *Reducer, id: rpc.Id, params: ?std.json.Value) !void {
@@ -1579,7 +1620,8 @@ pub const Reducer = struct {
         if (!interaction.decisions[position]) return Error.InvalidResolution;
         const decision = standard_decisions[position];
         if (request.granted != decision.granted) return Error.InvalidResolution;
-        try self.respond(interaction.request, try native.approvalResponse(self.allocator(), request.choice_id));
+        const response = if (interaction.elicitation) try native.elicitationResponse(self.allocator(), request.choice_id) else try native.approvalResponse(self.allocator(), request.choice_id);
+        try self.respond(interaction.request, response);
         self.interactions.items[at].resolved = true;
         var payload = try self.interactionPayload(interaction, index);
         try self.putNonEmpty(&payload, "tool_call_id", interaction.tool_call_id);
@@ -2126,6 +2168,48 @@ test "only the declared responder resolves a permission, once, with a choice tha
     try reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = base });
     try testing.expectEqualStrings("rejected", lastPayload(&reducer).get("outcome").?.string);
     try testing.expectError(Error.InteractionResolved, reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = base }));
+}
+
+const mcp_started = "{\"method\":\"item/started\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"item\":{\"type\":\"mcpToolCall\",\"id\":\"mcp-item\",\"server\":\"tools\",\"tool\":\"lookup\",\"arguments\":{}}}}";
+
+test "an MCP tool approval elicitation becomes a permission on its open tool call and answers Codex as an elicitation" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var reducer = try running(&arena);
+    try feed(&reducer, mcp_started);
+    const action = lastPayload(&reducer).get("tool_call_id").?.string;
+    try feed(&reducer, "{\"id\":11,\"method\":\"mcpServer/elicitation/request\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"serverName\":\"tools\",\"environmentId\":null,\"mode\":\"form\",\"message\":\"Allow lookup?\",\"requestedSchema\":{\"type\":\"object\",\"properties\":{}},\"_meta\":{\"codex_approval_kind\":\"mcp_tool_call\",\"tool_name\":\"lookup\",\"persist\":[\"session\",\"always\"]}}}");
+    const requested = lastPayload(&reducer);
+    try testing.expectEqualStrings(action, requested.get("tool_call_id").?.string);
+    try testing.expectEqualStrings("Allow Codex MCP tool call", requested.get("title").?.string);
+    try testing.expectEqualStrings("Allow lookup?", requested.get("description").?.string);
+    const choices = requested.get("choices").?.array.items;
+    try testing.expectEqual(@as(usize, 4), choices.len);
+    try testing.expectEqualStrings("acceptForSession", choices[1].object.get("id").?.string);
+    const permission = PermissionResolve{ .interaction_id = reducer.pendingInteraction().?, .requested_by = endpoint_id, .responded_by = "user", .session_id = "session-1", .run_id = "run-02", .choice_id = "acceptForSession", .granted = true };
+    try reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = permission });
+    try testing.expectEqualStrings("{\"id\":11,\"result\":{\"action\":\"accept\",\"content\":null,\"_meta\":{\"persist\":\"session\"}}}", lastWrite(&reducer));
+    try testing.expectEqualStrings("resolved", lastPayload(&reducer).get("outcome").?.string);
+}
+
+test "an MCP approval without a session offer omits it, and one that is no tool approval or names no open call is refused" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var reducer = try running(&arena);
+    try feed(&reducer, mcp_started);
+    try feed(&reducer, "{\"id\":12,\"method\":\"mcpServer/elicitation/request\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"serverName\":\"tools\",\"mode\":\"url\",\"message\":\"Sign in\",\"url\":\"https://example.test\",\"elicitationId\":\"e\",\"_meta\":null}}");
+    try testing.expectEqualStrings("{\"error\":{\"code\":-32601,\"message\":\"unsupported Codex server request\",\"data\":{\"method\":\"mcpServer/elicitation/request\"}},\"id\":12}", lastWrite(&reducer));
+    try feed(&reducer, "{\"id\":13,\"method\":\"mcpServer/elicitation/request\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"serverName\":\"tools\",\"mode\":\"form\",\"message\":\"m\",\"requestedSchema\":{},\"_meta\":{\"codex_approval_kind\":\"mcp_tool_call\",\"tool_name\":\"other\"}}}");
+    try testing.expectEqualStrings("{\"error\":{\"code\":-32602,\"message\":\"approval request does not target an active action\"},\"id\":13}", lastWrite(&reducer));
+    try feed(&reducer, "{\"id\":14,\"method\":\"mcpServer/elicitation/request\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":null,\"serverName\":\"tools\",\"mode\":\"form\",\"message\":\"m\",\"requestedSchema\":{},\"_meta\":{\"codex_approval_kind\":\"mcp_tool_call\",\"tool_name\":\"lookup\"}}}");
+    try testing.expectEqualStrings("{\"error\":{\"code\":-32602,\"message\":\"invalid approval request scope\"},\"id\":14}", lastWrite(&reducer));
+    try testing.expect(reducer.pendingInteraction() == null);
+    try feed(&reducer, "{\"id\":15,\"method\":\"mcpServer/elicitation/request\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"serverName\":\"tools\",\"mode\":\"form\",\"message\":\"m\",\"requestedSchema\":{},\"_meta\":{\"codex_approval_kind\":\"mcp_tool_call\",\"tool_name\":\"lookup\"}}}");
+    const choices = lastPayload(&reducer).get("choices").?.array.items;
+    try testing.expectEqual(@as(usize, 3), choices.len);
+    const permission = PermissionResolve{ .interaction_id = reducer.pendingInteraction().?, .requested_by = endpoint_id, .responded_by = "user", .session_id = "session-1", .run_id = "run-02", .choice_id = "decline", .granted = false };
+    try reducer.resolve(.{ .run_id = "run-02", .responded_by = "user", .permission = permission });
+    try testing.expectEqualStrings("{\"id\":15,\"result\":{\"action\":\"decline\",\"content\":null,\"_meta\":null}}", lastWrite(&reducer));
 }
 
 const input_frame = "{\"id\":9,\"method\":\"item/tool/requestUserInput\",\"params\":{\"threadId\":\"native-thread\",\"turnId\":\"native-turn\",\"itemId\":\"tool-item\",\"questions\":[{\"id\":\"mode\",\"question\":\"Choose\",\"options\":[{\"label\":\"Fast\",\"description\":\"\"},{\"label\":\"Safe\",\"description\":\"More checks\"}]},{\"id\":\"note\",\"question\":\"Add note\",\"options\":[]}]}}";
