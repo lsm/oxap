@@ -12,6 +12,7 @@ use oxap_adapter::{
     ResumeRequest, Session, SettingsUpdater, SubmitRequest, ToolCatalog, ToolLister,
     UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
+use oxap_adapter::{CallResolution, CallResolver};
 use oxap_protocol::{
     ActionCallPayload, ActiveRun, Admission as RunAdmission, ContentDeltaPayload, ContentPart,
     ContentPartType, EffectiveDeliveryMode, Envelope, EnvelopeId, EnvelopeType, Message,
@@ -19,6 +20,9 @@ use oxap_protocol::{
     ProtocolError, RequestedDeliveryMode, RunCancelResponse, RunCancelledPayload,
     RunCompletedPayload, RunFailedPayload, RunId, RunStartedPayload, RunStatus, SessionId,
     SessionState, SessionStatus, ToolsListRequest, Usage, FEATURE_TOOLS_LIST, SETTLED_BY_INFERRED,
+};
+use oxap_protocol::{
+    ActionCallResolveDetails, ActionCallResolveResponse, ResolveReason, RESOLVE_ARM_ACKNOWLEDGE,
 };
 use oxap_protocol::{
     CapabilityDescriptor, CompactionId, CompactionOutcome, CompactionReason, InputAnswer,
@@ -40,6 +44,8 @@ use crate::{
 
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
 const REFUSED_BY_POLICY: &str = "refused_by_policy";
+const NO_MCP_CALL: &str = r#"{"code":-32602,"message":"no provided call matches this tools/call"}"#;
+const MCP_CANCELLED: &str = r#"{"code":-32603,"message":"the call was cancelled"}"#;
 fn deadline() -> Option<Instant> {
     Some(Instant::now() + RPC_TIMEOUT)
 }
@@ -63,6 +69,7 @@ struct SessionData {
     interrupt: Option<Interrupt>,
     settled_runs: HashMap<RunId, RunStatus>,
     tool_calls: HashMap<String, (RunId, usize)>,
+    settled_calls: Vec<ObservedTool>,
     participant: oxap_protocol::ParticipantId,
     unusable: bool,
 }
@@ -83,6 +90,7 @@ struct PendingTurn {
 enum TurnFrame {
     Observation(Observation, bool),
     Permission(Arc<IncomingControl>),
+    Mcp(Arc<IncomingControl>),
 }
 
 impl PendingTurn {
@@ -90,7 +98,7 @@ impl PendingTurn {
         let mut settlement = RunSettlement::default();
         self.buffered.iter().any(|entry| match entry {
             TurnFrame::Observation(frame, corroborates) => settlement.observe(frame, *corroborates),
-            TurnFrame::Permission(_) => false,
+            TurnFrame::Permission(_) | TurnFrame::Mcp(_) => false,
         })
     }
 }
@@ -182,24 +190,39 @@ struct ObservedTool {
 
 enum ToolProgress {
     Native(Option<EnvelopeId>),
-    Provided { pending: bool },
+    Provided(Option<Box<ProvidedCall>>),
+}
+
+#[derive(Default)]
+struct ProvidedCall {
+    requested: EnvelopeId,
+    started: Option<EnvelopeId>,
+    settlement: Option<EnvelopeId>,
+    held: Option<(Arc<IncomingControl>, Box<RawValue>)>,
+    reply: Option<String>,
 }
 
 impl ObservedTool {
     fn cancel_provided(&mut self, runtime: &Runtime) -> Option<Envelope> {
-        let ToolProgress::Provided { pending } = &mut self.progress else {
+        let ToolProgress::Provided(Some(call)) = &mut self.progress else {
             return None;
         };
-        if !std::mem::take(pending) {
+        if call.settlement.is_some() {
             return None;
         }
-        Some(tool_event(
-            EnvelopeType::ACTION_CALL_CANCELLED,
-            &self.payload,
-            None,
-            runtime,
-        ))
+        let kind = EnvelopeType::ACTION_CALL_CANCELLED;
+        let event = tool_event(kind, &self.payload, call.started.clone(), runtime);
+        call.settlement = Some(event.id.clone());
+        if let Some((control, id)) = call.held.take() {
+            send_mcp(&control, &id, "error", MCP_CANCELLED);
+        }
+        Some(event)
     }
+}
+
+fn send_mcp(control: &IncomingControl, id: &RawValue, key: &str, payload: &str) {
+    let response = catalog::reply(id, key, payload).expect("MCP reply serializes");
+    let _ = control.respond(response.as_deref(), deadline());
 }
 
 struct PermissionGate {
@@ -377,7 +400,22 @@ impl SessionData {
                 if request.server_name == catalog::SDK_SERVER
                     && !self.catalog.provided.is_empty() =>
             {
-                let _ = match catalog::discover(&self.catalog.provided, &request.message) {
+                let raw = request.message.as_deref().map_or("null", RawValue::get);
+                let message: catalog::Message =
+                    native::source::decode_object(raw).unwrap_or_default();
+                if let (Some(id), "tools/call") = (&message.id, message.method.as_str()) {
+                    if let Some(turn) = &mut self.pending {
+                        if turn.buffered.len() == DEFAULT_QUEUE_CAPACITY {
+                            return send_mcp(&control, id, "error", NO_MCP_CALL);
+                        }
+                        turn.buffered.push(TurnFrame::Mcp(control));
+                    } else {
+                        let native_id = message.params["_meta"]["claudecode/toolUseId"].as_str();
+                        self.receive_mcp(control, id.clone(), native_id.unwrap_or(""));
+                    }
+                    return;
+                }
+                let _ = match catalog::discover(&self.catalog.provided, message) {
                     Ok(body) => control.respond(body.as_deref(), deadline),
                     Err(error) => control.respond_error(&error.to_string(), deadline),
                 };
@@ -387,6 +425,23 @@ impl SessionData {
             _ => "claude adapter: no owned run",
         };
         let _ = control.respond_error(rejection, deadline);
+    }
+
+    fn receive_mcp(&mut self, control: Arc<IncomingControl>, id: Box<RawValue>, native_id: &str) {
+        let active = self.active.iter_mut().flat_map(|turn| &mut turn.tools);
+        let tool = active
+            .chain(&mut self.settled_calls)
+            .find(|tool| tool.native_id == native_id);
+        if let Some(ToolProgress::Provided(Some(call))) = tool.map(|tool| &mut tool.progress) {
+            if let Some(result) = call.reply.take() {
+                return send_mcp(&control, &id, "result", &result);
+            }
+            if call.held.is_none() && call.settlement.is_none() {
+                call.held = Some((control, id));
+                return;
+            }
+        }
+        send_mcp(&control, &id, "error", NO_MCP_CALL);
     }
 
     fn apply_permission(&mut self, control: Arc<IncomingControl>, runtime: &Runtime) {
@@ -511,7 +566,7 @@ impl SessionData {
     fn withdraw_gate(&mut self, request_id: &str, runtime: &Runtime) {
         if let Some(turn) = &mut self.pending {
             turn.buffered.retain(|frame| {
-                !matches!(frame, TurnFrame::Permission(control) if control.id == request_id)
+                !matches!(frame, TurnFrame::Permission(control) | TurnFrame::Mcp(control) if control.id == request_id)
             });
         }
         if let Some(turn) = &self.active {
@@ -538,7 +593,7 @@ impl SessionData {
             .tools
             .iter()
             .rev()
-            .find(|tool| matches!(tool.progress, ToolProgress::Provided { pending: true }))
+            .find(|tool| matches!(&tool.progress, ToolProgress::Provided(Some(call)) if call.settlement.is_none()))
             .and_then(|tool| tool.payload.interaction_id.clone())
             .or_else(|| {
                 turn.gates
@@ -791,7 +846,12 @@ impl SessionData {
             turn.tools.push(ObservedTool {
                 native_id: block.id,
                 payload,
-                progress: ToolProgress::Provided { pending },
+                progress: ToolProgress::Provided(requested.as_ref().map(|event| {
+                    Box::new(ProvidedCall {
+                        requested: event.id.clone(),
+                        ..Default::default()
+                    })
+                })),
             });
             if let Some(event) = requested {
                 self.append_event(event, false, runtime);
@@ -909,6 +969,9 @@ impl SessionData {
             for mut tool in std::mem::take(&mut turn.tools) {
                 if let Some(event) = tool.cancel_provided(runtime) {
                     self.append_event(event, false, runtime);
+                }
+                if matches!(tool.progress, ToolProgress::Provided(Some(_))) {
+                    self.settled_calls.push(tool);
                 } else if let ToolProgress::Native(Some(started)) = tool.progress {
                     let mut payload = tool.payload;
                     let kind = if denied.contains(&tool.native_id) {
@@ -1049,6 +1112,7 @@ impl SessionData {
                     self.apply(frame, corroborates, runtime)
                 }
                 TurnFrame::Permission(control) => self.apply_permission(control, runtime),
+                TurnFrame::Mcp(control) => self.route_control(control, runtime),
             }
         }
         Ok((
@@ -1260,6 +1324,7 @@ impl OpenedSession {
             interrupt: None,
             settled_runs: HashMap::new(),
             tool_calls: HashMap::new(),
+            settled_calls: Vec::new(),
             participant,
             unusable: false,
         }));
@@ -1552,12 +1617,105 @@ impl Session for OpenedSession {
         })
     }
 
+    fn call_resolver(&self) -> Option<&dyn CallResolver> {
+        (!self.state.lock().unwrap().catalog.provided.is_empty()).then_some(self)
+    }
+
     fn settings_updater(&self) -> Option<&dyn SettingsUpdater> {
         Some(self)
     }
 
     fn tool_lister(&self) -> Option<&dyn ToolLister> {
         Some(self)
+    }
+}
+
+impl CallResolver for OpenedSession {
+    fn resolve_call(&self, resolution: CallResolution) -> BoxFuture<'_, ActionCallResolveResponse> {
+        Box::pin(async move {
+            let state = &mut *self.state.lock().unwrap();
+            let (runtime, request) = (&self.runtime, resolution.request);
+            let mut answer = ActionCallResolveResponse {
+                session_id: request.session_id.clone(),
+                run_id: request.run_id.clone(),
+                tool_call_id: request.tool_call_id.clone(),
+                interaction_id: request.interaction_id.clone(),
+                reason: ResolveReason::UNKNOWN_INTERACTION,
+                ..Default::default()
+            };
+            let active = state.active.iter_mut().flat_map(|turn| &mut turn.tools);
+            let tool = active.chain(&mut state.settled_calls).find(|tool| {
+                let payload = &tool.payload;
+                payload.interaction_id.as_ref() == Some(&request.interaction_id)
+                    && payload.run_id == request.run_id
+                    && payload.session_id == request.session_id
+            });
+            let Some(tool) = tool else { return Ok(answer) };
+            let ToolProgress::Provided(Some(call)) = &mut tool.progress else {
+                return Ok(answer);
+            };
+            let payload = &tool.payload;
+            let arm = request.arm();
+            let acknowledges = arm == Some(RESOLVE_ARM_ACKNOWLEDGE);
+            answer.reason = if payload.requested_by.as_ref() != Some(&request.requested_by)
+                || payload.responded_by.as_ref() != Some(&request.responded_by)
+                || payload.tool_call_id != request.tool_call_id
+            {
+                ResolveReason::WRONG_RESPONDER
+            } else if arm.is_none() {
+                return Ok(answer);
+            } else if let Some(id) = &call.settlement {
+                let settlement_id = Some(id.clone());
+                answer.details = Some(ActionCallResolveDetails { settlement_id });
+                ResolveReason::ALREADY_RESOLVED
+            } else if acknowledges && call.started.is_some() {
+                ResolveReason::REPEATED_ACKNOWLEDGEMENT
+            } else {
+                ResolveReason::default()
+            };
+            answer.accepted = answer.reason.is_empty();
+            if !answer.accepted {
+                return Ok(answer);
+            }
+            let mut payload = payload.clone();
+            payload.request_id = Some(resolution.request_id);
+            let started = call.started.is_none().then(|| {
+                let kind = EnvelopeType::ACTION_CALL_STARTED;
+                let event = tool_event(kind, &payload, Some(call.requested.clone()), runtime);
+                call.started = Some(event.id.clone());
+                event
+            });
+            let settled = (!acknowledges).then(|| {
+                payload.error = request.error;
+                payload.result = request.result;
+                let (kind, text) = if let Some(error) = &payload.error {
+                    (EnvelopeType::ACTION_CALL_FAILED, error.message.clone())
+                } else {
+                    let raw = payload.result.as_ref().unwrap().get();
+                    let text = serde_json::from_str(raw).unwrap_or_else(|_| raw.into());
+                    (EnvelopeType::ACTION_CALL_COMPLETED, text)
+                };
+                let content = serde_json::json!([{"type": "text", "text": text}]);
+                let is_error = kind == EnvelopeType::ACTION_CALL_FAILED;
+                let result = serde_json::json!({"content": content, "isError": is_error});
+                if let Some((control, id)) = call.held.take() {
+                    send_mcp(&control, &id, "result", &result.to_string());
+                } else {
+                    call.reply = Some(result.to_string());
+                }
+                let event = tool_event(kind, &payload, call.started.clone(), runtime);
+                call.settlement = Some(event.id.clone());
+                event
+            });
+            if let Some(event) = started {
+                state.append_event(event, false, runtime);
+            }
+            if let Some(event) = settled {
+                state.append_event(event, false, runtime);
+                state.interaction_status(runtime);
+            }
+            Ok(answer)
+        })
     }
 }
 
