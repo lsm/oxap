@@ -90,10 +90,10 @@ def verify(binary, codex, root, server, stack):
             payload["tool_sources"] = sources
         return hub.call("open", adapter="codex", request=HUB["envelope"]("session.open.request", payload))
 
-    def turn(hub, phase):
+    def turn(hub, phase, padding=""):
         response = hub.call("submit", session_id="bound", request=HUB["envelope"](
             "session.message.submit.request", {"session_id": "bound", "delivery": "auto",
-                "messages": [{"role": "user", "content": f"{PROMPT} {phase}."}]}))
+                "messages": [{"role": "user", "content": f"{PROMPT} {phase}.{padding}"}]}))
         assert response["ok"], f"submit failed for {phase}"
         run = response["result"]["payload"]["run_id"]
         deadline = time.monotonic() + 30
@@ -155,15 +155,31 @@ def verify(binary, codex, root, server, stack):
     assert replay.get("code") == "unsupported_feature" and replay.get("details") == {
         "feature": CREATE["ATTACH"], "reason": "unsatisfiable", "source": "tools",
     }, "a consumed reopen grant could be reused after close"
+
+    del server.routes["rotated"]
+    renewed = grant("renewed")
+    assert open_session(second, True, [renewed])["ok"], "fresh grant did not unarchive the session"
+    assert second.call("events", session_id="bound")["ok"]
+    turn(second, "unarchive", " padding" * (40 * 1024))
+    print("first turn after close and reopen completed", flush=True)
+    assert second.call("state", session_id="bound")["ok"]
+    state = second.call("state", session_id="bound")["result"]["payload"]
+    sources = state.get("sources", [])
+    matches = sources == [{
+        **SOURCE, "protocol": "mcp", "endpoint": f"http://127.0.0.1:{server.server_port}/renewed",
+    }]
+    assert state["status"] == "idle" and matches, (
+        f"state after reopen: idle={state['status'] == 'idle'}, sources={len(sources)}, renewed={matches}")
     second.stop()
 
     requests = server.model_requests
-    assert len(requests) == 3, f"expected three model turns, saw {len(requests)}"
-    for request, (phase, label) in zip(requests, (("create", "original"), ("restart", "rotated"), ("wake", "rotated"))):
+    assert len(requests) == 4, f"expected four model turns, saw {len(requests)}"
+    for request, (phase, label) in zip(requests, (("create", "original"), ("restart", "rotated"),
+                                                  ("wake", "rotated"), ("unarchive", "renewed"))):
         tools = json.dumps(request.get("tools", []))
         assert f"{PROMPT} {phase}." in json.dumps(request["input"])
         assert f'{label}_tool"' in tools, f"missing {label} tool after {phase}; MCP requests={sorted(server.mcp_methods)}"
-        assert sum(f'{name}_tool"' in tools for name in ("original", "rotated", "extra", "foreign")) == 1
+        assert sum(f'{name}_tool"' in tools for name in ("original", "rotated", "extra", "foreign", "renewed")) == 1
     resumed_input = json.dumps(requests[1]["input"])
     assert f"{PROMPT} create." in resumed_input and REPLY in resumed_input, "Codex did not restore the prior model turn"
     disk = bindings.read_text()
@@ -177,8 +193,8 @@ def verify(binary, codex, root, server, stack):
     published.extend((root / f"{label}-stderr.txt").read_bytes() for label in ("before", "after"))
     assert not any(canary.encode() in data for data in published + [path.read_bytes() for path in files]
                    for canary in canaries), "published credential material"
-    print(f"PASS: hub exits=0,0; model turns=3; refused reopens={len(refused) + 1}; idle wakes=1; "
-          f"rollouts=1; Codex home files={len(files)}; canary hits=0")
+    print(f"PASS: hub exits=0,0; model turns=4; refused reopens={len(refused) + 1}; idle wakes=1; "
+          f"renewed sources=1; rollouts=1; Codex home files={len(files)}; canary hits=0")
 
 
 if __name__ == "__main__":

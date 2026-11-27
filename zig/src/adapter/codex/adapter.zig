@@ -1557,6 +1557,50 @@ test "a reopen resumes the bound thread and reports the model it resumed under" 
     try testing.expectEqualStrings("gpt-resumed", reopened.current_model_id.?);
 }
 
+test "state serializes the renewed source after the first turn of a reopened session" {
+    var probe: Probe = undefined;
+    try probe.init(fake_resume_prelude ++
+        \\take; printf '{"id":1,"result":{"thread":{"id":"native-thread"},"model":"gpt-resumed","modelProvider":"openai","cwd":"/work","approvalPolicy":"on-request","approvalsReviewer":"user","sandbox":{"type":"workspaceWrite"}}}\n'
+        \\
+    ++ fake_text_turn ++ fake_idle);
+    defer probe.deinit();
+    const arena = probe.arena.allocator();
+    var refusal = contract.Refusal{};
+    var sources_at_open = [_]contract.ConfiguredSource{.{ .id = "tools", .kind = "remote", .endpoint = "https://original.example" }};
+    var request = contract.OpenRequest{ .session_id = "s1", .participant = "user", .private_tool_sources = &sources_at_open };
+    const original = try probe.openWith(request, &refusal);
+    var seen = std.ArrayList(contract.Event).empty;
+    _ = try probe.submit("before close", &refusal);
+    _ = try probe.pumpUntil("run.completed", &seen);
+    request.native_session_id = try arena.dupe(u8, original.nativeId());
+    try original.close();
+    probe.handle = null;
+
+    request.reopen = true;
+    sources_at_open[0].endpoint = "https://renewed.example";
+    sources_at_open[0].display_name = "Renewed tools";
+    const reopened = try probe.openWith(request, &refusal);
+    const live = Session.cast(reopened.ptr);
+    live.compact_above = 0;
+    _ = try probe.submit("after reopen", &refusal);
+    _ = try probe.pumpUntil("run.completed", &seen);
+    _ = try reopened.pump(0);
+
+    const state_response = try reopened.state(arena, &refusal);
+    const line = try oap_envelope.serializeEnvelope(.{
+        .id = "state",
+        .in_reply_to = "read",
+        .session_id = "s1",
+        .payload = .{ .session_state_response = state_response },
+    }, arena);
+    const payload = (try std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{})).object.get("payload").?.object;
+    const sources = payload.get("sources").?.array.items;
+    try testing.expectEqual(@as(usize, 1), sources.len);
+    try testing.expectEqualStrings("tools", sources[0].object.get("id").?.string);
+    try testing.expectEqualStrings("Renewed tools", sources[0].object.get("display_name").?.string);
+    try testing.expectEqualStrings("https://renewed.example", sources[0].object.get("endpoint").?.string);
+}
+
 fn reopenedLevel(comptime effort: []const u8, requested: ?[]const u8) !?[]const u8 {
     var probe: Probe = undefined;
     try probe.init(fake_resume_prelude ++
