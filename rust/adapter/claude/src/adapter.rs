@@ -4,8 +4,8 @@ use oxap_adapter::runtime::Runtime;
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
     Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, NativeListRequest,
-    NativeLister, NativeListing, OpenRequest, Session as SessionContract, UnsupportedControl,
-    CONTROL_UNSATISFIABLE,
+    NativeLister, NativeListing, NativeReadRequest, NativeReader, NativeTurn, OpenRequest,
+    Session as SessionContract, UnsupportedControl, CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
     CapabilityDescriptor, EndpointDescriptor, FeatureSupport, SupportLevel,
@@ -18,7 +18,7 @@ use oxap_protocol::{SessionState, SessionStatus};
 use crate::{
     catalog::{self, native_source, SDK_PREFIX},
     native::{initialize_request, settings_flags, FlagSettings},
-    native_list,
+    native_list, native_read,
     provider::{configure_environment, Header, Provider},
     rpc::{Process, ProcessConfig},
     session::{bind, OpenedSession},
@@ -300,8 +300,25 @@ impl AdapterContract for Adapter {
         Some(self)
     }
 
+    fn native_reader(&self) -> Option<&dyn NativeReader> {
+        Some(self)
+    }
+
     fn native_lister(&self) -> Option<&dyn NativeLister> {
         Some(self)
+    }
+}
+
+impl NativeReader for Adapter {
+    fn native_read(&self, request: NativeReadRequest) -> BoxFuture<'_, Vec<NativeTurn>> {
+        Box::pin(async move {
+            let directory = if request.directory.is_empty() {
+                self.config.working_directory.as_deref().unwrap_or_default()
+            } else {
+                &request.directory
+            };
+            Ok(native_read::read(directory, &request))
+        })
     }
 }
 

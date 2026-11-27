@@ -22,11 +22,8 @@ pub(crate) fn claude_home() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join(".claude"))
 }
 
-pub(crate) fn list(home: &Path, directory: &str, limit: usize) -> Vec<NativeListing> {
-    if directory.is_empty() || limit == 0 {
-        return Vec::new();
-    }
-    let project: String = directory
+pub(crate) fn project_key(directory: &str) -> String {
+    directory
         .bytes()
         .map(|byte| {
             if byte.is_ascii_alphanumeric() || byte == b'-' {
@@ -35,8 +32,14 @@ pub(crate) fn list(home: &Path, directory: &str, limit: usize) -> Vec<NativeList
                 '-'
             }
         })
-        .collect();
-    let project = home.join("projects").join(project);
+        .collect()
+}
+
+pub(crate) fn list(home: &Path, directory: &str, limit: usize) -> Vec<NativeListing> {
+    if directory.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+    let project = home.join("projects").join(project_key(directory));
     let Ok(entries) = fs::read_dir(&project) else {
         return Vec::new();
     };
@@ -112,7 +115,7 @@ fn live_session(entry: DirEntry) -> Option<String> {
     (record.pid > 0 && process_exists(record.pid)).then_some(record.session_id)
 }
 
-fn read_window(file: &mut File, bytes: u64) -> Option<Vec<u8>> {
+pub(crate) fn read_window(file: &mut File, bytes: u64) -> Option<Vec<u8>> {
     let mut data = Vec::new();
     file.take(bytes).read_to_end(&mut data).ok()?;
     Some(data)
@@ -196,7 +199,7 @@ fn desktop_records(claude_home: &Path) -> HashMap<String, DesktopRecord> {
         .collect()
 }
 
-fn directories(path: &Path) -> impl Iterator<Item = PathBuf> {
+pub(crate) fn directories(path: &Path) -> impl Iterator<Item = PathBuf> {
     fs::read_dir(path)
         .into_iter()
         .flatten()
@@ -246,7 +249,7 @@ fn first_user_title(head: &[u8]) -> Option<String> {
     })
 }
 
-fn records(data: &[u8]) -> impl DoubleEndedIterator<Item = Value> + '_ {
+pub(crate) fn records(data: &[u8]) -> impl DoubleEndedIterator<Item = Value> + '_ {
     data.split(|&byte| byte == b'\n')
         .filter_map(|line| serde_json::from_slice(line).ok())
 }

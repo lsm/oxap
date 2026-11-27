@@ -44,6 +44,21 @@ Otherwise, titles come from the latest usable custom title in a bounded
 transcript window or the first usable user line from the head. User-line
 titles have a 120-byte UTF-8-safe limit.
 
+## Local transcript reading
+
+The Rust adapter's native reader looks in the requested or configured
+workspace first, then checks other project directories in path order. It
+reads regular transcript files for safe native IDs and bounds each snapshot
+to the last 64 MiB. It skips a leading line when the window starts inside the
+file and ignores the last line until it has a newline.
+
+The reader returns user and assistant text in file order. It ignores side
+chains, metadata, tool blocks and thinking, and removes leading Claude
+command wrappers from user text. Between user turns, fragments of the latest
+assistant message ID form the reply. Timestamps use Unix milliseconds and
+fall back to zero when absent or invalid. A positive caller limit returns
+the corresponding prefix of the observed turns.
+
 ## Rust port divergence
 
 When a result reports queued work and a local child is still open, Go can
