@@ -42,6 +42,9 @@ ends.
 
 `adapter::Adapter` holds Go's descriptor, the refusals Go's `New` makes before
 any process starts, the launch arguments with `--no-extensions` appended, and
-the refusals Go's `Open` makes before it starts one. Opening a session is a
-later slice. Go's `Config.Factory` and `ProcessFactory` test seams have no
+Go's `Open` refusals of provided tools and tool sources, a missing participant,
+an unadvertised setting and a compaction policy Pi cannot run. Go's `Open` also
+refuses an unusable reopen binding before it starts a process; reading that
+binding, and opening a session, are later slices, so a reopen is refused as not
+implemented yet. Go's `Config.Factory` and `ProcessFactory` test seams have no
 twin yet, so an executable is always required.

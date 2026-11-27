@@ -113,7 +113,7 @@ fn launch_arguments_disable_extensions_after_the_configured_ones() {
 }
 
 #[test]
-fn open_refuses_what_go_refuses_before_a_process_starts() {
+fn open_refuses_a_missing_participant_provided_tools_and_a_threshold_policy_as_go_does() {
     let adapter = PiAdapter::new(config()).unwrap();
     assert_eq!(
         refusal(&adapter, OpenRequest::default()),
