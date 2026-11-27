@@ -514,7 +514,7 @@ const OpenedWith = struct {
             const display_name = try keep.dupe(u8, source.display_name);
             const protocol = try keep.dupe(u8, source.protocol);
             const endpoint = try keep.dupe(u8, source.endpoint);
-            copy.* = .{ .id = id, .kind = kind, .display_name = display_name, .protocol = protocol, .endpoint = endpoint, .headers = headers };
+            copy.* = .{ .id = id, .kind = kind, .display_name = display_name, .protocol = protocol, .endpoint = endpoint, .headers = headers, .approve_tools = source.approve_tools };
         }
         return .{ .arena = arena, .participant = participant, .metadata_json = metadata_json, .tools_json = tools_json, .private_tool_sources = private_tool_sources, .allow_degraded_features = features };
     }

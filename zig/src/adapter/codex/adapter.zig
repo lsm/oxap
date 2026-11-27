@@ -508,6 +508,7 @@ pub const Session = struct {
                 for (source.headers) |header| try headers.put(arena, header.name, .{ .string = header.value });
                 try server.put(arena, "http_headers", .{ .object = headers });
             }
+            if (source.approve_tools) try server.put(arena, "default_tools_approval_mode", .{ .string = "approve" });
             try servers.put(arena, source.id, .{ .object = server });
         }
         return .{ .object = servers };
@@ -2000,4 +2001,19 @@ test "native history refuses moderated messages" {
     var found: std.ArrayList(contract.NativeTurn) = .empty;
     try std.testing.expectError(error.ModeratedHistory, Adapter.turnsOf(arena.allocator(), page, &found));
     try std.testing.expectEqual(@as(usize, 0), found.items.len);
+}
+
+test "an approved source's Codex MCP server approves its tools, and an unapproved one leaves Codex's own approval mode" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const sources = [_]contract.ConfiguredSource{
+        .{ .id = "approved", .kind = "remote", .protocol = "mcp", .endpoint = "http://127.0.0.1:1/mcp", .approve_tools = true },
+        .{ .id = "plain", .kind = "remote", .protocol = "mcp", .endpoint = "http://127.0.0.1:2/mcp" },
+    };
+    const servers = (try Session.mcpServers(arena, &sources)).?;
+    try std.testing.expectEqualStrings(
+        "{\"approved\":{\"url\":\"http://127.0.0.1:1/mcp\",\"default_tools_approval_mode\":\"approve\"},\"plain\":{\"url\":\"http://127.0.0.1:2/mcp\"}}",
+        try std.json.Stringify.valueAlloc(arena, servers, .{}),
+    );
 }

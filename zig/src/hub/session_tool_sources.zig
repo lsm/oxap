@@ -14,6 +14,7 @@ const Grant = struct {
         display_name: []const u8 = "",
     },
     headers: struct { Authorization: []const u8 },
+    tool_approval: []const u8 = "",
 };
 
 pub fn open(path: []const u8) !std.Io.Dir {
@@ -95,6 +96,7 @@ fn readGrant(arena: std.mem.Allocator, dir: std.Io.Dir, reference: []const u8, s
     if (!std.mem.startsWith(u8, authorization, "Bearer ")) return error.InvalidGrant;
     const bearer = authorization["Bearer ".len..];
     if (!validReference(bearer)) return error.InvalidGrant;
+    if (grant.tool_approval.len != 0 and !equal(grant.tool_approval, "approve")) return error.InvalidGrant;
     for ([_][]const u8{ grant.source.id, grant.source.display_name, grant.source.endpoint }) |published| {
         if (std.mem.indexOf(u8, published, bearer) != null or std.mem.indexOf(u8, published, reference) != null) return error.InvalidGrant;
     }
@@ -106,6 +108,7 @@ fn readGrant(arena: std.mem.Allocator, dir: std.Io.Dir, reference: []const u8, s
         .endpoint = grant.source.endpoint,
         .display_name = grant.source.display_name,
         .headers = headers,
+        .approve_tools = grant.tool_approval.len != 0,
     };
     if (!validSource(source)) return error.InvalidGrant;
     return source;
@@ -225,4 +228,30 @@ test "a cleanup error after claiming every grant leaves the references spent" {
     for (claims) |grant| try testing.expectError(error.FileNotFound, root.dir.access(io, grant.reference, .{}));
     try testing.expectError(error.FileNotFound, root.dir.access(io, claims[0].path, .{}));
     try root.dir.access(io, claims[1].path, .{});
+}
+
+test "a grant's tool_approval approve marks its source's tools approved, absent leaves them unapproved, and any other value refuses the grant" {
+    if (comptime builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    var root = testing.tmpDir(.{});
+    defer root.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const reference = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const cases = [_]struct { member: []const u8, approved: ?bool }{
+        .{ .member = "", .approved = false },
+        .{ .member = ",\"tool_approval\":\"approve\"", .approved = true },
+        .{ .member = ",\"tool_approval\":\"prompt\"", .approved = null },
+    };
+    for (cases) |case| {
+        const data = try std.fmt.allocPrint(arena, "{{\"session_id\":\"alpha\",\"source\":{{\"id\":\"tools\",\"kind\":\"remote\",\"protocol\":\"mcp\",\"endpoint\":\"http://127.0.0.1:1/mcp\"}},\"headers\":{{\"Authorization\":\"Bearer BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBA\"}}{s}}}", .{case.member});
+        try root.dir.writeFile(io, .{ .sub_path = reference, .data = data });
+        try root.dir.setFilePermissions(io, reference, @fromBackingInt(@intCast(0o600)), .{});
+        const read = readGrant(arena, root.dir, reference, "alpha", "tools");
+        if (case.approved) |approved| {
+            try testing.expectEqual(approved, (try read).approve_tools);
+        } else try testing.expectError(error.InvalidGrant, read);
+    }
 }
