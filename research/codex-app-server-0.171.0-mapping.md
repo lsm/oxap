@@ -86,6 +86,19 @@ usage. The notification has no effective compaction threshold. Codex can clamp
 the configured limit and can count a different portion of context against it,
 so this adapter leaves the marker absent.
 
+## MCP tool-call approval in Go
+
+The Go adapter maps Codex's `mcpServer/elicitation/request` for an MCP tool
+call (`form` mode, `_meta.codex_approval_kind: "mcp_tool_call"`) to
+`action.permission.requested` on the one started, open action of the active
+run named `mcp.<server>.<tool>`. It offers `accept`, `decline`, and
+`acceptForSession` when `_meta.persist` offers `session`, and answers with
+`{action, content: null, _meta}`, sending `acceptForSession` as `accept` with
+`_meta.persist: "session"`. It offers neither `cancel`, which Codex reads as
+skipping only that call, nor `always`, a lasting approval beyond the session.
+A request for another thread, with no turn, or matching no open call or more
+than one, is answered `-32602`; any other elicitation `-32601`.
+
 ## Live turn steering in Zig
 
 An explicit steer resolves its OAP target to the active native turn and sends
