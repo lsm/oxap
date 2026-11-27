@@ -301,3 +301,177 @@ fn provided_lifecycle_projects_and_cancels_only_permitted_calls() {
         println!("PASS {mode}: provided tool projection, settlement, and EOF");
     }
 }
+
+#[test]
+fn provided_resolution_exchanges_results_in_both_orders_and_cancels_held_calls() {
+    use std::time::{Duration, Instant};
+
+    use futures::StreamExt;
+    use oxap_adapter::{CallResolution, SubmitRequest};
+    use oxap_protocol::{
+        ActionCallPayload, ActionCallResolveRequest, Message, MessageContent, MessageRole,
+        MessageSubmitRequest, ProtocolError, RequestedDeliveryMode, ResolveArmStarted,
+        ResolveReason,
+    };
+
+    for mode in ["reply-first", "held", "cancel-held"] {
+        let directory = tempfile::tempdir().unwrap();
+        let dir = directory.path().canonicalize().unwrap();
+        let peer = dir.join("peer");
+        fs::write(&peer, include_str!("provided_lifecycle_peer.py")).unwrap();
+        fs::set_permissions(&peer, fs::Permissions::from_mode(0o700)).unwrap();
+        let adapter = Adapter::new(Config {
+            executable: Some(peer.display().to_string()),
+            working_directory: Some(dir.display().to_string()),
+            environment: vec![
+                format!("HOME={}", dir.display()),
+                format!("PATH={}", std::env::var("PATH").unwrap()),
+                format!("MODE={mode}"),
+                "NODE_ENV=test".into(),
+            ],
+            tools: ToolPosture::Unrestricted,
+            ..Default::default()
+        })
+        .unwrap();
+        let session = block_on(adapter.open_staged(request(vec![tool("echo")]))).expect(mode);
+        let (_, mut stream) = block_on(session.submit(SubmitRequest {
+            request: MessageSubmitRequest {
+                session_id: "session".into(),
+                delivery: RequestedDeliveryMode::AUTO,
+                messages: vec![Message {
+                    role: MessageRole::USER,
+                    content: MessageContent::from_text("go"),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        }))
+        .expect(mode);
+        let mut next = || block_on(stream.next()).unwrap().unwrap();
+        assert_eq!(next().envelope_type.as_str(), "run.started");
+        let requested = next();
+        assert_eq!(requested.envelope_type.as_str(), "action.call.requested");
+        let call: ActionCallPayload = requested.decode_payload().unwrap();
+        assert_eq!(next().envelope_type.as_str(), "run.status.updated");
+        let wait_for = |name| {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while !dir.join(name).is_file() {
+                assert!(
+                    Instant::now() < deadline,
+                    "{mode}: missing peer marker {name}"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let resolve = |id: &str, request| {
+            block_on(
+                session
+                    .call_resolver()
+                    .expect("staged session offers a resolver")
+                    .resolve_call(CallResolution {
+                        request_id: id.into(),
+                        request,
+                    }),
+            )
+            .unwrap()
+        };
+        let mut request = ActionCallResolveRequest {
+            session_id: call.session_id,
+            run_id: call.run_id,
+            tool_call_id: call.tool_call_id,
+            interaction_id: call.interaction_id.unwrap(),
+            requested_by: call.requested_by.unwrap(),
+            responded_by: call.responded_by.unwrap(),
+            ..Default::default()
+        };
+        let started;
+        if mode != "reply-first" {
+            wait_for("barrier");
+        }
+        if mode == "held" {
+            request.started = Some(ResolveArmStarted {});
+            let mut unrelated = request.clone();
+            unrelated.interaction_id = "unknown".into();
+            unrelated.responded_by = "intruder".into();
+            assert_eq!(
+                resolve("unknown", unrelated).reason,
+                ResolveReason::UNKNOWN_INTERACTION
+            );
+            let mut foreign = request.clone();
+            foreign.responded_by = "intruder".into();
+            assert_eq!(
+                resolve("foreign", foreign).reason,
+                ResolveReason::WRONG_RESPONDER
+            );
+            assert!(resolve("ack", request.clone()).accepted);
+            started = Some(next());
+            assert_eq!(
+                resolve("repeat", request.clone()).reason,
+                ResolveReason::REPEATED_ACKNOWLEDGEMENT
+            );
+            request.started = None;
+        } else {
+            started = None;
+        }
+        if mode == "reply-first" {
+            request.error = Some(ProtocolError {
+                code: "tool_failed".into(),
+                message: "could not echo".into(),
+                details: serde_json::from_value(json!({"retry":false})).unwrap(),
+                ..Default::default()
+            });
+        } else {
+            request.result = Some(to_raw_value("hi back").unwrap());
+        }
+        if mode != "cancel-held" {
+            assert!(resolve("settle", request.clone()).accepted);
+            let explicit = started.is_some();
+            let started = started.unwrap_or_else(&mut next);
+            assert_eq!(started.envelope_type.as_str(), "action.call.started");
+            assert_eq!(started.in_reply_to, Some(requested.id.clone()));
+            let payload: ActionCallPayload = started.decode_payload().unwrap();
+            assert_eq!(
+                payload.request_id,
+                Some(if explicit { "ack" } else { "settle" }.into())
+            );
+        }
+        fs::write(dir.join("continue"), []).unwrap();
+        let settled = next();
+        let payload: ActionCallPayload = settled.decode_payload().unwrap();
+        let kind = match mode {
+            "held" => "action.call.completed",
+            "reply-first" => "action.call.failed",
+            _ => "action.call.cancelled",
+        };
+        assert_eq!(settled.envelope_type.as_str(), kind);
+        if mode != "cancel-held" {
+            assert_eq!(payload.request_id, Some("settle".into()));
+            assert_eq!(
+                payload.result.as_deref().map(|raw| raw.get()),
+                request.result.as_deref().map(|raw| raw.get())
+            );
+            assert_eq!(
+                serde_json::to_value(payload.error).unwrap(),
+                serde_json::to_value(&request.error).unwrap()
+            );
+            let running = next();
+            assert_eq!(running.envelope_type.as_str(), "run.status.updated");
+            assert_eq!(
+                serde_json::from_str::<Value>(running.payload.as_deref().unwrap().get()).unwrap()
+                    ["status"],
+                "running"
+            );
+        }
+        assert_eq!(next().envelope_type.as_str(), "run.completed");
+        assert!(block_on(stream.next()).is_none());
+        let late = resolve("late", request);
+        assert!(!late.accepted);
+        assert_eq!(late.reason, ResolveReason::ALREADY_RESOLVED);
+        assert_eq!(late.details.unwrap().settlement_id, Some(settled.id));
+        wait_for("reply");
+        block_on(session.close()).unwrap();
+        assert!(dir.join("eof").is_file());
+        println!("PASS {mode}: OAP resolution, exact MCP reply, late refusal, and EOF");
+    }
+}
