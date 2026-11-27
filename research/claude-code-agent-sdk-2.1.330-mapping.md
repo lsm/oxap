@@ -28,6 +28,17 @@ refuses before launch. Native load refusal, an invalid settings response,
 or a different reported native identity prevents open from returning a
 session.
 
+## Local session listing
+
+The Rust adapter lists the requested workspace's regular project transcripts
+read-only, newest first and with native IDs breaking timestamp ties. The
+configured working directory supplies the workspace when the request omits
+it. A bounded read of the local session registry marks transcripts running
+when their recorded process still exists. Adoption checks the registry again
+before launch, including live sessions whose transcripts are absent or fall
+outside the listing limit. Transcript titles and desktop records remain
+unprojected.
+
 ## Rust port divergence
 
 When a result reports queued work and a local child is still open, Go can

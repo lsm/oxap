@@ -3,8 +3,9 @@ use std::{collections::BTreeMap, fmt};
 use oxap_adapter::runtime::Runtime;
 use oxap_adapter::{
     refuse_unadvertised_settings, refuse_unadvertised_tool_sources, refuse_unadvertised_tools,
-    Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, OpenRequest,
-    Session as SessionContract, UnsupportedControl, CONTROL_UNSATISFIABLE,
+    Adapter as AdapterContract, BoxFuture, Descriptor, Error, JournalDescriptor, NativeListRequest,
+    NativeLister, NativeListing, OpenRequest, Session as SessionContract, UnsupportedControl,
+    CONTROL_UNSATISFIABLE,
 };
 use oxap_protocol::{
     CapabilityDescriptor, EndpointDescriptor, FeatureSupport, SupportLevel,
@@ -17,6 +18,7 @@ use oxap_protocol::{SessionState, SessionStatus};
 use crate::{
     catalog::{self, native_source, SDK_PREFIX},
     native::{initialize_request, settings_flags, FlagSettings},
+    native_list,
     provider::{configure_environment, Header, Provider},
     rpc::{Process, ProcessConfig},
     session::{bind, OpenedSession},
@@ -293,6 +295,25 @@ impl AdapterContract for Adapter {
             self.open_staged(request).await
         })
     }
+
+    fn native_lister(&self) -> Option<&dyn NativeLister> {
+        Some(self)
+    }
+}
+
+impl NativeLister for Adapter {
+    fn native_list(&self, request: NativeListRequest) -> BoxFuture<'_, Vec<NativeListing>> {
+        Box::pin(async move {
+            let directory = if request.directory.is_empty() {
+                self.config.working_directory.as_deref().unwrap_or_default()
+            } else {
+                &request.directory
+            };
+            Ok(native_list::claude_home()
+                .map(|home| native_list::list(&home, directory, request.limit))
+                .unwrap_or_default())
+        })
+    }
 }
 
 impl Adapter {
@@ -300,6 +321,14 @@ impl Adapter {
         Box::pin(async move {
             catalog::admit(&mut request.tools, &request.participant.id)?;
             let flags = self.admit_flags(&request)?;
+            if request.adopted
+                && request.reopen
+                && native_list::claude_home().is_some_and(|home| {
+                    native_list::live_sessions(&home).any(|id| id == request.native_session_id)
+                })
+            {
+                return Err(Error::RunActive);
+            }
             let mut launch = self.spawn_plan()?;
             let server = (!request.tools.is_empty()).then(|| catalog::SDK_SERVER.to_owned());
             if server.is_some() {
