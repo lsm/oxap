@@ -21,5 +21,11 @@ The second command sends `work.start` over Rust hub stdio. It must return
 `run_active` when either the listing or the adapter's open reports a live
 owner. The missing-transcript case prints the response for inspection.
 
-The journey exercises the local store. It needs no Claude process, desktop
-records or credentials.
+The public listing consumer also checks the latest custom title, head and
+tail read bounds, and the first usable user line with a UTF-8-safe byte limit.
+On macOS it creates synthetic Desktop records in the temporary home and checks
+title precedence, archived-session filtering and links on both the listing and
+standalone linker. On other systems it checks transcript fallback without
+Desktop enrichment. Require the macOS run to prove Desktop behavior.
+
+The journey needs no Claude process, real Desktop records or credentials.
