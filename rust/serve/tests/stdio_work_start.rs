@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use futures::executor::block_on;
 use oxap_adapter::{
-    Adapter, BoxFuture, Descriptor, NativeListRequest, NativeLister, NativeListing, OpenRequest,
-    Session,
+    Adapter, BoxFuture, Descriptor, Error, NativeListRequest, NativeLister, NativeListing,
+    OpenRequest, Session,
 };
 use oxap_binding::MemoryStore;
 use oxap_serve::stdio::StdioOptions;
@@ -19,6 +19,9 @@ impl Adapter for Busy {
         self.0.probe()
     }
     fn open(&self, request: OpenRequest) -> BoxFuture<'_, Box<dyn Session>> {
+        if request.reopen && request.adopted && request.native_session_id == "busy-no-transcript" {
+            return Box::pin(async { Err(Error::RunActive) });
+        }
         self.0.open(request)
     }
     fn native_lister(&self) -> Option<&dyn NativeLister> {
@@ -153,4 +156,22 @@ fn work_start_refuses_to_adopt_a_harness_session_another_process_is_running() {
         "{}",
         answered[0]
     );
+}
+
+#[test]
+fn work_start_refuses_live_adoption_when_the_transcript_is_missing() {
+    let memory = Registry::default_registry().lookup("memory").unwrap();
+    let mut registry = Registry::new();
+    registry.register("busy", Arc::new(Busy(memory))).unwrap();
+    let hub = Hub::new(registry);
+    let answered = lines(
+        &hub,
+        &[
+            r#"{"id":1,"op":"work.start","adapter":"busy","request":{"message":"go","native_id":"busy-no-transcript"}}"#,
+        ],
+    );
+    let response = &answered[0];
+    println!("work.start response = {response}");
+    assert_eq!(response["ok"], false, "{response}");
+    assert_eq!(response["error"]["code"], "run_active", "{response}");
 }

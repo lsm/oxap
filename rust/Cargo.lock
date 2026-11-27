@@ -1055,6 +1055,7 @@ dependencies = [
  "oxap-adapter",
  "oxap-harness",
  "oxap-protocol",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

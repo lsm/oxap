@@ -687,6 +687,7 @@ fn open_refusal(err: HubError, adapter: &str) -> Refusal {
             HubError::SessionClosed(_)
             | HubError::ClosedAtOpen(_)
             | HubError::Adapter(Error::SessionClosed) => "session_closed",
+            HubError::Adapter(Error::RunActive) => "run_active",
             _ => "backend_failed",
         };
         refused(code, err.to_string())
