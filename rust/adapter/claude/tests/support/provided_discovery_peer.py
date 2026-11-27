@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from itertools import count
 import json
 import os
 from pathlib import Path
@@ -30,17 +31,21 @@ def send(frame):
     print(json.dumps(frame, separators=(",", ":")), flush=True)
 
 
+discovery_ids = count()
+
+
 def discovery(server, message, expected=None):
-    send({"type": "control_request", "request_id": "mcp-discovery", "request": {
+    request_id = f"mcp-discovery-{next(discovery_ids)}"
+    send({"type": "control_request", "request_id": request_id, "request": {
         "subtype": "mcp_message", "server_name": server, "message": message,
     }})
     reply = read()
     assert reply["type"] == "control_response", reply
-    assert reply["response"]["request_id"] == "mcp-discovery", reply
+    assert reply["response"]["request_id"] == request_id, reply
     if expected is None:
         assert reply["response"]["subtype"] == "error", reply
     else:
-        assert reply["response"] == {"request_id": "mcp-discovery", "subtype": "success",
+        assert reply["response"] == {"request_id": request_id, "subtype": "success",
                                      "response": expected}, reply
 
 
