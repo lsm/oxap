@@ -318,6 +318,32 @@ fn observe_native_metadata() {
         );
         assert_eq!(linker.native_link("unknown"), "");
         println!("standalone links resolve known desktop IDs, including archived sessions");
+        fs::write(
+            desktop.join("z.json"),
+            json!({"cliSessionId":"desktop","sessionId":"local_updated","title":"Updated title"})
+                .to_string(),
+        )
+        .unwrap();
+        let cached = linker.native_link("desktop");
+        println!("standalone link after Desktop record changed = {cached}");
+        assert_eq!(cached, link);
+        let fresh = block_on(
+            adapter
+                .native_lister()
+                .unwrap()
+                .native_list(NativeListRequest {
+                    directory: WORKSPACE.into(),
+                    limit: 30,
+                }),
+        )
+        .unwrap();
+        assert!(fresh.iter().any(|row| row.native_id == "desktop"
+            && row.link == "claude://claude.ai/epitaxy/local_updated"
+            && row.title == "Updated title"));
+        std::thread::sleep(Duration::from_secs(10));
+        let refreshed = linker.native_link("desktop");
+        println!("standalone link after cache expiry = {refreshed}");
+        assert_eq!(refreshed, "claude://claude.ai/epitaxy/local_updated");
     } else {
         assert_eq!(rows.len(), 8);
         assert_eq!(display("desktop"), ("Transcript title", ""));

@@ -25,7 +25,9 @@ The public listing consumer also checks the latest custom title, head and
 tail read bounds, and the first usable user line with a UTF-8-safe byte limit.
 On macOS it creates synthetic Desktop records in the temporary home and checks
 title precedence, archived-session filtering and links on both the listing and
-standalone linker. On other systems it checks transcript fallback without
+standalone linker. It edits a Desktop record and expects listings to reflect
+the edit immediately. The standalone linker keeps its cached link until the
+10-second cache expires, then returns the updated link. On other systems it checks transcript fallback without
 Desktop enrichment. Require the macOS run to prove Desktop behavior.
 
 The journey needs no Claude process, real Desktop records or credentials.
