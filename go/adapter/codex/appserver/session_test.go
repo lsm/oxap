@@ -715,6 +715,107 @@ func TestApprovalDecisionsAndAvailability(t *testing.T) {
 	}
 }
 
+func TestMcpToolApprovalElicitationRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		persist  json.RawMessage
+		choices  int
+		choiceID string
+		granted  bool
+		action   string
+		persists string
+	}{
+		{name: "session", persist: json.RawMessage(`["session","always"]`), choices: 3, choiceID: "acceptForSession", granted: true, action: "accept", persists: "session"},
+		{name: "decline", choices: 2, choiceID: "decline", granted: false, action: "decline"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, session, _ := openFake(t)
+			admission, stream := submitFake(t, session)
+			client.send(t, native.MethodTurnStarted, native.TurnStartedNotification{ThreadID: client.threadID, Turn: native.Turn{ID: client.turnID, Status: native.TurnInProgress}})
+			item := native.Item{Type: "mcpToolCall", ID: "mcp-item", Server: "tools", Tool: "lookup", Status: "inProgress"}
+			client.send(t, native.MethodItemStarted, native.ItemNotification{ThreadID: client.threadID, TurnID: client.turnID, Item: item})
+			var started protocol.Envelope
+			for range 3 {
+				started = nextEvent(t, stream)
+			}
+			var action struct {
+				ToolCallID protocol.ToolCallID `json:"tool_call_id"`
+			}
+			if err := started.DecodePayload(&action); err != nil || action.ToolCallID == "" {
+				t.Fatalf("started=%+v err=%v", started, err)
+			}
+			turn := client.turnID
+			_, nativeResponse := client.request(t, 11, native.MethodMcpElicitation, native.McpElicitationRequestParams{
+				ThreadID: client.threadID, TurnID: &turn, ServerName: "tools", Mode: "form", Message: "Allow lookup?",
+				Meta: &native.McpElicitationMeta{ApprovalKind: "mcp_tool_call", ToolName: "lookup", Persist: test.persist},
+			})
+			requested := nextEvent(t, stream)
+			var payload protocol.PermissionRequestedPayload
+			if err := requested.DecodePayload(&payload); err != nil || requested.Type != protocol.TypeActionPermissionRequested {
+				t.Fatalf("requested=%+v err=%v", requested, err)
+			}
+			if payload.ToolCallID != action.ToolCallID || payload.Title != "Allow Codex MCP tool call" || payload.Description != "Allow lookup?" || len(payload.Choices) != test.choices {
+				t.Fatalf("payload: %+v", payload)
+			}
+			cancel := adapter.InteractionResolution{RunID: admission.RunID, RespondedBy: "user", Permission: &protocol.PermissionResolveRequest{InteractionID: payload.InteractionID, RequestedBy: endpointID, RespondedBy: "user", SessionID: "session-1", RunID: admission.RunID, ChoiceID: "cancel"}}
+			if err := session.Resolve(context.Background(), cancel); !errors.Is(err, adapter.ErrInvalidResolution) {
+				t.Fatalf("cancel: %v", err)
+			}
+			resolution := adapter.InteractionResolution{RunID: admission.RunID, RespondedBy: "user", Permission: &protocol.PermissionResolveRequest{InteractionID: payload.InteractionID, RequestedBy: endpointID, RespondedBy: "user", SessionID: "session-1", RunID: admission.RunID, ChoiceID: test.choiceID, Granted: test.granted}}
+			if err := session.Resolve(context.Background(), resolution); err != nil {
+				t.Fatal(err)
+			}
+			response := <-nativeResponse
+			var result map[string]json.RawMessage
+			if err := json.Unmarshal(response.Result, &result); err != nil {
+				t.Fatal(err)
+			}
+			want := `"` + test.action + `"`
+			meta := "null"
+			if test.persists != "" {
+				meta = `{"persist":"` + test.persists + `"}`
+			}
+			if string(result["action"]) != want || string(result["content"]) != "null" || string(result["_meta"]) != meta {
+				t.Fatalf("response: %s", response.Result)
+			}
+			client.send(t, native.MethodTurnCompleted, native.TurnCompletedNotification{ThreadID: client.threadID, Turn: native.Turn{ID: client.turnID, Status: native.TurnInterrupted}})
+			_ = drainClosed(t, stream)
+		})
+	}
+}
+
+func TestAnElicitationThatIsNoToolApprovalOrNamesNoOpenCallIsRefused(t *testing.T) {
+	client, session, _ := openFake(t)
+	_, stream := submitFake(t, session)
+	client.send(t, native.MethodTurnStarted, native.TurnStartedNotification{ThreadID: client.threadID, Turn: native.Turn{ID: client.turnID, Status: native.TurnInProgress}})
+	client.send(t, native.MethodItemStarted, native.ItemNotification{ThreadID: client.threadID, TurnID: client.turnID, Item: native.Item{Type: "mcpToolCall", ID: "mcp-item", Server: "tools", Tool: "lookup", Status: "inProgress"}})
+	for range 3 {
+		_ = nextEvent(t, stream)
+	}
+	turn := client.turnID
+	for index, test := range []struct {
+		params native.McpElicitationRequestParams
+		code   int64
+	}{
+		{params: native.McpElicitationRequestParams{ThreadID: client.threadID, TurnID: &turn, ServerName: "tools", Mode: "url"}, code: -32601},
+		{params: native.McpElicitationRequestParams{ThreadID: client.threadID, TurnID: &turn, ServerName: "tools", Mode: "form", Meta: &native.McpElicitationMeta{ApprovalKind: "mcp_tool_call", ToolName: "other"}}, code: -32602},
+		{params: native.McpElicitationRequestParams{ThreadID: client.threadID, ServerName: "tools", Mode: "form", Meta: &native.McpElicitationMeta{ApprovalKind: "mcp_tool_call", ToolName: "lookup"}}, code: -32602},
+	} {
+		_, nativeResponse := client.request(t, int64(20+index), native.MethodMcpElicitation, test.params)
+		response := <-nativeResponse
+		if response.Kind != rpc.MessageError || response.Error.Code != test.code {
+			t.Fatalf("case %d: %+v", index, response)
+		}
+	}
+	client.send(t, native.MethodTurnCompleted, native.TurnCompletedNotification{ThreadID: client.threadID, Turn: native.Turn{ID: client.turnID, Status: native.TurnInterrupted}})
+	events := drainClosed(t, stream)
+	for _, event := range events {
+		if event.Type == protocol.TypeActionPermissionRequested {
+			t.Fatalf("a refused elicitation published a permission request: %+v", event)
+		}
+	}
+}
+
 func TestUserInputRoundTrip(t *testing.T) {
 	client, session, _ := openFake(t)
 	admission, stream := submitFake(t, session)
