@@ -39,3 +39,12 @@ case-insensitively, and a repeated key keeps its last value. It closes by releas
 child at the shutdown timeout. A start given a deadline aborts and reaps the
 child when no state arrives by then, as Go's does when the caller's context
 ends.
+
+`adapter::Adapter` holds Go's descriptor, the refusals Go's `New` makes before
+any process starts, the launch arguments with `--no-extensions` appended, and
+Go's `Open` refusals of provided tools and tool sources, a missing participant,
+an unadvertised setting and a compaction policy Pi cannot run. Go's `Open` also
+refuses an unusable reopen binding before it starts a process; reading that
+binding, and opening a session, are later slices, so a reopen is refused as not
+implemented yet. Go's `Config.Factory` and `ProcessFactory` test seams have no
+twin yet, so an executable is always required.

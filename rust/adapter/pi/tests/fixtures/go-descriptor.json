@@ -1,0 +1,110 @@
+{
+  "endpoint": {
+    "id": "pi.rpc",
+    "name": "Pi RPC Adapter",
+    "version": "v1.6.0",
+    "adapter": "pi-rpc-stdio"
+  },
+  "protocol_versions": [
+    "0.1"
+  ],
+  "profiles": [
+    "open-agent-protocol.agent-control-core"
+  ],
+  "features": {
+    "action.permissions": {
+      "level": "unavailable",
+      "reason": "extension dialogs are generic user input, not permissions"
+    },
+    "action.tools": {
+      "level": "degraded",
+      "reason": "observed tool lifecycle only; no portable catalog"
+    },
+    "action.tools.execute": {
+      "level": "unavailable",
+      "reason": "Pi executes tools internally"
+    },
+    "capabilities": {
+      "level": "emulated",
+      "reason": "conservative descriptor synthesized for the pinned RPC vocabulary"
+    },
+    "protocol.initialize": {
+      "level": "emulated",
+      "reason": "Pi has no negotiation; readiness is a get_state handshake"
+    },
+    "run.cancel": {
+      "level": "degraded",
+      "reason": "abort intent is local; agent_settled remains terminal authority"
+    },
+    "run.compaction": {
+      "level": "native",
+      "reason": "Pi's compaction_start and compaction_end inside a prompt run, threshold and overflow alike, become the run's compaction events; it compacts before agent_settled, so the run is still open"
+    },
+    "run.reconciliation": {
+      "level": "emulated",
+      "reason": "get_state reconciles streaming state"
+    },
+    "run.replay": {
+      "level": "degraded",
+      "reason": "bounded adapter journal; gaps explicit"
+    },
+    "run.resume": {
+      "level": "degraded",
+      "reason": "bounded process-memory replay"
+    },
+    "run.status": {
+      "level": "emulated"
+    },
+    "run.streaming": {
+      "level": "native"
+    },
+    "session.compact": {
+      "level": "native",
+      "reason": "a compaction request on an idle session runs Pi's compact command, with focus as its custom instructions; Pi never continues the turn, so continue is refused"
+    },
+    "session.compaction.policy": {
+      "level": "native",
+      "reason": "set_auto_compaction switches Pi's own threshold on or off, at open and between runs; its threshold is a settings-file reserve, so share and tokens are refused",
+      "modes": [
+        "session_open",
+        "session_live"
+      ]
+    },
+    "session.message.delivery.auto": {
+      "level": "emulated",
+      "reason": "idle auto is normalized to native prompt/start"
+    },
+    "session.message.delivery.queue": {
+      "level": "unavailable",
+      "reason": "v0.1 admission cannot expose Pi queued prompt semantics safely"
+    },
+    "session.message.delivery.steer": {
+      "level": "emulated",
+      "reason": "guidance rides Pi's native steer command and settles at the turn boundary Pi injects it"
+    },
+    "session.message.submit": {
+      "level": "emulated",
+      "reason": "successful prompt response proves admission only"
+    },
+    "session.open": {
+      "level": "emulated",
+      "reason": "one ready Pi process is associated with one OAP session"
+    },
+    "session.open.reopen": {
+      "level": "native",
+      "reason": "switch_session loads the bound session file; an absent, empty or mismatched file is refused"
+    },
+    "session.reasoning": {
+      "level": "native",
+      "reason": "set_thinking_level once the process is ready and again between runs, confirmed by get_state; a level Pi does not run the model at is refused, and a live change restores the level it replaced",
+      "modes": [
+        "session_open",
+        "session_live"
+      ]
+    },
+    "session.state": {
+      "level": "emulated",
+      "reason": "adapter projection reconciled with get_state"
+    }
+  }
+}

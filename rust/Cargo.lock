@@ -1136,7 +1136,10 @@ name = "oxap-adapter-pi"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "futures",
  "oxap-adapter",
+ "oxap-harness",
+ "oxap-protocol",
  "serde",
  "serde_json",
 ]
