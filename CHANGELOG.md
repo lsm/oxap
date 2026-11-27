@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [0.1.0-alpha.45] - 2026-11-26
+
+### Added
+
+- Codex sessions can attach their own remote MCP tools and restore them when reopening. Explicit reopen requires fresh one-time credentials for the same sources. ([#2018](https://github.com/lsm/oxap/pull/2018), [#2022](https://github.com/lsm/oxap/pull/2022))
+- Codex sessions can steer an active turn. ([#2017](https://github.com/lsm/oxap/pull/2017))
+
+### Changed
+
+- The Rust Claude adapter reports context compaction and applies updated reasoning and compaction settings between runs. ([#2020](https://github.com/lsm/oxap/pull/2020))
+
+### Merged pull requests
+
+- **release: Cut 0.1.0-alpha.44** ([#2019](https://github.com/lsm/oxap/pull/2019)): Prepares OXAP 0.1.0-alpha.44 with Rust Claude run support, Codex inline images, live context usage, subagent activity, and ultra reasoning.
+
 ## [0.1.0-alpha.44] - 2026-11-25
 
 ### Added
