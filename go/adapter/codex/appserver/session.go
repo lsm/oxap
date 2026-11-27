@@ -740,7 +740,7 @@ func (session *session) requestToolApproval(request *rpc.IncomingRequest) {
 		_ = request.RespondError(context.Background(), -32602, "approval request does not target an active action", nil)
 		return
 	}
-	decisions := map[string]bool{"accept": true, "decline": true, "cancel": true, "acceptForSession": offersSession(params.Meta.Persist)}
+	decisions := map[string]bool{"accept": true, "decline": true, "acceptForSession": offersSession(params.Meta.Persist)}
 	interactionID := protocol.InteractionID(session.ids.NewID("interaction"))
 	binding := &interactionBinding{kind: permissionInteraction, runID: run.id, toolCallID: item.toolCallID, requestedBy: endpointID, respondedBy: session.participant, request: request, permissionChoices: decisions, elicitation: true, order: session.nextOrder}
 	session.nextOrder++

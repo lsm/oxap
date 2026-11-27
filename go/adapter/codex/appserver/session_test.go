@@ -725,8 +725,8 @@ func TestMcpToolApprovalElicitationRoundTrip(t *testing.T) {
 		action   string
 		persists string
 	}{
-		{name: "session", persist: json.RawMessage(`["session","always"]`), choices: 4, choiceID: "acceptForSession", granted: true, action: "accept", persists: "session"},
-		{name: "decline", choices: 3, choiceID: "decline", granted: false, action: "decline"},
+		{name: "session", persist: json.RawMessage(`["session","always"]`), choices: 3, choiceID: "acceptForSession", granted: true, action: "accept", persists: "session"},
+		{name: "decline", choices: 2, choiceID: "decline", granted: false, action: "decline"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, session, _ := openFake(t)
@@ -756,6 +756,10 @@ func TestMcpToolApprovalElicitationRoundTrip(t *testing.T) {
 			}
 			if payload.ToolCallID != action.ToolCallID || payload.Title != "Allow Codex MCP tool call" || payload.Description != "Allow lookup?" || len(payload.Choices) != test.choices {
 				t.Fatalf("payload: %+v", payload)
+			}
+			cancel := adapter.InteractionResolution{RunID: admission.RunID, RespondedBy: "user", Permission: &protocol.PermissionResolveRequest{InteractionID: payload.InteractionID, RequestedBy: endpointID, RespondedBy: "user", SessionID: "session-1", RunID: admission.RunID, ChoiceID: "cancel"}}
+			if err := session.Resolve(context.Background(), cancel); !errors.Is(err, adapter.ErrInvalidResolution) {
+				t.Fatalf("cancel: %v", err)
 			}
 			resolution := adapter.InteractionResolution{RunID: admission.RunID, RespondedBy: "user", Permission: &protocol.PermissionResolveRequest{InteractionID: payload.InteractionID, RequestedBy: endpointID, RespondedBy: "user", SessionID: "session-1", RunID: admission.RunID, ChoiceID: test.choiceID, Granted: test.granted}}
 			if err := session.Resolve(context.Background(), resolution); err != nil {
